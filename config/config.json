@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "enabled": true,
+  "singleModel": true,
+  "rotationSpeed": 1.0,
+  "settleSpeed": 3.0,
+  "groundTilt": 1.0,
+  "heightOffset": -0.38
+}
