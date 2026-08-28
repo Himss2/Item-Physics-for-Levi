@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <limits>
 #include <string_view>
 
 namespace itemphysics {
@@ -13,21 +12,22 @@ namespace {
 constexpr float kPi =
     3.14159265358979323846f;
 
-constexpr float kHalfPi =
-    kPi * 0.5f;
-
 constexpr float kDegToRad =
     kPi / 180.0f;
 
 constexpr auto kStateTtl =
     std::chrono::seconds(8);
 
-// Atlas ordinary-item pivot.
+// Atlas:
 //
-// IMPORTANT:
-// Atlas applies this only to ordinary
-// NON-BLOCK items.
-constexpr float kAtlasFlatPivotY =
+// ordinary non-block item only:
+//
+// position.y += -0.38
+//
+// and AFTER rotations:
+//
+// T(0, +0.25, 0)
+constexpr float kAtlasFlatLocalY =
     0.25f;
 
 constexpr std::string_view
@@ -38,14 +38,23 @@ constexpr std::string_view
     kBannerId =
         "minecraft:banner";
 
-// Small tolerance used when deciding which
-// AABB dimension should become the vertical axis.
+// A model whose Y extent is considerably smaller
+// than X/Z is already naturally floor-oriented.
+//
+// slab:
+// 1 × 0.5 × 1
+//
+// carpet:
+// 1 × .0625 × 1
+constexpr float kThinYRatio =
+    0.70f;
+
 constexpr float kExtentEpsilon =
     0.0005f;
 
-// ============================================================================
-// Matrix stack scope
-// ============================================================================
+// ============================================================
+// Matrix stack RAII
+// ============================================================
 
 class MatrixPushScope {
 public:
@@ -118,9 +127,9 @@ ItemPhysicsRuntime *
 ItemPhysicsRuntime::sInstance =
     nullptr;
 
-// ============================================================================
+// ============================================================
 // Config
-// ============================================================================
+// ============================================================
 
 void ItemPhysicsRuntime::applyConfig(
     const ItemPhysicsConfig &config) noexcept {
@@ -154,9 +163,9 @@ void ItemPhysicsRuntime::applyConfig(
       std::memory_order_relaxed);
 }
 
-// ============================================================================
-// Profile validation
-// ============================================================================
+// ============================================================
+// Target validation
+// ============================================================
 
 bool ItemPhysicsRuntime::verifyProfile(
     const ResolvedVirtual &resolved,
@@ -222,10 +231,7 @@ bool ItemPhysicsRuntime::verifyProfile(
           profile::kBlockGraphicsGetForBlockRva) ||
 
       !executable(
-          profile::kBlockGraphicsGetBlockShapeRva) ||
-
-      !executable(
-          profile::kIsBlockShape3DRva)) {
+          profile::kBlockGraphicsGetBlockShapeRva)) {
 
     mod.getLogger().warn(
         "Unsupported Minecraft profile: "
@@ -237,9 +243,9 @@ bool ItemPhysicsRuntime::verifyProfile(
   return true;
 }
 
-// ============================================================================
+// ============================================================
 // Install
-// ============================================================================
+// ============================================================
 
 bool ItemPhysicsRuntime::install(
     ll::mod::NativeMod &mod) {
@@ -313,13 +319,6 @@ bool ItemPhysicsRuntime::install(
           profile::
               kBlockGraphicsGetBlockShapeRva);
 
-  mIsBlockShape3D =
-      reinterpret_cast<
-          IsBlockShape3DFn>(
-          mMinecraftBase +
-          profile::
-              kIsBlockShape3DRva);
-
   sInstance =
       this;
 
@@ -371,9 +370,9 @@ bool ItemPhysicsRuntime::install(
   return true;
 }
 
-// ============================================================================
+// ============================================================
 // Uninstall
-// ============================================================================
+// ============================================================
 
 void ItemPhysicsRuntime::uninstall() {
 
@@ -412,9 +411,6 @@ void ItemPhysicsRuntime::uninstall() {
   mGetBlockGraphicsShape =
       nullptr;
 
-  mIsBlockShape3D =
-      nullptr;
-
   mRenderTarget =
       0;
 
@@ -424,9 +420,9 @@ void ItemPhysicsRuntime::uninstall() {
   clearStates();
 }
 
-// ============================================================================
-// State
-// ============================================================================
+// ============================================================
+// State reset
+// ============================================================
 
 void ItemPhysicsRuntime::clearStates() {
 
@@ -438,6 +434,10 @@ void ItemPhysicsRuntime::clearStates() {
   mRenderCounter =
       0;
 }
+
+// ============================================================
+// Hook callback
+// ============================================================
 
 void ItemPhysicsRuntime::renderDetour(
     void *self,
@@ -453,9 +453,9 @@ void ItemPhysicsRuntime::renderDetour(
   }
 }
 
-// ============================================================================
-// Basic math
-// ============================================================================
+// ============================================================
+// Math
+// ============================================================
 
 float ItemPhysicsRuntime::seededUnit(
     std::uint32_t seed) noexcept {
@@ -516,9 +516,9 @@ float ItemPhysicsRuntime::approachAngle(
               1.0f));
 }
 
-// ============================================================================
+// ============================================================
 // libc++ std::string
-// ============================================================================
+// ============================================================
 
 bool ItemPhysicsRuntime::libcxxStringEquals(
     std::uintptr_t stringAddress,
@@ -549,7 +549,8 @@ bool ItemPhysicsRuntime::libcxxStringEquals(
     length =
         static_cast<
             std::size_t>(
-            flag >> 1);
+            flag >>
+            1);
 
     data =
         reinterpret_cast<
@@ -586,24 +587,71 @@ bool ItemPhysicsRuntime::libcxxStringEquals(
          0;
 }
 
-// ============================================================================
-// Block geometry
-// ============================================================================
+// ============================================================
+// Shapes that must retain natural block orientation
+// ============================================================
+
+bool ItemPhysicsRuntime::
+    blockShapeShouldRemainHorizontal(
+        std::int32_t shape) noexcept {
+
+  switch (shape) {
+
+  case 9:   // rail
+  case 14:  // bed
+  case 15:  // diode
+  case 23:  // lilypad
+
+  case 67:  // block_half / slab
+  case 68:  // top_snow
+  case 69:  // tripwire
+
+  case 72:  // repeater
+  case 73:  // comparator
+
+  case 80:  // end_portal
+
+  case 83:  // skull / head
+
+  case 96:  // coral_fan
+
+  case 99:  // trapdoor
+
+  case 114: // campfire
+
+  case 126: // sculk_sensor
+
+  case 135: // glow_lichen
+  case 136: // redstone_wire
+
+  case 153: // pale moss / carpet style
+
+    return true;
+
+  default:
+
+    return false;
+  }
+}
+
+// ============================================================
+// Block VisualShape
+// ============================================================
 
 bool ItemPhysicsRuntime::buildBlockRenderInfo(
     const void *block,
     BlockRenderInfo &info) const noexcept {
 
+  info =
+      {};
+
   if (!block) {
     return false;
   }
 
-  info =
-      {};
-
-  // --------------------------------------------------------------------------
-  // BlockGraphics / BlockShape
-  // --------------------------------------------------------------------------
+  // ----------------------------------------------------------
+  // BlockShape
+  // ----------------------------------------------------------
 
   if (mGetBlockGraphicsForBlock &&
       mGetBlockGraphicsShape) {
@@ -617,26 +665,12 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
       info.blockShape =
           mGetBlockGraphicsShape(
               graphics);
-
-      if (mIsBlockShape3D) {
-
-        info.vanilla3D =
-            mIsBlockShape3D(
-                info.blockShape);
-      }
     }
   }
 
-  // Vanilla renderer uses a smaller transform
-  // for its non-3D block-shape path.
-  info.renderScale =
-      info.vanilla3D
-          ? 0.50f
-          : 0.25f;
-
-  // --------------------------------------------------------------------------
+  // ----------------------------------------------------------
   // BlockType
-  // --------------------------------------------------------------------------
+  // ----------------------------------------------------------
 
   const auto blockAddress =
       reinterpret_cast<
@@ -650,165 +684,129 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
           profile::
               kBlockTypeOffset);
 
-  if (!blockType) {
-    return false;
+  bool thinY =
+      false;
+
+  if (blockType) {
+
+    auto **vtable =
+        *reinterpret_cast<
+            void ***>(
+            blockType);
+
+    if (vtable) {
+
+      constexpr std::size_t slot =
+          profile::
+              kBlockTypeGetVisualShapeVtableOffset /
+          sizeof(void *);
+
+      auto getVisualShape =
+          reinterpret_cast<
+              GetVisualShapeFn>(
+              vtable[slot]);
+
+      if (getVisualShape) {
+
+        AabbAbi scratch{};
+
+        // ====================================================
+        // IMPORTANT ABI FIX
+        //
+        // Old code did:
+        //
+        // getVisualShape(..., &scratch);
+        // use scratch;
+        //
+        // That is WRONG.
+        //
+        // The default implementation in this binary is:
+        //
+        // add x0, x0, #0x188
+        // ret
+        //
+        // Meaning it returns:
+        //
+        // BlockType::mVisualShape
+        //
+        // WITHOUT touching scratch.
+        // ====================================================
+
+        const AabbAbi *bounds =
+            getVisualShape(
+                blockType,
+                block,
+                &scratch);
+
+        if (bounds) {
+
+          const auto finite =
+              [](float value) {
+
+                return std::isfinite(
+                    value);
+              };
+
+          if (finite(
+                  bounds->minX) &&
+              finite(
+                  bounds->minY) &&
+              finite(
+                  bounds->minZ) &&
+
+              finite(
+                  bounds->maxX) &&
+              finite(
+                  bounds->maxY) &&
+              finite(
+                  bounds->maxZ)) {
+
+            const float dx =
+                bounds->maxX -
+                bounds->minX;
+
+            const float dy =
+                bounds->maxY -
+                bounds->minY;
+
+            const float dz =
+                bounds->maxZ -
+                bounds->minZ;
+
+            if (dx >
+                    kExtentEpsilon &&
+                dy >
+                    kExtentEpsilon &&
+                dz >
+                    kExtentEpsilon) {
+
+              info.bounds =
+                  *bounds;
+
+              const float
+                  horizontalSize =
+                      std::min(
+                          dx,
+                          dz);
+
+              // Detect slabs, carpet, pressure
+              // plates and other genuinely flat
+              // block models without relying on name.
+              thinY =
+                  dy <=
+                  horizontalSize *
+                      kThinYRatio;
+            }
+          }
+        }
+      }
+    }
   }
 
-  auto **vtable =
-      *reinterpret_cast<
-          void ***>(
-          blockType);
-
-  if (!vtable) {
-    return false;
-  }
-
-  constexpr std::size_t slot =
-      profile::
-          kBlockTypeGetVisualShapeVtableOffset /
-      sizeof(void *);
-
-  auto getVisualShape =
-      reinterpret_cast<
-          GetVisualShapeFn>(
-          vtable[slot]);
-
-  if (!getVisualShape) {
-    return false;
-  }
-
-  AabbAbi bounds{};
-
-  getVisualShape(
-      blockType,
-      block,
-      &bounds);
-
-  const auto finite =
-      [](float value) {
-
-        return std::isfinite(
-            value);
-      };
-
-  if (!finite(bounds.minX) ||
-      !finite(bounds.minY) ||
-      !finite(bounds.minZ) ||
-
-      !finite(bounds.maxX) ||
-      !finite(bounds.maxY) ||
-      !finite(bounds.maxZ)) {
-
-    return false;
-  }
-
-  const float dx =
-      bounds.maxX -
-      bounds.minX;
-
-  const float dy =
-      bounds.maxY -
-      bounds.minY;
-
-  const float dz =
-      bounds.maxZ -
-      bounds.minZ;
-
-  if (!(dx >
-        kExtentEpsilon) ||
-
-      !(dy >
-        kExtentEpsilon) ||
-
-      !(dz >
-        kExtentEpsilon)) {
-
-    return false;
-  }
-
-  info.bounds =
-      bounds;
-
-  // --------------------------------------------------------------------------
-  // Visual center.
-  //
-  // Rotation will happen around the model's real AABB center instead of
-  // ItemActor origin.
-  // --------------------------------------------------------------------------
-
-  info.pivotX =
-      (bounds.minX +
-       bounds.maxX) *
-      0.5f *
-      info.renderScale;
-
-  info.pivotY =
-      (bounds.minY +
-       bounds.maxY) *
-      0.5f *
-      info.renderScale;
-
-  info.pivotZ =
-      (bounds.minZ +
-       bounds.maxZ) *
-      0.5f *
-      info.renderScale;
-
-  // --------------------------------------------------------------------------
-  // Pick resting face.
-  //
-  // Largest face should touch the floor.
-  //
-  // Equivalently:
-  // the smallest dimension becomes vertical.
-  //
-  // IMPORTANT:
-  // ties prefer Y.
-  //
-  // This keeps cube/head upright instead of randomly flipping.
-  // --------------------------------------------------------------------------
-
-  const bool ySmallest =
-      dy <=
-          dx +
-              kExtentEpsilon &&
-      dy <=
-          dz +
-              kExtentEpsilon;
-
-  if (ySmallest) {
-
-    // Slab, carpet, snow layer, head/cube tie...
-    info.targetRotX =
-        0.0f;
-
-    info.targetRotZ =
-        0.0f;
-
-  } else if (
-      dx <=
-      dz +
-          kExtentEpsilon) {
-
-    // X becomes world Y.
-    //
-    // Good for tall narrow shapes such as:
-    // fence / torch / lever-like geometry.
-    info.targetRotX =
-        0.0f;
-
-    info.targetRotZ =
-        kHalfPi;
-
-  } else {
-
-    // Z becomes world Y.
-    info.targetRotX =
-        kHalfPi;
-
-    info.targetRotZ =
-        0.0f;
-  }
+  info.keepHorizontal =
+      thinY ||
+      blockShapeShouldRemainHorizontal(
+          info.blockShape);
 
   info.valid =
       true;
@@ -816,164 +814,9 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
   return true;
 }
 
-// ============================================================================
-// Calculate block ground contact
-// ============================================================================
-
-float ItemPhysicsRuntime::computeBlockGroundOffset(
-    const BlockRenderInfo &info,
-    float rotX,
-    float rotZ) noexcept {
-
-  if (!info.valid) {
-    return 0.0f;
-  }
-
-  const float scale =
-      info.renderScale;
-
-  const float centerX =
-      (info.bounds.minX +
-       info.bounds.maxX) *
-      0.5f *
-      scale;
-
-  const float centerY =
-      (info.bounds.minY +
-       info.bounds.maxY) *
-      0.5f *
-      scale;
-
-  const float centerZ =
-      (info.bounds.minZ +
-       info.bounds.maxZ) *
-      0.5f *
-      scale;
-
-  const float cosX =
-      std::cos(
-          rotX);
-
-  const float sinX =
-      std::sin(
-          rotX);
-
-  const float cosZ =
-      std::cos(
-          rotZ);
-
-  const float sinZ =
-      std::sin(
-          rotZ);
-
-  float rotatedMinY =
-      std::numeric_limits<float>::
-          infinity();
-
-  const float xs[2] = {
-      info.bounds.minX *
-          scale,
-      info.bounds.maxX *
-          scale,
-  };
-
-  const float ys[2] = {
-      info.bounds.minY *
-          scale,
-      info.bounds.maxY *
-          scale,
-  };
-
-  const float zs[2] = {
-      info.bounds.minZ *
-          scale,
-      info.bounds.maxZ *
-          scale,
-  };
-
-  for (float px : xs) {
-    for (float py : ys) {
-      for (float pz : zs) {
-
-        // Move to visual center.
-        float x =
-            px -
-            centerX;
-
-        float y =
-            py -
-            centerY;
-
-        float z =
-            pz -
-            centerZ;
-
-        // Matrix order used by the mod:
-        //
-        // postRotateX()
-        // postRotateZ()
-        //
-        // For column vectors the point sees
-        // Rz first, then Rx.
-
-        const float zRotX =
-            cosZ *
-                x -
-            sinZ *
-                y;
-
-        const float zRotY =
-            sinZ *
-                x +
-            cosZ *
-                y;
-
-        const float zRotZ =
-            z;
-
-        const float xRotY =
-            cosX *
-                zRotY -
-            sinX *
-                zRotZ;
-
-        const float finalY =
-            centerY +
-            xRotY;
-
-        rotatedMinY =
-            std::min(
-                rotatedMinY,
-                finalY);
-      }
-    }
-  }
-
-  if (!std::isfinite(
-          rotatedMinY)) {
-
-    return 0.0f;
-  }
-
-  // Identity orientation is our known-good baseline.
-  //
-  // This means:
-  //
-  // slab/head remain exactly where the previous
-  // successful build placed them.
-  //
-  // Only the amount caused by rotation is corrected.
-  const float baselineMinY =
-      info.bounds.minY *
-      scale;
-
-  return baselineMinY -
-         rotatedMinY;
-}
-
-// ============================================================================
+// ============================================================
 // Item classification
-// ============================================================================
+// ============================================================
 
 ItemPhysicsRuntime::ItemRenderTraits
 ItemPhysicsRuntime::classifyItem(
@@ -981,9 +824,9 @@ ItemPhysicsRuntime::classifyItem(
 
   ItemRenderTraits traits{};
 
-  // --------------------------------------------------------------------------
-  // Block-backed ItemStack
-  // --------------------------------------------------------------------------
+  // ----------------------------------------------------------
+  // Block-backed item
+  // ----------------------------------------------------------
 
   const auto block =
       *reinterpret_cast<
@@ -1001,16 +844,16 @@ ItemPhysicsRuntime::classifyItem(
         ModelClass::
             BlockModel;
 
-    buildBlockRenderInfo(
+    (void)buildBlockRenderInfo(
         block,
         traits.block);
 
     return traits;
   }
 
-  // --------------------------------------------------------------------------
-  // Ordinary Item
-  // --------------------------------------------------------------------------
+  // ----------------------------------------------------------
+  // Ordinary item
+  // ----------------------------------------------------------
 
   const auto itemHandle =
       *reinterpret_cast<
@@ -1063,9 +906,9 @@ ItemPhysicsRuntime::classifyItem(
   return traits;
 }
 
-// ============================================================================
-// Physics state creation
-// ============================================================================
+// ============================================================
+// Physics state initialization
+// ============================================================
 
 ItemPhysicsRuntime::PhysicsState &
 ItemPhysicsRuntime::stateFor(
@@ -1125,16 +968,25 @@ ItemPhysicsRuntime::stateFor(
         0.0f;
 
     state.angularX =
-        (v * 2.0f -
+        (v *
+             2.0f -
          1.0f) *
         curve *
         kPi;
 
     state.angularZ =
-        (w * 2.0f -
+        (w *
+             2.0f -
          1.0f) *
         (1.0f -
          curve) *
+        kPi;
+
+    state.restYaw =
+        seededUnit(
+            entityId ^
+            0x27D4EB2Du) *
+        2.0f *
         kPi;
 
     if (std::abs(
@@ -1163,9 +1015,9 @@ ItemPhysicsRuntime::stateFor(
   return state;
 }
 
-// ============================================================================
+// ============================================================
 // Physics update
-// ============================================================================
+// ============================================================
 
 void ItemPhysicsRuntime::updateState(
     PhysicsState &state,
@@ -1196,9 +1048,9 @@ void ItemPhysicsRuntime::updateState(
               5.0f,
           1.0f);
 
-  // --------------------------------------------------------------------------
+  // ----------------------------------------------------------
   // Airborne
-  // --------------------------------------------------------------------------
+  // ----------------------------------------------------------
 
   if (!grounded) {
 
@@ -1248,64 +1100,61 @@ void ItemPhysicsRuntime::updateState(
     return;
   }
 
-  // --------------------------------------------------------------------------
+  // ----------------------------------------------------------
   // Ground
-  // --------------------------------------------------------------------------
+  // ----------------------------------------------------------
 
   const float settle =
       frameFactor *
       mSettleSpeed.load(
           std::memory_order_relaxed);
 
-  switch (
-      traits.modelClass) {
+  if (traits.modelClass ==
+          ModelClass::BlockModel &&
+      traits.block.keepHorizontal) {
 
-  // --------------------------------------------------------------------------
-  // BLOCK MODEL
-  //
-  // Target orientation is generated from VisualShape AABB.
-  // --------------------------------------------------------------------------
-
-  case ModelClass::BlockModel: {
-
-    const float targetX =
-        traits.block.valid
-            ? traits.block.targetRotX
-            : 0.0f;
-
-    const float targetZ =
-        traits.block.valid
-            ? traits.block.targetRotZ
-            : 0.0f;
-
+    // slab
+    // carpet
+    // rail
+    // skull/head
+    // snow layer
+    // etc.
+    //
+    // Their existing block Y-axis must remain vertical.
     state.rotX =
         approachAngle(
             state.rotX,
-            targetX,
+            0.0f,
             settle);
 
     state.rotZ =
         approachAngle(
             state.rotZ,
-            targetZ,
+            0.0f,
             settle);
 
+    // Safe horizontal randomization.
     state.rotY =
-        0.0f;
+        approachAngle(
+            state.rotY,
+            state.restYaw,
+            settle);
 
-    break;
-  }
+  } else {
 
-  // --------------------------------------------------------------------------
-  // Sword/tool/normal item.
-  //
-  // Atlas target:
-  // 90 degrees.
-  // --------------------------------------------------------------------------
-
-  case ModelClass::FlatItem:
-  case ModelClass::Special3D: {
-
+    // Everything else follows Atlas/Java base pose:
+    //
+    // fence
+    // brewing stand
+    // flower pot
+    // torch
+    // lever
+    // chain
+    // lantern
+    // sword
+    // tools
+    // armor
+    // etc.
     const float target =
         mGroundTiltDeg.load(
             std::memory_order_relaxed) *
@@ -1320,20 +1169,16 @@ void ItemPhysicsRuntime::updateState(
     state.rotY =
         0.0f;
 
-    // rotZ intentionally stays at the
-    // landing orientation.
-
-    break;
-  }
+    // Keep landing Z rotation.
   }
 
   state.wasGrounded =
       true;
 }
 
-// ============================================================================
-// State cleanup
-// ============================================================================
+// ============================================================
+// Cleanup
+// ============================================================
 
 void ItemPhysicsRuntime::pruneStates(
     std::chrono::steady_clock::
@@ -1360,9 +1205,9 @@ void ItemPhysicsRuntime::pruneStates(
   }
 }
 
-// ============================================================================
+// ============================================================
 // OnGroundFlagComponent
-// ============================================================================
+// ============================================================
 
 bool ItemPhysicsRuntime::
     hasOnGroundComponent(
@@ -1476,7 +1321,8 @@ bool ItemPhysicsRuntime::
   for (int guard = 0;
 
        nodeIndex != -1 &&
-       guard < 4096;
+       guard <
+           4096;
 
        ++guard) {
 
@@ -1595,9 +1441,9 @@ bool ItemPhysicsRuntime::
          0x3FFFEu;
 }
 
-// ============================================================================
-// Render
-// ============================================================================
+// ============================================================
+// ItemRenderer hook
+// ============================================================
 
 void ItemPhysicsRuntime::onRender(
     void *self,
@@ -1713,9 +1559,9 @@ void ItemPhysicsRuntime::onRender(
     }
   }
 
-  // --------------------------------------------------------------------------
-  // Temporary ItemActor state
-  // --------------------------------------------------------------------------
+  // ----------------------------------------------------------
+  // Temporary actor state
+  // ----------------------------------------------------------
 
   auto &count =
       *reinterpret_cast<
@@ -1744,9 +1590,10 @@ void ItemPhysicsRuntime::onRender(
         1;
   }
 
-  // Atlas trick:
+  // Atlas:
   //
-  // skips vanilla bob + spin.
+  // disable vanilla dropped-item
+  // bob/spin.
   inItemFrame =
       1;
 
@@ -1760,45 +1607,18 @@ void ItemPhysicsRuntime::onRender(
   const float oldY =
       position[1];
 
-  // --------------------------------------------------------------------------
-  // Position correction
-  // --------------------------------------------------------------------------
+  const bool ordinaryFlat =
+      traits.modelClass ==
+      ModelClass::
+          FlatItem;
 
-  float atlasPivotY =
-      0.0f;
+  // Only ordinary non-block items receive this.
+  if (ordinaryFlat) {
 
-  if (traits.modelClass ==
-      ModelClass::FlatItem) {
-
-    // Exact Atlas ordinary-item correction.
     position[1] =
         oldY +
         mHeightOffset.load(
             std::memory_order_relaxed);
-
-    atlasPivotY =
-        kAtlasFlatPivotY;
-
-  } else if (
-      traits.modelClass ==
-      ModelClass::BlockModel &&
-      grounded &&
-      traits.block.valid) {
-
-    // Geometry-driven block contact.
-    position[1] =
-        oldY +
-        computeBlockGroundOffset(
-            traits.block,
-            snapshot.rotX,
-            snapshot.rotZ);
-
-  } else {
-
-    // Block models and shield/banner do NOT receive
-    // Atlas's -0.38 / +0.25 ordinary-item correction.
-    position[1] =
-        oldY;
   }
 
   void *stack =
@@ -1846,105 +1666,61 @@ void ItemPhysicsRuntime::onRender(
     const float z =
         position[2];
 
-    // ------------------------------------------------------------------------
-    // BLOCK MODEL
+    // ========================================================
+    // EXACT ATLAS TRANSFORM ORDER
     //
-    // Rotate around the actual VisualShape center.
-    // ------------------------------------------------------------------------
+    // OLD / WRONG:
+    //
+    // T(pos)
+    // T(0,.25,0)   <-- too early
+    // R
+    // T(-pos)
+    //
+    // This added approximately +0.25 world-Y
+    // when ground angle was 90 degrees.
+    //
+    //
+    // CORRECT:
+    //
+    // T(pos)
+    // R
+    // T(0,.25,0)
+    // T(-pos)
+    //
+    // ========================================================
 
-    if (traits.modelClass ==
-            ModelClass::BlockModel &&
-        traits.block.valid) {
+    postTranslate(
+        *matrix,
+        x,
+        y,
+        z);
 
-      const float pivotX =
-          traits.block.pivotX;
+    postRotateX(
+        *matrix,
+        snapshot.rotX);
 
-      const float pivotY =
-          traits.block.pivotY;
+    postRotateY(
+        *matrix,
+        snapshot.rotY);
 
-      const float pivotZ =
-          traits.block.pivotZ;
+    postRotateZ(
+        *matrix,
+        snapshot.rotZ);
+
+    if (ordinaryFlat) {
 
       postTranslate(
           *matrix,
-
-          x +
-              pivotX,
-
-          y +
-              pivotY,
-
-          z +
-              pivotZ);
-
-      postRotateX(
-          *matrix,
-          snapshot.rotX);
-
-      postRotateY(
-          *matrix,
-          snapshot.rotY);
-
-      postRotateZ(
-          *matrix,
-          snapshot.rotZ);
-
-      postTranslate(
-          *matrix,
-
-          -(x +
-            pivotX),
-
-          -(y +
-            pivotY),
-
-          -(z +
-            pivotZ));
+          0.0f,
+          kAtlasFlatLocalY,
+          0.0f);
     }
 
-    // ------------------------------------------------------------------------
-    // ORDINARY ITEM / SPECIAL ITEM
-    // ------------------------------------------------------------------------
-
-    else {
-
-      postTranslate(
-          *matrix,
-          x,
-          y,
-          z);
-
-      if (atlasPivotY !=
-          0.0f) {
-
-        // Intentionally NOT undone.
-        //
-        // This matches Atlas's real matrix sequence.
-        postTranslate(
-            *matrix,
-            0.0f,
-            atlasPivotY,
-            0.0f);
-      }
-
-      postRotateX(
-          *matrix,
-          snapshot.rotX);
-
-      postRotateY(
-          *matrix,
-          snapshot.rotY);
-
-      postRotateZ(
-          *matrix,
-          snapshot.rotZ);
-
-      postTranslate(
-          *matrix,
-          -x,
-          -y,
-          -z);
-    }
+    postTranslate(
+        *matrix,
+        -x,
+        -y,
+        -z);
 
     original(
         self,
@@ -1952,9 +1728,9 @@ void ItemPhysicsRuntime::onRender(
         renderData);
   }
 
-  // --------------------------------------------------------------------------
-  // Restore everything modified for this draw.
-  // --------------------------------------------------------------------------
+  // ----------------------------------------------------------
+  // Restore
+  // ----------------------------------------------------------
 
   position[1] =
       oldY;
