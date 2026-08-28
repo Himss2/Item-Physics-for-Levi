@@ -16,21 +16,15 @@ inline constexpr std::string_view kItemRendererRtti =
 inline constexpr std::size_t
     kItemRendererRenderVtableOffset = 0x18;
 
-// ============================================================================
+// ============================================================
 // ItemActor / ItemStack
-// ============================================================================
+// ============================================================
 
 inline constexpr std::ptrdiff_t
     kActorRegistryOffset = 0x10;
 
 inline constexpr std::ptrdiff_t
     kActorEntityIdOffset = 0x18;
-
-// ItemStackBase starts around ItemActor + 0x390.
-//
-// +0x398 : item handle
-// +0x3A8 : Block const*
-// +0x3B2 : count
 
 inline constexpr std::ptrdiff_t
     kItemHandleOffset = 0x398;
@@ -44,13 +38,12 @@ inline constexpr std::ptrdiff_t
 inline constexpr std::ptrdiff_t
     kIsInItemFrameOffset = 0x440;
 
-// Item std::string identifier.
 inline constexpr std::ptrdiff_t
     kItemIdentifierOffset = 0xF0;
 
-// ============================================================================
+// ============================================================
 // ActorRenderData
-// ============================================================================
+// ============================================================
 
 inline constexpr std::ptrdiff_t
     kRenderDataActorOffset = 0x00;
@@ -58,9 +51,9 @@ inline constexpr std::ptrdiff_t
 inline constexpr std::ptrdiff_t
     kRenderDataPositionOffset = 0x10;
 
-// ============================================================================
+// ============================================================
 // MatrixStack
-// ============================================================================
+// ============================================================
 
 inline constexpr std::uintptr_t
     kGetWorldMatrixRva = 0x0A5C6868;
@@ -71,82 +64,56 @@ inline constexpr std::uintptr_t
 inline constexpr std::uintptr_t
     kMatrixStackRefDtorRva = 0x107CCD40;
 
-// ============================================================================
+// ============================================================
 // BlockGraphics
-// ============================================================================
 //
-// IMPORTANT:
+// We already have Block const* from ItemStack::mBlock.
 //
-// ItemRenderer vanilla internally calls:
+// This overload does:
 //
-//   BlockGraphics::getForBlock(BlockType const&)
-//   RVA 0xA218A7C
-//
-// But Item Physics already has ItemStack::mBlock:
-//
-//   Actor + 0x3A8 = Block const*
-//
-// Therefore WE call the Block const& overload:
-//
-//   BlockGraphics::getForBlock(Block const&)
-//   RVA 0xA218A90
-//
-// The two RVAs must not be mixed.
-// ============================================================================
+// Block*
+//   ↓
+// load Block + 0x68
+//   ↓
+// BlockType*
+//   ↓
+// BlockGraphics lookup
+// ============================================================
 
 inline constexpr std::uintptr_t
-    kBlockGraphicsGetForBlockRva =
-        0x0A218A90;
+    kBlockGraphicsGetForBlockRva = 0x0A218A90;
 
 inline constexpr std::uintptr_t
-    kBlockGraphicsGetBlockShapeRva =
-        0x0A2197B8;
+    kBlockGraphicsGetBlockShapeRva = 0x0A2197B8;
 
-// Internal ItemRenderer classifier:
-//
-// bool isBlockShape3D(BlockShape)
-//
-// Used only to estimate the scale used by the vanilla
-// block-item renderer.
-inline constexpr std::uintptr_t
-    kIsBlockShape3DRva =
-        0x0A280F08;
-
-// ============================================================================
-// Block / BlockType layout
-// ============================================================================
+// ============================================================
+// Block / BlockType
+// ============================================================
 
 // Block::mBlockType
 inline constexpr std::ptrdiff_t
     kBlockTypeOffset = 0x68;
 
-// BlockType object vptr:
+// On this exact Minecraft binary:
 //
-// vptr + 0x50
+// BlockType vptr + 0x50
 //
-// is the getVisualShape virtual slot on this exact binary.
-//
-// ABI:
-//
-// AABB* fn(
-//     BlockType*,
-//     Block const*,
-//     AABB*
-// );
+// AABB const& getVisualShape(
+//     Block const&,
+//     AABB& buffer
+// ) const;
 inline constexpr std::size_t
-    kBlockTypeGetVisualShapeVtableOffset =
-        0x50;
+    kBlockTypeGetVisualShapeVtableOffset = 0x50;
 
-// ============================================================================
+// ============================================================
 // ECS
-// ============================================================================
+// ============================================================
 
 inline constexpr std::uint32_t
-    kOnGroundFlagComponentHash =
-        0xC29078A0u;
+    kOnGroundFlagComponentHash = 0xC29078A0u;
 
-// ============================================================================
-// Target fingerprint
+// ============================================================
+// Fingerprint
 //
 // libminecraftpe(4).so
 //
@@ -155,7 +122,7 @@ inline constexpr std::uint32_t
 //
 // ItemRenderer::render:
 // RVA 0xA29F7A8
-// ============================================================================
+// ============================================================
 
 inline constexpr std::array<
     std::uint32_t,
