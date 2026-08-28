@@ -5,50 +5,235 @@
 #include <array>
 #include <cmath>
 #include <cstring>
-#include <limits>
+#include <string_view>
 
 namespace itemphysics {
 namespace {
 
-constexpr float kPi = 3.14159265358979323846f;
-constexpr float kDegToRad = kPi / 180.0f;
-constexpr auto kStateTtl = std::chrono::seconds(8);
+constexpr float kPi =
+    3.14159265358979323846f;
+
+constexpr float kDegToRad =
+    kPi / 180.0f;
+
+constexpr auto kStateTtl =
+    std::chrono::seconds(8);
+
+// Exact constant observed in Atlas constructor:
+// ItemPhysics + 0x210
+constexpr float kAtlasFlatPivotY =
+    0.25f;
+
+constexpr std::string_view kShieldId =
+    "minecraft:shield";
+
+constexpr std::string_view kBannerId =
+    "minecraft:banner";
+
+// ============================================================
+// Matrix scope
+// ============================================================
 
 class MatrixPushScope {
 public:
-  MatrixPushScope(void *stack, ItemPhysicsRuntime::MatrixPushFn push,
-                  ItemPhysicsRuntime::MatrixRefDtorFn dtor)
+  MatrixPushScope(
+      void *stack,
+      ItemPhysicsRuntime::MatrixPushFn push,
+      ItemPhysicsRuntime::MatrixRefDtorFn dtor)
       : mDtor(dtor) {
+
     if (stack && push && dtor) {
       mRef = push(stack, false);
-      mActive = mRef.stack != nullptr && mRef.mat != nullptr;
+
+      mActive =
+          mRef.stack != nullptr &&
+          mRef.mat != nullptr;
     }
   }
 
-  MatrixPushScope(const MatrixPushScope &) = delete;
-  MatrixPushScope &operator=(const MatrixPushScope &) = delete;
+  MatrixPushScope(
+      const MatrixPushScope &) = delete;
+
+  MatrixPushScope &
+  operator=(const MatrixPushScope &) = delete;
 
   ~MatrixPushScope() {
     if (mActive && mDtor) {
       mDtor(&mRef);
+
       mRef.stack = nullptr;
       mRef.mat = nullptr;
     }
   }
 
-  [[nodiscard]] Mat4 *matrix() noexcept {
-    return mActive ? mRef.mat : nullptr;
+  [[nodiscard]]
+  Mat4 *matrix() noexcept {
+    return mActive
+               ? mRef.mat
+               : nullptr;
   }
 
 private:
   ItemPhysicsRuntime::MatrixStackRefAbi mRef{};
+
   ItemPhysicsRuntime::MatrixRefDtorFn mDtor{};
+
   bool mActive{};
 };
 
+// ============================================================
+// libc++ std::string reader
+//
+// Atlas reads the Item identifier directly from the libc++
+// string at Item + 0xF0.
+// ============================================================
+
+bool libcxxStringEquals(
+    std::uintptr_t stringAddress,
+    std::string_view wanted) noexcept {
+
+  if (!stringAddress) {
+    return false;
+  }
+
+  const auto *raw =
+      reinterpret_cast<const std::uint8_t *>(
+          stringAddress);
+
+  const std::uint8_t flag =
+      raw[0];
+
+  std::size_t length = 0;
+
+  const char *data = nullptr;
+
+  if ((flag & 1u) == 0) {
+    // libc++ short-string representation.
+    length =
+        static_cast<std::size_t>(
+            flag >> 1);
+
+    data =
+        reinterpret_cast<const char *>(
+            raw + 1);
+  } else {
+    // libc++ long-string representation.
+    length =
+        *reinterpret_cast<
+            const std::size_t *>(
+            raw + 8);
+
+    data =
+        *reinterpret_cast<
+            const char *const *>(
+            raw + 16);
+  }
+
+  if (!data ||
+      length != wanted.size()) {
+    return false;
+  }
+
+  return std::memcmp(
+             data,
+             wanted.data(),
+             length) == 0;
+}
+
+// ============================================================
+// Item classification reconstructed from Atlas:
+//
+// Actor + 0x398 -> item handle
+// Actor + 0x3A8 -> Block*
+//
+// if Block* != nullptr:
+//     block/3D path
+//
+// otherwise:
+//     normal flat-item path,
+//     except minecraft:shield and minecraft:banner.
+// ============================================================
+
+struct ItemRenderTraits {
+  bool valid{};
+  bool flatCorrection{};
+};
+
+ItemRenderTraits classifyItem(
+    std::uintptr_t actorAddress) noexcept {
+
+  const auto itemHandle =
+      *reinterpret_cast<
+          const std::uintptr_t *>(
+          actorAddress +
+          profile::kItemHandleOffset);
+
+  if (!itemHandle) {
+    return {};
+  }
+
+  const auto block =
+      *reinterpret_cast<
+          const std::uintptr_t *>(
+          actorAddress +
+          profile::kBlockPtrOffset);
+
+  // A real block item does not receive Atlas's
+  // -0.38 / +0.25 flat-item correction.
+  if (block) {
+    return {
+        true,
+        false
+    };
+  }
+
+  // Atlas dereferences the ItemStack item handle once
+  // before reading Item + 0xF0.
+  const auto item =
+      *reinterpret_cast<
+          const std::uintptr_t *>(
+          itemHandle);
+
+  if (!item) {
+    return {};
+  }
+
+  const auto identifierAddress =
+      item +
+      profile::kItemIdentifierOffset;
+
+  const bool shield =
+      libcxxStringEquals(
+          identifierAddress,
+          kShieldId);
+
+  const bool banner =
+      libcxxStringEquals(
+          identifierAddress,
+          kBannerId);
+
+  if (shield || banner) {
+    return {
+        true,
+        false
+    };
+  }
+
+  // Swords, tools, armor, ingots, food, etc.
+  return {
+      true,
+      true
+  };
+}
+
 } // namespace
 
-ItemPhysicsRuntime *ItemPhysicsRuntime::sInstance = nullptr;
+ItemPhysicsRuntime *
+ItemPhysicsRuntime::sInstance = nullptr;
+
+// ============================================================
+// Config
+// ============================================================
 
 void ItemPhysicsRuntime::applyConfig(
     const ItemPhysicsConfig &config) noexcept {
@@ -62,46 +247,64 @@ void ItemPhysicsRuntime::applyConfig(
       std::memory_order_relaxed);
 
   mRotationSpeed.store(
-      static_cast<float>(config.rotationSpeed),
+      static_cast<float>(
+          config.rotationSpeed),
       std::memory_order_relaxed);
 
   mSettleSpeed.store(
-      static_cast<float>(config.settleSpeed),
+      static_cast<float>(
+          config.settleSpeed),
       std::memory_order_relaxed);
 
   mGroundTiltDeg.store(
-      static_cast<float>(config.groundTilt),
+      static_cast<float>(
+          config.groundTilt),
       std::memory_order_relaxed);
 
   mHeightOffset.store(
-      static_cast<float>(config.heightOffset),
+      static_cast<float>(
+          config.heightOffset),
       std::memory_order_relaxed);
 }
+
+// ============================================================
+// Profile validation
+// ============================================================
 
 bool ItemPhysicsRuntime::verifyProfile(
     const ResolvedVirtual &resolved,
     ll::mod::NativeMod &mod) const {
 
-  const auto target = resolved.target;
+  const auto target =
+      resolved.target;
 
   constexpr auto bytes =
       profile::kRenderFingerprint.size() *
       sizeof(std::uint32_t);
 
-  if (!resolved.module.readable(target, bytes)) {
+  if (!resolved.module.readable(
+          target,
+          bytes)) {
+
     mod.getLogger().warn(
         "ItemRenderer target is not readable for fingerprinting");
+
     return false;
   }
 
   const auto *words =
-      reinterpret_cast<const std::uint32_t *>(target);
+      reinterpret_cast<
+          const std::uint32_t *>(
+          target);
 
   for (std::size_t i = 0;
-       i < profile::kRenderFingerprint.size();
+       i <
+       profile::kRenderFingerprint.size();
        ++i) {
 
-    if (words[i] != profile::kRenderFingerprint[i]) {
+    if (words[i] !=
+        profile::kRenderFingerprint[i]) {
+
       mod.getLogger().warn(
           "Unsupported Minecraft profile: "
           "ItemRenderer fingerprint mismatch at word {}",
@@ -113,13 +316,18 @@ bool ItemPhysicsRuntime::verifyProfile(
 
   const auto helperOk =
       [&](std::uintptr_t rva) {
+
         return resolved.module.executable(
-            resolved.module.base + rva);
+            resolved.module.base +
+            rva);
       };
 
-  if (!helperOk(profile::kGetWorldMatrixRva) ||
-      !helperOk(profile::kMatrixStackPushRva) ||
-      !helperOk(profile::kMatrixStackRefDtorRva)) {
+  if (!helperOk(
+          profile::kGetWorldMatrixRva) ||
+      !helperOk(
+          profile::kMatrixStackPushRva) ||
+      !helperOk(
+          profile::kMatrixStackRefDtorRva)) {
 
     mod.getLogger().warn(
         "Unsupported Minecraft profile: "
@@ -131,6 +339,10 @@ bool ItemPhysicsRuntime::verifyProfile(
   return true;
 }
 
+// ============================================================
+// Hook installation
+// ============================================================
+
 bool ItemPhysicsRuntime::install(
     ll::mod::NativeMod &mod) {
 
@@ -140,9 +352,11 @@ bool ItemPhysicsRuntime::install(
       resolveVirtualByRtti(
           profile::kMinecraftModule,
           profile::kItemRendererRtti,
-          profile::kItemRendererRenderVtableOffset);
+          profile::
+              kItemRendererRenderVtableOffset);
 
   if (!resolved) {
+
     mod.getLogger().warn(
         "Item Physics inactive: "
         "failed to resolve 12ItemRenderer");
@@ -150,7 +364,10 @@ bool ItemPhysicsRuntime::install(
     return false;
   }
 
-  if (!verifyProfile(*resolved, mod)) {
+  if (!verifyProfile(
+          *resolved,
+          mod)) {
+
     mod.getLogger().warn(
         "Item Physics remains in safe passthrough mode; "
         "this libminecraftpe.so is not the analyzed profile");
@@ -165,36 +382,45 @@ bool ItemPhysicsRuntime::install(
       resolved->target;
 
   mGetWorldMatrix =
-      reinterpret_cast<GetWorldMatrixFn>(
+      reinterpret_cast<
+          GetWorldMatrixFn>(
           mMinecraftBase +
-          profile::kGetWorldMatrixRva);
+          profile::
+              kGetWorldMatrixRva);
 
   mMatrixPush =
-      reinterpret_cast<MatrixPushFn>(
+      reinterpret_cast<
+          MatrixPushFn>(
           mMinecraftBase +
-          profile::kMatrixStackPushRva);
+          profile::
+              kMatrixStackPushRva);
 
   mMatrixRefDtor =
-      reinterpret_cast<MatrixRefDtorFn>(
+      reinterpret_cast<
+          MatrixRefDtorFn>(
           mMinecraftBase +
-          profile::kMatrixStackRefDtorRva);
+          profile::
+              kMatrixStackRefDtorRva);
 
   sInstance = this;
 
   mOriginal = nullptr;
 
   mHook =
-      std::make_unique<pl::memory::HookHandle>(
+      std::make_unique<
+          pl::memory::HookHandle>(
           reinterpret_cast<void *>(
               mRenderTarget),
 
           reinterpret_cast<void *>(
-              &ItemPhysicsRuntime::renderDetour),
+              &ItemPhysicsRuntime::
+                  renderDetour),
 
           reinterpret_cast<void **>(
               &mOriginal),
 
-          pl::memory::HookPriority::Normal);
+          pl::memory::
+              HookPriority::Normal);
 
   if (!mHook->installed() ||
       !mOriginal) {
@@ -203,6 +429,7 @@ bool ItemPhysicsRuntime::install(
         "Failed to hook ItemRenderer::render");
 
     mHook.reset();
+
     sInstance = nullptr;
 
     return false;
@@ -238,6 +465,7 @@ void ItemPhysicsRuntime::uninstall() {
   }
 
   mOriginal = nullptr;
+
   mGetWorldMatrix = nullptr;
   mMatrixPush = nullptr;
   mMatrixRefDtor = nullptr;
@@ -248,11 +476,17 @@ void ItemPhysicsRuntime::uninstall() {
   clearStates();
 }
 
+// ============================================================
+// State
+// ============================================================
+
 void ItemPhysicsRuntime::clearStates() {
 
-  std::lock_guard lock(mStateMutex);
+  std::lock_guard lock(
+      mStateMutex);
 
   mStates.clear();
+
   mRenderCounter = 0;
 }
 
@@ -262,6 +496,7 @@ void ItemPhysicsRuntime::renderDetour(
     void *renderData) {
 
   if (sInstance) {
+
     sInstance->onRender(
         self,
         renderContext,
@@ -277,7 +512,8 @@ float ItemPhysicsRuntime::seededUnit(
   seed ^= seed << 5;
 
   return static_cast<float>(
-             seed & 0x00FFFFFFu) /
+             seed &
+             0x00FFFFFFu) /
          16777215.0f;
 }
 
@@ -285,11 +521,13 @@ float ItemPhysicsRuntime::wrapPi(
     float value) noexcept {
 
   while (value > kPi) {
-    value -= 2.0f * kPi;
+    value -=
+        2.0f * kPi;
   }
 
   while (value < -kPi) {
-    value += 2.0f * kPi;
+    value +=
+        2.0f * kPi;
   }
 
   return value;
@@ -301,7 +539,9 @@ float ItemPhysicsRuntime::approachAngle(
     float alpha) noexcept {
 
   const float delta =
-      wrapPi(target - current);
+      wrapPi(
+          target -
+          current);
 
   return wrapPi(
       current +
@@ -315,10 +555,12 @@ float ItemPhysicsRuntime::approachAngle(
 ItemPhysicsRuntime::PhysicsState &
 ItemPhysicsRuntime::stateFor(
     std::uint32_t entityId,
-    std::chrono::steady_clock::time_point now) {
+    std::chrono::steady_clock::
+        time_point now) {
 
   auto [it, inserted] =
-      mStates.try_emplace(entityId);
+      mStates.try_emplace(
+          entityId);
 
   auto &state =
       it->second;
@@ -344,72 +586,62 @@ ItemPhysicsRuntime::stateFor(
     const float curve =
         std::max(
             0.0f,
-            4.0f * u * u -
+            4.0f *
+                    u *
+                    u -
                 4.0f *
-                    u * u *
-                    u * u);
+                    u *
+                    u *
+                    u *
+                    u);
 
-    state.initialized = true;
+    state.initialized =
+        true;
 
-    /*
-     * IMPORTANT
-     * ---------
-     *
-     * Atlas does NOT start dropped items with a
-     * random 0..360 degree Y rotation.
-     *
-     * The ItemRenderer item-frame base pose already
-     * supplies the orientation we need.
-     *
-     * Adding random Y rotation here causes flat items
-     * such as swords/tools to tilt out of the ground
-     * plane.
-     */
+    // Atlas starts all three render angles at zero.
     state.rotX = 0.0f;
     state.rotY = 0.0f;
     state.rotZ = 0.0f;
 
-    /*
-     * Two-axis airborne tumble.
-     *
-     * These reproduce the same general distribution
-     * observed in Atlas.
-     */
     state.angularX =
-        (v * 2.0f - 1.0f) *
+        (v * 2.0f -
+         1.0f) *
         curve *
         kPi;
 
     state.angularZ =
-        (w * 2.0f - 1.0f) *
-        (1.0f - curve) *
+        (w * 2.0f -
+         1.0f) *
+        (1.0f -
+         curve) *
         kPi;
 
-    /*
-     * Prevent nearly motionless items.
-     */
-    if (std::abs(state.angularX) +
-            std::abs(state.angularZ) <
-        0.20f) {
+    state.wasGrounded =
+        false;
 
-      state.angularX += 0.65f;
-    }
+    state.born =
+        now;
 
-    state.wasGrounded = false;
+    state.lastUpdate =
+        now;
 
-    state.born = now;
-    state.lastUpdate = now;
-    state.lastSeen = now;
+    state.lastSeen =
+        now;
   }
 
   return state;
 }
 
+// ============================================================
+// Atlas-style physics
+// ============================================================
+
 void ItemPhysicsRuntime::updateState(
     PhysicsState &state,
     std::uint32_t,
     bool grounded,
-    std::chrono::steady_clock::time_point now) const {
+    std::chrono::steady_clock::
+        time_point now) const {
 
   const float dt =
       std::clamp(
@@ -417,108 +649,112 @@ void ItemPhysicsRuntime::updateState(
               now -
               state.lastUpdate)
               .count(),
+
           0.0f,
           0.20f);
 
-  state.lastUpdate = now;
-  state.lastSeen = now;
+  state.lastUpdate =
+      now;
+
+  state.lastSeen =
+      now;
+
+  // Atlas:
+  //
+  // min(
+  //   deltaUs * 5 / 1,000,000,
+  //   1
+  // )
+  //
+  // == min(dt * 5, 1)
+
+  const float frameFactor =
+      std::min(
+          dt * 5.0f,
+          1.0f);
 
   if (!grounded) {
 
-    const float age =
+    const float ageSeconds =
         std::chrono::duration<float>(
             now -
             state.born)
             .count();
 
-    /*
-     * Atlas-style tumble decay.
-     *
-     * Full tumble immediately after drop,
-     * gradually fading over about 4 seconds.
-     */
-    const float ageFade =
-        1.0f -
-        std::clamp(
-            age / 4.0f,
-            0.0f,
+    // Atlas:
+    //
+    // min(
+    //   elapsed / 4,000,000,
+    //   1
+    // )
+
+    const float ageFactor =
+        std::min(
+            ageSeconds /
+                4.0f,
             1.0f);
+
+    const float fade =
+        1.0f -
+        ageFactor;
 
     const float speed =
         mRotationSpeed.load(
             std::memory_order_relaxed);
 
+    const float step =
+        fade *
+        frameFactor *
+        speed;
+
     state.rotX =
         wrapPi(
             state.rotX +
             state.angularX *
-                speed *
-                ageFade *
-                dt);
+                step);
 
     state.rotZ =
         wrapPi(
             state.rotZ +
             state.angularZ *
-                speed *
-                ageFade *
-                dt);
+                step);
 
-    /*
-     * rotY deliberately stays at zero.
-     *
-     * The item-frame base orientation is preserved.
-     */
-    state.rotY = 0.0f;
+    // Atlas leaves Y at zero.
+    state.rotY =
+        0.0f;
 
   } else {
 
-    /*
-     * Grounded pose.
-     *
-     * Atlas settles only the primary tilt axis.
-     * The final Z angle is preserved, giving every
-     * dropped item a different direction while still
-     * remaining flat on the floor.
-     */
-    const float targetTilt =
+    // ItemPhysics + 0x2B0 = 90.0 degrees.
+    const float target =
         mGroundTiltDeg.load(
             std::memory_order_relaxed) *
         kDegToRad;
 
-    float alpha =
-        dt *
+    // Atlas:
+    // settleBlend = frameFactor * 3
+    //
+    // User setting remains a multiplier around
+    // the Atlas default of 3.
+
+    const float alpha =
+        frameFactor *
         mSettleSpeed.load(
             std::memory_order_relaxed);
-
-    /*
-     * A newly landed item settles slightly faster,
-     * avoiding an unnaturally long half-standing pose.
-     */
-    if (!state.wasGrounded) {
-      alpha *= 1.35f;
-    }
 
     state.rotX =
         approachAngle(
             state.rotX,
-            targetTilt,
+            target,
             alpha);
 
-    /*
-     * Critical for swords / tools:
-     *
-     * never rotate the base item-frame pose around Y.
-     */
-    state.rotY = 0.0f;
+    state.rotY =
+        0.0f;
 
-    /*
-     * Do NOT force rotZ to zero.
-     *
-     * This angle becomes the random rotation within
-     * the floor plane, similar to rotating an item
-     * inside an item frame.
-     */
+    // rotZ deliberately remains untouched.
+    //
+    // It becomes the random direction in the
+    // horizontal floor plane.
   }
 
   state.wasGrounded =
@@ -526,10 +762,13 @@ void ItemPhysicsRuntime::updateState(
 }
 
 void ItemPhysicsRuntime::pruneStates(
-    std::chrono::steady_clock::time_point now) {
+    std::chrono::steady_clock::
+        time_point now) {
 
-  for (auto it = mStates.begin();
-       it != mStates.end();) {
+  for (auto it =
+           mStates.begin();
+       it !=
+       mStates.end();) {
 
     if (now -
             it->second.lastSeen >
@@ -545,28 +784,36 @@ void ItemPhysicsRuntime::pruneStates(
   }
 }
 
-bool ItemPhysicsRuntime::hasOnGroundComponent(
-    void *actor) const noexcept {
+// ============================================================
+// OnGroundFlagComponent
+// ============================================================
+
+bool ItemPhysicsRuntime::
+    hasOnGroundComponent(
+        void *actor) const noexcept {
 
   if (!actor) {
     return false;
   }
 
   const auto actorAddress =
-      reinterpret_cast<std::uintptr_t>(
+      reinterpret_cast<
+          std::uintptr_t>(
           actor);
 
   const auto registry =
       *reinterpret_cast<
           const std::uintptr_t *>(
           actorAddress +
-          profile::kActorRegistryOffset);
+          profile::
+              kActorRegistryOffset);
 
   const auto entityId =
       *reinterpret_cast<
           const std::uint32_t *>(
           actorAddress +
-          profile::kActorEntityIdOffset);
+          profile::
+              kActorEntityIdOffset);
 
   if (!registry) {
     return false;
@@ -598,7 +845,8 @@ bool ItemPhysicsRuntime::hasOnGroundComponent(
 
   if (!bucketsBegin ||
       !bucketsEnd ||
-      bucketsEnd <= bucketsBegin ||
+      bucketsEnd <=
+          bucketsBegin ||
       !nodesBase) {
 
     return false;
@@ -609,9 +857,12 @@ bool ItemPhysicsRuntime::hasOnGroundComponent(
       bucketsBegin;
 
   if ((bucketBytes %
-       sizeof(std::uintptr_t)) != 0 ||
+       sizeof(
+           std::uintptr_t)) !=
+          0 ||
       bucketBytes /
-              sizeof(std::uintptr_t) >
+              sizeof(
+                  std::uintptr_t) >
           (1u << 20)) {
 
     return false;
@@ -619,7 +870,8 @@ bool ItemPhysicsRuntime::hasOnGroundComponent(
 
   const auto bucketCount =
       bucketBytes /
-      sizeof(std::uintptr_t);
+      sizeof(
+          std::uintptr_t);
 
   if (bucketCount == 0) {
     return false;
@@ -647,13 +899,15 @@ bool ItemPhysicsRuntime::hasOnGroundComponent(
 
     node =
         nodesBase +
-        static_cast<std::uintptr_t>(
+        static_cast<
+            std::uintptr_t>(
             nodeIndex) *
             32u;
 
     if (*reinterpret_cast<
             const std::uint32_t *>(
-            node + 8) ==
+            node +
+            8) ==
         profile::
             kOnGroundFlagComponentHash) {
 
@@ -698,7 +952,8 @@ bool ItemPhysicsRuntime::hasOnGroundComponent(
 
   if (!pagesBegin ||
       !pagesEnd ||
-      pagesEnd < pagesBegin) {
+      pagesEnd <
+          pagesBegin) {
 
     return false;
   }
@@ -706,7 +961,8 @@ bool ItemPhysicsRuntime::hasOnGroundComponent(
   const auto pageCount =
       (pagesEnd -
        pagesBegin) /
-      sizeof(std::uintptr_t);
+      sizeof(
+          std::uintptr_t);
 
   const auto pageIndex =
       (entityId >> 11) &
@@ -751,6 +1007,10 @@ bool ItemPhysicsRuntime::hasOnGroundComponent(
              generation) <=
          0x3FFFEu;
 }
+
+// ============================================================
+// ItemRenderer hook
+// ============================================================
 
 void ItemPhysicsRuntime::onRender(
     void *self,
@@ -804,6 +1064,21 @@ void ItemPhysicsRuntime::onRender(
       reinterpret_cast<
           std::uintptr_t>(
           actor);
+
+  // Atlas first verifies ItemStack.mItem.
+  const auto itemTraits =
+      classifyItem(
+          actorAddress);
+
+  if (!itemTraits.valid) {
+
+    original(
+        self,
+        renderContext,
+        renderData);
+
+    return;
+  }
 
   const auto entityId =
       *reinterpret_cast<
@@ -874,18 +1149,36 @@ void ItemPhysicsRuntime::onRender(
     count = 1;
   }
 
-  /*
-   * This is one of the most important parts
-   * copied conceptually from the Atlas behavior.
-   *
-   * Minecraft's dropped-item renderer normally
-   * applies bobbing and spinning.
-   *
-   * Pretending that the ItemActor is temporarily
-   * inside an item frame skips that vanilla branch
-   * and leaves us with a stable base item pose.
-   */
+  // Atlas uses this to bypass vanilla
+  // dropped-item bobbing and spinning.
   inItemFrame = 1;
+
+  auto *position =
+      reinterpret_cast<float *>(
+          renderDataAddress +
+          profile::
+              kRenderDataPositionOffset);
+
+  const float oldY =
+      position[1];
+
+  // ----------------------------------------------------------
+  // Atlas flat-item correction:
+  //
+  // ordinary non-block item:
+  // position.y += -0.38
+  //
+  // block / shield / banner:
+  // no correction
+  // ----------------------------------------------------------
+
+  if (itemTraits.flatCorrection) {
+
+    position[1] =
+        oldY +
+        mHeightOffset.load(
+            std::memory_order_relaxed);
+  }
 
   void *stack =
       mGetWorldMatrix
@@ -904,6 +1197,9 @@ void ItemPhysicsRuntime::onRender(
 
     if (!matrix) {
 
+      position[1] =
+          oldY;
+
       count =
           oldCount;
 
@@ -918,20 +1214,6 @@ void ItemPhysicsRuntime::onRender(
       return;
     }
 
-    auto *position =
-        reinterpret_cast<float *>(
-            renderDataAddress +
-            profile::
-                kRenderDataPositionOffset);
-
-    const float oldY =
-        position[1];
-
-    position[1] =
-        oldY +
-        mHeightOffset.load(
-            std::memory_order_relaxed);
-
     const float x =
         position[0];
 
@@ -941,35 +1223,73 @@ void ItemPhysicsRuntime::onRender(
     const float z =
         position[2];
 
-    /*
-     * With rotY fixed to zero:
-     *
-     * - swords/tools remain in the floor plane
-     * - rotZ becomes item-frame-like planar rotation
-     * - rotX provides the small landing tilt
-     */
-    rotateAround(
+    // ========================================================
+    // Atlas matrix sequence
+    //
+    // M = M * T(position)
+    //
+    // flat item:
+    // M = M * T(0, +0.25, 0)
+    //
+    // M = M * Rx
+    // M = M * Ry
+    // M = M * Rz
+    //
+    // M = M * T(-position)
+    //
+    // Vanilla renderer subsequently applies position again.
+    //
+    // Effective result:
+    //
+    // block:
+    //     T(position) * R
+    //
+    // flat:
+    //     T(position) * T(0,.25,0) * R
+    // ========================================================
+
+    postTranslate(
         *matrix,
         x,
         y,
-        z,
-        snapshot.rotX,
-        snapshot.rotY,
+        z);
+
+    if (itemTraits.flatCorrection) {
+
+      postTranslate(
+          *matrix,
+          0.0f,
+          kAtlasFlatPivotY,
+          0.0f);
+    }
+
+    postRotateX(
+        *matrix,
+        snapshot.rotX);
+
+    postRotateY(
+        *matrix,
+        snapshot.rotY);
+
+    postRotateZ(
+        *matrix,
         snapshot.rotZ);
+
+    postTranslate(
+        *matrix,
+        -x,
+        -y,
+        -z);
 
     original(
         self,
         renderContext,
         renderData);
-
-    position[1] =
-        oldY;
   }
 
-  /*
-   * Restore every field modified only for
-   * this render call.
-   */
+  position[1] =
+      oldY;
+
   count =
       oldCount;
 
