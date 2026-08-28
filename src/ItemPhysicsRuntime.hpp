@@ -71,9 +71,9 @@ public:
           MatrixStackRefAbi *);
 
 private:
-  // ==========================================================================
+  // ==========================================================
   // AABB ABI
-  // ==========================================================================
+  // ==========================================================
 
   struct AabbAbi {
     float minX{};
@@ -88,48 +88,39 @@ private:
   static_assert(
       sizeof(AabbAbi) == 24);
 
-  // ==========================================================================
+  // ==========================================================
   // Model classification
-  // ==========================================================================
+  // ==========================================================
 
   enum class ModelClass :
       std::uint8_t {
 
-    // sword, pickaxe, armor icon,
-    // ingot, food, etc.
+    // sword / tool / armor / ingot / food / sprite
     FlatItem,
 
-    // Any ItemStack backed by Block const*.
-    //
-    // Orientation is calculated from VisualShape.
+    // ItemStack has Block const*
     BlockModel,
 
-    // Non-block special renderer:
-    // shield / banner.
+    // shield / banner
     Special3D,
   };
 
   struct BlockRenderInfo {
     bool valid{};
 
-    std::int32_t blockShape{-1};
+    std::int32_t
+        blockShape{-1};
 
-    bool vanilla3D{};
+    AabbAbi
+        bounds{};
 
-    AabbAbi bounds{};
-
-    // Approximate ItemRenderer scale.
-    float renderScale{0.5f};
-
-    // Final resting rotation.
-    float targetRotX{};
-    float targetRotZ{};
-
-    // Local visual center, already converted
-    // into renderer/world scale.
-    float pivotX{};
-    float pivotY{};
-    float pivotZ{};
+    // true:
+    //
+    // slab, carpet, rail, skull, etc.
+    //
+    // Their natural block orientation already has
+    // the correct face against the floor.
+    bool keepHorizontal{};
   };
 
   struct ItemRenderTraits {
@@ -138,12 +129,13 @@ private:
     ModelClass modelClass{
         ModelClass::FlatItem};
 
-    BlockRenderInfo block{};
+    BlockRenderInfo
+        block{};
   };
 
-  // ==========================================================================
+  // ==========================================================
   // Physics state
-  // ==========================================================================
+  // ==========================================================
 
   struct PhysicsState {
     bool initialized{};
@@ -156,6 +148,9 @@ private:
     float angularX{};
     float angularZ{};
 
+    // horizontal rotation for slab/head/etc
+    float restYaw{};
+
     std::chrono::steady_clock::time_point
         born{};
 
@@ -166,9 +161,9 @@ private:
         lastSeen{};
   };
 
-  // ==========================================================================
-  // Minecraft helpers
-  // ==========================================================================
+  // ==========================================================
+  // Minecraft helper ABI
+  // ==========================================================
 
   using BlockGraphicsGetForBlockFn =
       void *(*)(
@@ -178,19 +173,32 @@ private:
       std::int32_t (*)(
           const void *graphics);
 
-  using IsBlockShape3DFn =
-      bool (*)(
-          std::int32_t shape);
-
+  // Actual ABI:
+  //
+  // AABB const& getVisualShape(
+  //     Block const& block,
+  //     AABB& buffer
+  // ) const;
+  //
+  // x0 = BlockType*
+  // x1 = Block*
+  // x2 = scratch AABB*
+  //
+  // return x0 = AABB const*
+  //
+  // IMPORTANT:
+  // default implementation may return
+  // BlockType::mVisualShape directly WITHOUT
+  // writing to scratch.
   using GetVisualShapeFn =
-      AabbAbi *(*)(
+      const AabbAbi *(*)(
           void *blockType,
           const void *block,
-          AabbAbi *output);
+          AabbAbi *scratch);
 
-  // ==========================================================================
+  // ==========================================================
   // Hook
-  // ==========================================================================
+  // ==========================================================
 
   static ItemPhysicsRuntime *
       sInstance;
@@ -209,9 +217,9 @@ private:
       const ResolvedVirtual &resolved,
       ll::mod::NativeMod &mod) const;
 
-  // ==========================================================================
-  // Classification / block geometry
-  // ==========================================================================
+  // ==========================================================
+  // Item / block classification
+  // ==========================================================
 
   [[nodiscard]]
   ItemRenderTraits classifyItem(
@@ -223,14 +231,12 @@ private:
       BlockRenderInfo &info) const noexcept;
 
   [[nodiscard]]
-  static float computeBlockGroundOffset(
-      const BlockRenderInfo &info,
-      float rotX,
-      float rotZ) noexcept;
+  static bool blockShapeShouldRemainHorizontal(
+      std::int32_t shape) noexcept;
 
-  // ==========================================================================
-  // ECS / physics
-  // ==========================================================================
+  // ==========================================================
+  // Physics / ECS
+  // ==========================================================
 
   [[nodiscard]]
   bool hasOnGroundComponent(
@@ -260,17 +266,13 @@ private:
       float target,
       float alpha) noexcept;
 
-  // ==========================================================================
-  // Item identifier
-  // ==========================================================================
-
   static bool libcxxStringEquals(
       std::uintptr_t stringAddress,
       std::string_view wanted) noexcept;
 
-  // ==========================================================================
-  // Config
-  // ==========================================================================
+  // ==========================================================
+  // Settings
+  // ==========================================================
 
   std::atomic_bool
       mEnabled{true};
@@ -293,9 +295,9 @@ private:
   std::atomic_bool
       mProfileSupported{false};
 
-  // ==========================================================================
-  // Minecraft addresses
-  // ==========================================================================
+  // ==========================================================
+  // Runtime addresses
+  // ==========================================================
 
   std::uintptr_t
       mMinecraftBase{};
@@ -321,12 +323,9 @@ private:
   BlockGraphicsGetBlockShapeFn
       mGetBlockGraphicsShape{};
 
-  IsBlockShape3DFn
-      mIsBlockShape3D{};
-
-  // ==========================================================================
-  // Hook/state
-  // ==========================================================================
+  // ==========================================================
+  // Hook / state
+  // ==========================================================
 
   std::unique_ptr<
       pl::memory::HookHandle>
