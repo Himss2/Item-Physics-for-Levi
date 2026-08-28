@@ -58,8 +58,6 @@ public:
     void *stack{};
     Mat4 *mat{};
 
-    // Non-trivial destructor preserves the AArch64
-    // MatrixStack::push() hidden-sret ABI.
     ~MatrixStackRefAbi() {}
   };
 
@@ -73,29 +71,65 @@ public:
           MatrixStackRefAbi *);
 
 private:
-  // ---------------------------------------------------------------------------
-  // Model classification
-  //
-  // FlatItem:
-  // sword/tool/armor/ingot/etc.
-  //
-  // FlatBlock:
-  // block-backed item that vanilla ItemRenderer renders through its generated
-  // / non-3D block-shape path: torch, lever, rail, ladder, lantern, chain, etc.
-  //
-  // Block3D:
-  // normal 3D block model: cube, slab, carpet-like full block model, skull,
-  // chest, shulker, trapdoor, etc.
-  //
-  // Special3D:
-  // non-block renderer special case, currently shield/banner.
-  // ---------------------------------------------------------------------------
+  // ==========================================================================
+  // AABB ABI
+  // ==========================================================================
 
-  enum class ModelClass : std::uint8_t {
+  struct AabbAbi {
+    float minX{};
+    float minY{};
+    float minZ{};
+
+    float maxX{};
+    float maxY{};
+    float maxZ{};
+  };
+
+  static_assert(
+      sizeof(AabbAbi) == 24);
+
+  // ==========================================================================
+  // Model classification
+  // ==========================================================================
+
+  enum class ModelClass :
+      std::uint8_t {
+
+    // sword, pickaxe, armor icon,
+    // ingot, food, etc.
     FlatItem,
-    FlatBlock,
-    Block3D,
+
+    // Any ItemStack backed by Block const*.
+    //
+    // Orientation is calculated from VisualShape.
+    BlockModel,
+
+    // Non-block special renderer:
+    // shield / banner.
     Special3D,
+  };
+
+  struct BlockRenderInfo {
+    bool valid{};
+
+    std::int32_t blockShape{-1};
+
+    bool vanilla3D{};
+
+    AabbAbi bounds{};
+
+    // Approximate ItemRenderer scale.
+    float renderScale{0.5f};
+
+    // Final resting rotation.
+    float targetRotX{};
+    float targetRotZ{};
+
+    // Local visual center, already converted
+    // into renderer/world scale.
+    float pivotX{};
+    float pivotY{};
+    float pivotZ{};
   };
 
   struct ItemRenderTraits {
@@ -104,8 +138,12 @@ private:
     ModelClass modelClass{
         ModelClass::FlatItem};
 
-    std::int32_t blockShape{-1};
+    BlockRenderInfo block{};
   };
+
+  // ==========================================================================
+  // Physics state
+  // ==========================================================================
 
   struct PhysicsState {
     bool initialized{};
@@ -118,12 +156,6 @@ private:
     float angularX{};
     float angularZ{};
 
-    // Stable random yaw for 3D blocks.
-    //
-    // Block models settle upright but still point in
-    // different horizontal directions.
-    float restYaw{};
-
     std::chrono::steady_clock::time_point
         born{};
 
@@ -134,9 +166,9 @@ private:
         lastSeen{};
   };
 
-  // ---------------------------------------------------------------------------
-  // Vanilla renderer helpers
-  // ---------------------------------------------------------------------------
+  // ==========================================================================
+  // Minecraft helpers
+  // ==========================================================================
 
   using BlockGraphicsGetForBlockFn =
       void *(*)(
@@ -150,11 +182,18 @@ private:
       bool (*)(
           std::int32_t shape);
 
-  // ---------------------------------------------------------------------------
-  // Hook
-  // ---------------------------------------------------------------------------
+  using GetVisualShapeFn =
+      AabbAbi *(*)(
+          void *blockType,
+          const void *block,
+          AabbAbi *output);
 
-  static ItemPhysicsRuntime *sInstance;
+  // ==========================================================================
+  // Hook
+  // ==========================================================================
+
+  static ItemPhysicsRuntime *
+      sInstance;
 
   static void renderDetour(
       void *self,
@@ -170,17 +209,28 @@ private:
       const ResolvedVirtual &resolved,
       ll::mod::NativeMod &mod) const;
 
-  // ---------------------------------------------------------------------------
-  // Model classification
-  // ---------------------------------------------------------------------------
+  // ==========================================================================
+  // Classification / block geometry
+  // ==========================================================================
 
   [[nodiscard]]
   ItemRenderTraits classifyItem(
       std::uintptr_t actorAddress) const noexcept;
 
-  // ---------------------------------------------------------------------------
-  // Physics
-  // ---------------------------------------------------------------------------
+  [[nodiscard]]
+  bool buildBlockRenderInfo(
+      const void *block,
+      BlockRenderInfo &info) const noexcept;
+
+  [[nodiscard]]
+  static float computeBlockGroundOffset(
+      const BlockRenderInfo &info,
+      float rotX,
+      float rotZ) noexcept;
+
+  // ==========================================================================
+  // ECS / physics
+  // ==========================================================================
 
   [[nodiscard]]
   bool hasOnGroundComponent(
@@ -192,7 +242,7 @@ private:
 
   void updateState(
       PhysicsState &state,
-      ModelClass modelClass,
+      const ItemRenderTraits &traits,
       bool grounded,
       std::chrono::steady_clock::time_point now) const;
 
@@ -210,51 +260,60 @@ private:
       float target,
       float alpha) noexcept;
 
-  // ---------------------------------------------------------------------------
-  // Item identifier helper
-  // ---------------------------------------------------------------------------
+  // ==========================================================================
+  // Item identifier
+  // ==========================================================================
 
   static bool libcxxStringEquals(
       std::uintptr_t stringAddress,
       std::string_view wanted) noexcept;
 
-  // ---------------------------------------------------------------------------
-  // Config state
-  // ---------------------------------------------------------------------------
+  // ==========================================================================
+  // Config
+  // ==========================================================================
 
-  std::atomic_bool mEnabled{
-      true};
+  std::atomic_bool
+      mEnabled{true};
 
-  std::atomic_bool mSingleModel{
-      true};
+  std::atomic_bool
+      mSingleModel{true};
 
-  std::atomic<float> mRotationSpeed{
-      1.0f};
+  std::atomic<float>
+      mRotationSpeed{1.0f};
 
-  std::atomic<float> mSettleSpeed{
-      3.0f};
+  std::atomic<float>
+      mSettleSpeed{3.0f};
 
-  std::atomic<float> mGroundTiltDeg{
-      90.0f};
+  std::atomic<float>
+      mGroundTiltDeg{90.0f};
 
-  std::atomic<float> mHeightOffset{
-      -0.38f};
+  std::atomic<float>
+      mHeightOffset{-0.38f};
 
-  std::atomic_bool mProfileSupported{
-      false};
+  std::atomic_bool
+      mProfileSupported{false};
 
-  // ---------------------------------------------------------------------------
-  // Minecraft functions
-  // ---------------------------------------------------------------------------
+  // ==========================================================================
+  // Minecraft addresses
+  // ==========================================================================
 
-  std::uintptr_t mMinecraftBase{};
-  std::uintptr_t mRenderTarget{};
+  std::uintptr_t
+      mMinecraftBase{};
 
-  RenderFn mOriginal{};
+  std::uintptr_t
+      mRenderTarget{};
 
-  GetWorldMatrixFn mGetWorldMatrix{};
-  MatrixPushFn mMatrixPush{};
-  MatrixRefDtorFn mMatrixRefDtor{};
+  RenderFn
+      mOriginal{};
+
+  GetWorldMatrixFn
+      mGetWorldMatrix{};
+
+  MatrixPushFn
+      mMatrixPush{};
+
+  MatrixRefDtorFn
+      mMatrixRefDtor{};
 
   BlockGraphicsGetForBlockFn
       mGetBlockGraphicsForBlock{};
@@ -265,9 +324,9 @@ private:
   IsBlockShape3DFn
       mIsBlockShape3D{};
 
-  // ---------------------------------------------------------------------------
+  // ==========================================================================
   // Hook/state
-  // ---------------------------------------------------------------------------
+  // ==========================================================================
 
   std::unique_ptr<
       pl::memory::HookHandle>
