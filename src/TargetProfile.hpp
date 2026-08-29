@@ -56,72 +56,70 @@ inline constexpr std::ptrdiff_t
 // ============================================================
 
 inline constexpr std::uintptr_t
-    kGetWorldMatrixRva = 0x0A5C6868;
+    kGetWorldMatrixRva =
+        0x0A5C6868;
 
 inline constexpr std::uintptr_t
-    kMatrixStackPushRva = 0x107CC67C;
+    kMatrixStackPushRva =
+        0x107CC67C;
 
 inline constexpr std::uintptr_t
-    kMatrixStackRefDtorRva = 0x107CCD40;
+    kMatrixStackRefDtorRva =
+        0x107CCD40;
+
+// ============================================================
+// ItemRenderer private helper
+//
+// ItemRenderer::render eventually calls:
+//
+// RVA 0xA29ED30
+//
+// This helper reads ItemActor::mIsInItemFrame AGAIN and uses
+// it for model-specific transforms.
+//
+// We hook this separately so:
+//
+// outer ItemRenderer sees true  -> no bob/spin
+// private helper sees original -> proper dropped-item model
+// ============================================================
+
+inline constexpr std::uintptr_t
+    kItemRendererRenderHelperRva =
+        0x0A29ED30;
 
 // ============================================================
 // BlockGraphics
-//
-// We already have Block const* from ItemStack::mBlock.
-//
-// This overload does:
-//
-// Block*
-//   ↓
-// load Block + 0x68
-//   ↓
-// BlockType*
-//   ↓
-// BlockGraphics lookup
 // ============================================================
 
 inline constexpr std::uintptr_t
-    kBlockGraphicsGetForBlockRva = 0x0A218A90;
+    kBlockGraphicsGetForBlockRva =
+        0x0A218A90;
 
 inline constexpr std::uintptr_t
-    kBlockGraphicsGetBlockShapeRva = 0x0A2197B8;
+    kBlockGraphicsGetBlockShapeRva =
+        0x0A2197B8;
 
 // ============================================================
 // Block / BlockType
 // ============================================================
 
-// Block::mBlockType
 inline constexpr std::ptrdiff_t
     kBlockTypeOffset = 0x68;
 
-// On this exact Minecraft binary:
-//
-// BlockType vptr + 0x50
-//
-// AABB const& getVisualShape(
-//     Block const&,
-//     AABB& buffer
-// ) const;
 inline constexpr std::size_t
-    kBlockTypeGetVisualShapeVtableOffset = 0x50;
+    kBlockTypeGetVisualShapeVtableOffset =
+        0x50;
 
 // ============================================================
 // ECS
 // ============================================================
 
 inline constexpr std::uint32_t
-    kOnGroundFlagComponentHash = 0xC29078A0u;
+    kOnGroundFlagComponentHash =
+        0xC29078A0u;
 
 // ============================================================
-// Fingerprint
-//
-// libminecraftpe(4).so
-//
-// SHA-256:
-// 4492ce15ceda3bb4865788a50e8d35b1bbafd45b62ce441440240a693a97d749
-//
-// ItemRenderer::render:
-// RVA 0xA29F7A8
+// ItemRenderer::render fingerprint
 // ============================================================
 
 inline constexpr std::array<
@@ -148,6 +146,38 @@ inline constexpr std::array<
         0xF9401768u,
         0xAA0203F8u,
         0xAA0103F3u,
+};
+
+// ============================================================
+// Private render helper fingerprint
+//
+// RVA 0xA29ED30
+// ============================================================
+
+inline constexpr std::array<
+    std::uint32_t,
+    16>
+    kRenderHelperFingerprint = {
+
+        0xD10483FFu,
+        0x6D0B23E9u,
+        0xA90C7BFDu,
+        0xA90D6FFCu,
+
+        0xA90E67FAu,
+        0xA90F5FF8u,
+        0xA91057F6u,
+        0xA9114FF4u,
+
+        0x910303FDu,
+        0xD53BD05Bu,
+        0xAA0003F6u,
+        0xAA0103E0u,
+
+        0xF9401768u,
+        0x2A0603F3u,
+        0x1E204008u,
+        0x2A0503F9u,
 };
 
 } // namespace itemphysics::profile
