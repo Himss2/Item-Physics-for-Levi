@@ -19,22 +19,37 @@ constexpr auto kStateTtl =
     std::chrono::seconds(8);
 
 // ============================================================
-// Exact Atlas constants.
-//
-// Constructor:
-// +0x210 = +0.25
-// +0x260 = -0.38
-// +0x2B0 = 90.0
+// Exact Atlas constants
 // ============================================================
 
 constexpr float kAtlasFlatLocalY =
     0.25f;
 
-// Used ONLY to recognize genuinely flat horizontal blocks.
+// ============================================================
+// SKULL GROUND FIX
 //
-// Examples:
-// slab    1.0 x 0.5    x 1.0
-// carpet  1.0 x 0.0625 x 1.0
+// BlockShape::Skull = 83.
+//
+// mIsInItemFrame=true is intentionally preserved for the
+// complete vanilla ItemRenderer call to keep Atlas behaviour.
+//
+// However, that display context changes skull positioning.
+// Instead of changing mIsInItemFrame again, compensate ONLY
+// the grounded skull/head.
+//
+// This does not affect any other item.
+// ============================================================
+
+constexpr std::int32_t kSkullBlockShape =
+    83;
+
+constexpr float kSkullGroundLift =
+    0.125f;
+
+// ============================================================
+// Thin horizontal block detection
+// ============================================================
+
 constexpr float kThinYRatio =
     0.70f;
 
@@ -321,14 +336,6 @@ bool ItemPhysicsRuntime::install(
   mOriginal =
       nullptr;
 
-  // ==========================================================
-  // ONLY ONE HOOK.
-  //
-  // No private ItemRenderer helper hook.
-  //
-  // This matches Atlas.
-  // ==========================================================
-
   mHook =
       std::make_unique<
           pl::memory::HookHandle>(
@@ -366,7 +373,7 @@ bool ItemPhysicsRuntime::install(
 
   mod.getLogger().info(
       "Item Physics active: "
-      "Atlas baseline + thin-block compatibility");
+      "Atlas baseline + thin-block/skull compatibility");
 
   return true;
 }
@@ -578,16 +585,6 @@ bool ItemPhysicsRuntime::libcxxStringEquals(
 
 // ============================================================
 // Block compatibility
-//
-// Atlas does NOT use AABB to orient all blocks.
-//
-// We only use VisualShape to answer:
-//
-// "Is this clearly a thin horizontal block that should NOT be
-// turned onto its side?"
-//
-// Skull/head is one explicit compatibility exception because
-// its AABB is approximately cubic.
 // ============================================================
 
 bool ItemPhysicsRuntime::buildBlockRenderInfo(
@@ -600,10 +597,6 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
   if (!block) {
     return false;
   }
-
-  // ----------------------------------------------------------
-  // Get BlockShape.
-  // ----------------------------------------------------------
 
   if (mGetBlockGraphicsForBlock &&
       mGetBlockGraphicsShape) {
@@ -622,12 +615,6 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
 
   bool thinHorizontal =
       false;
-
-  // ----------------------------------------------------------
-  // VisualShape.
-  //
-  // Only used to detect Y-thin blocks.
-  // ----------------------------------------------------------
 
   const auto blockAddress =
       reinterpret_cast<
@@ -665,12 +652,6 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
 
         AabbAbi scratch{};
 
-        // IMPORTANT:
-        //
-        // use RETURN pointer.
-        //
-        // Some implementations return BlockType::mVisualShape
-        // directly and never write scratch.
         const AabbAbi *bounds =
             getVisualShape(
                 blockType,
@@ -719,18 +700,10 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
     }
   }
 
-  // ----------------------------------------------------------
-  // Skull / head.
-  //
-  // BlockShape::Skull = 83.
-  //
-  // It is approximately cubic, so thin-Y detection cannot
-  // identify it. Keep it upright explicitly.
-  // ----------------------------------------------------------
-
+  // Head/skull must remain upright.
   const bool skull =
       info.blockShape ==
-      83;
+      kSkullBlockShape;
 
   info.keepHorizontal =
       thinHorizontal ||
@@ -751,16 +724,6 @@ ItemPhysicsRuntime::classifyItem(
     std::uintptr_t actorAddress) const noexcept {
 
   ItemRenderTraits traits{};
-
-  // ----------------------------------------------------------
-  // BLOCK ITEM
-  //
-  // Atlas:
-  //
-  // Block* != nullptr
-  // → do NOT apply -0.38
-  // → do NOT apply +0.25
-  // ----------------------------------------------------------
 
   const auto block =
       *reinterpret_cast<
@@ -785,10 +748,6 @@ ItemPhysicsRuntime::classifyItem(
 
     return traits;
   }
-
-  // ----------------------------------------------------------
-  // NON-BLOCK ITEM
-  // ----------------------------------------------------------
 
   const auto itemHandle =
       *reinterpret_cast<
@@ -829,8 +788,6 @@ ItemPhysicsRuntime::classifyItem(
   traits.valid =
       true;
 
-  // Atlas excludes shield and banner from ordinary
-  // -0.38/+0.25 correction.
   traits.modelClass =
       (shield ||
        banner)
@@ -845,7 +802,7 @@ ItemPhysicsRuntime::classifyItem(
 }
 
 // ============================================================
-// Physics state creation
+// Physics state
 // ============================================================
 
 ItemPhysicsRuntime::PhysicsState &
@@ -896,7 +853,6 @@ ItemPhysicsRuntime::stateFor(
     state.initialized =
         true;
 
-    // Atlas starts at zero.
     state.rotX =
         0.0f;
 
@@ -979,18 +935,11 @@ void ItemPhysicsRuntime::updateState(
   state.lastSeen =
       now;
 
-  // Atlas:
-  //
-  // min(dt * 5, 1)
   const float frameFactor =
       std::min(
           dt *
               5.0f,
           1.0f);
-
-  // ----------------------------------------------------------
-  // AIRBORNE
-  // ----------------------------------------------------------
 
   if (!grounded) {
 
@@ -1031,7 +980,6 @@ void ItemPhysicsRuntime::updateState(
             state.angularZ *
                 step);
 
-    // Atlas keeps Y zero.
     state.rotY =
         0.0f;
 
@@ -1041,23 +989,10 @@ void ItemPhysicsRuntime::updateState(
     return;
   }
 
-  // ----------------------------------------------------------
-  // GROUNDED
-  // ----------------------------------------------------------
-
   const float settle =
       frameFactor *
       mSettleSpeed.load(
           std::memory_order_relaxed);
-
-  // ----------------------------------------------------------
-  // SMALL JAVA-COMPATIBILITY EXCEPTION
-  //
-  // slab / carpet / thin layer / skull
-  //
-  // Do not apply Atlas global X=90 final rotation because these
-  // block models already have their intended broad face on Y.
-  // ----------------------------------------------------------
 
   if (traits.modelClass ==
           ModelClass::BlockItem &&
@@ -1083,21 +1018,6 @@ void ItemPhysicsRuntime::updateState(
 
   } else {
 
-    // --------------------------------------------------------
-    // EXACT ATLAS BASELINE.
-    //
-    // Fence
-    // torch
-    // lever
-    // brewing stand
-    // flower pot
-    // ordinary block
-    // sword
-    // tool
-    // shield
-    // etc.
-    // --------------------------------------------------------
-
     const float target =
         mGroundTiltDeg.load(
             std::memory_order_relaxed) *
@@ -1111,12 +1031,6 @@ void ItemPhysicsRuntime::updateState(
 
     state.rotY =
         0.0f;
-
-    // IMPORTANT:
-    //
-    // Atlas does NOT reset rotZ.
-    //
-    // It becomes the random ground direction.
   }
 
   state.wasGrounded =
@@ -1516,10 +1430,6 @@ void ItemPhysicsRuntime::onRender(
     }
   }
 
-  // ==========================================================
-  // Temporary ItemActor changes
-  // ==========================================================
-
   auto &count =
       *reinterpret_cast<
           std::uint8_t *>(
@@ -1549,15 +1459,9 @@ void ItemPhysicsRuntime::onRender(
         1;
   }
 
-  // ==========================================================
-  // EXACT ATLAS BEHAVIOR:
+  // Exact Atlas behaviour:
   //
-  // Set TRUE before vanilla ItemRenderer and KEEP IT TRUE for
-  // the entire call.
-  //
-  // Do NOT restore it inside private helpers.
-  // ==========================================================
-
+  // keep true for entire ItemRenderer call.
   inItemFrame =
       1;
 
@@ -1572,26 +1476,52 @@ void ItemPhysicsRuntime::onRender(
   const float oldY =
       position[1];
 
-  // ==========================================================
-  // Atlas ordinary-item classification:
-  //
-  // !Block &&
-  // !Shield &&
-  // !Banner
-  // ==========================================================
-
   const bool ordinaryItem =
       traits.modelClass ==
       ModelClass::
           FlatItem;
 
-  // Atlas +0x260 = -0.38.
+  // ==========================================================
+  // Ordinary Atlas item correction
+  // ==========================================================
+
   if (ordinaryItem) {
 
     position[1] =
         oldY +
         mHeightOffset.load(
             std::memory_order_relaxed);
+  }
+
+  // ==========================================================
+  // SKULL GROUND FIX
+  //
+  // Preserve:
+  //
+  // - mIsInItemFrame=true
+  // - Atlas transform
+  // - skull horizontal exception
+  //
+  // Only compensate its final Y when grounded.
+  //
+  // No other model sees this offset.
+  // ==========================================================
+
+  const bool groundedSkull =
+      grounded &&
+
+      traits.modelClass ==
+          ModelClass::
+              BlockItem &&
+
+      traits.block.blockShape ==
+          kSkullBlockShape;
+
+  if (groundedSkull) {
+
+    position[1] =
+        oldY +
+        kSkullGroundLift;
   }
 
   void *stack =
@@ -1640,20 +1570,7 @@ void ItemPhysicsRuntime::onRender(
         position[2];
 
     // ========================================================
-    // EXACT ATLAS MATRIX ORDER
-    //
-    // T(position)
-    // Rx
-    // Ry
-    // Rz
-    //
-    // ordinary item:
-    // T(0, +0.25, 0)
-    //
-    // T(-position)
-    //
-    // IMPORTANT:
-    // +0.25 comes AFTER rotations.
+    // Atlas matrix order
     // ========================================================
 
     postTranslate(
@@ -1689,17 +1606,11 @@ void ItemPhysicsRuntime::onRender(
         -y,
         -z);
 
-    // Entire vanilla renderer sees
-    // mIsInItemFrame == true.
     original(
         self,
         renderContext,
         renderData);
   }
-
-  // ==========================================================
-  // Restore temporary state AFTER full ItemRenderer returns.
-  // ==========================================================
 
   position[1] =
       oldY;
