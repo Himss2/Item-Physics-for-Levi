@@ -40,6 +40,7 @@ public:
 
   [[nodiscard]]
   bool profileSupported() const noexcept {
+
     return mProfileSupported.load(
         std::memory_order_relaxed);
   }
@@ -72,7 +73,7 @@ public:
 
 private:
   // ==========================================================
-  // AABB ABI
+  // AABB
   // ==========================================================
 
   struct AabbAbi {
@@ -89,19 +90,16 @@ private:
       sizeof(AabbAbi) == 24);
 
   // ==========================================================
-  // Model classification
+  // Model class
   // ==========================================================
 
   enum class ModelClass :
       std::uint8_t {
 
-    // sword / tool / armor / ingot / food / sprite
     FlatItem,
 
-    // ItemStack has Block const*
     BlockModel,
 
-    // shield / banner
     Special3D,
   };
 
@@ -111,16 +109,8 @@ private:
     std::int32_t
         blockShape{-1};
 
-    AabbAbi
-        bounds{};
-
-    // true:
-    //
-    // slab, carpet, rail, skull, etc.
-    //
-    // Their natural block orientation already has
-    // the correct face against the floor.
-    bool keepHorizontal{};
+    bool
+        keepHorizontal{};
   };
 
   struct ItemRenderTraits {
@@ -134,7 +124,7 @@ private:
   };
 
   // ==========================================================
-  // Physics state
+  // Physics
   // ==========================================================
 
   struct PhysicsState {
@@ -148,7 +138,6 @@ private:
     float angularX{};
     float angularZ{};
 
-    // horizontal rotation for slab/head/etc
     float restYaw{};
 
     std::chrono::steady_clock::time_point
@@ -162,7 +151,20 @@ private:
   };
 
   // ==========================================================
-  // Minecraft helper ABI
+  // Split mIsInItemFrame context
+  // ==========================================================
+
+  struct HelperOverrideContext {
+    bool active{};
+
+    void *actor{};
+
+    std::uint8_t
+        originalItemFrame{};
+  };
+
+  // ==========================================================
+  // Minecraft helper types
   // ==========================================================
 
   using BlockGraphicsGetForBlockFn =
@@ -173,23 +175,6 @@ private:
       std::int32_t (*)(
           const void *graphics);
 
-  // Actual ABI:
-  //
-  // AABB const& getVisualShape(
-  //     Block const& block,
-  //     AABB& buffer
-  // ) const;
-  //
-  // x0 = BlockType*
-  // x1 = Block*
-  // x2 = scratch AABB*
-  //
-  // return x0 = AABB const*
-  //
-  // IMPORTANT:
-  // default implementation may return
-  // BlockType::mVisualShape directly WITHOUT
-  // writing to scratch.
   using GetVisualShapeFn =
       const AabbAbi *(*)(
           void *blockType,
@@ -197,28 +182,84 @@ private:
           AabbAbi *scratch);
 
   // ==========================================================
-  // Hook
+  // ItemRenderer private helper
+  //
+  // RVA 0xA29ED30
+  //
+  // Call from ItemRenderer:
+  //
+  // x0 self
+  // x1 BaseActorRenderContext
+  // x2 ItemStackBase
+  // x3 ItemActor
+  // x4 Block
+  // w5 BlockShape
+  // w6 model count
+  // s0 partial
+  // ==========================================================
+
+  using RenderHelperFn =
+      void (*)(
+          void *self,
+          void *renderContext,
+          void *itemStack,
+          void *itemActor,
+          void *block,
+          std::int32_t blockShape,
+          std::int32_t modelCount,
+          float partialTick);
+
+  // ==========================================================
+  // Static hooks
   // ==========================================================
 
   static ItemPhysicsRuntime *
       sInstance;
+
+  static thread_local
+      HelperOverrideContext
+          sHelperOverride;
 
   static void renderDetour(
       void *self,
       void *renderContext,
       void *renderData);
 
+  static void renderHelperDetour(
+      void *self,
+      void *renderContext,
+      void *itemStack,
+      void *itemActor,
+      void *block,
+      std::int32_t blockShape,
+      std::int32_t modelCount,
+      float partialTick);
+
+  // ==========================================================
+  // Hook bodies
+  // ==========================================================
+
   void onRender(
       void *self,
       void *renderContext,
       void *renderData);
+
+  void onRenderHelper(
+      void *self,
+      void *renderContext,
+      void *itemStack,
+      void *itemActor,
+      void *block,
+      std::int32_t blockShape,
+      std::int32_t modelCount,
+      float partialTick);
 
   bool verifyProfile(
       const ResolvedVirtual &resolved,
       ll::mod::NativeMod &mod) const;
 
   // ==========================================================
-  // Item / block classification
+  // Classification
   // ==========================================================
 
   [[nodiscard]]
@@ -290,7 +331,7 @@ private:
       mGroundTiltDeg{90.0f};
 
   std::atomic<float>
-      mHeightOffset{-0.38f};
+      mHeightOffset{0.0f};
 
   std::atomic_bool
       mProfileSupported{false};
@@ -305,8 +346,14 @@ private:
   std::uintptr_t
       mRenderTarget{};
 
+  std::uintptr_t
+      mRenderHelperTarget{};
+
   RenderFn
       mOriginal{};
+
+  RenderHelperFn
+      mOriginalHelper{};
 
   GetWorldMatrixFn
       mGetWorldMatrix{};
@@ -323,13 +370,13 @@ private:
   BlockGraphicsGetBlockShapeFn
       mGetBlockGraphicsShape{};
 
-  // ==========================================================
-  // Hook / state
-  // ==========================================================
-
   std::unique_ptr<
       pl::memory::HookHandle>
       mHook;
+
+  std::unique_ptr<
+      pl::memory::HookHandle>
+      mHelperHook;
 
   mutable std::mutex
       mStateMutex;
