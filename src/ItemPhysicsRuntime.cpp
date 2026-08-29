@@ -26,25 +26,17 @@ constexpr float kAtlasFlatLocalY =
     0.25f;
 
 // ============================================================
-// SKULL GROUND FIX
+// HEAD / SKULL FIX
 //
-// BlockShape::Skull = 83.
-//
-// mIsInItemFrame=true is intentionally preserved for the
-// complete vanilla ItemRenderer call to keep Atlas behaviour.
-//
-// However, that display context changes skull positioning.
-// Instead of changing mIsInItemFrame again, compensate ONLY
-// the grounded skull/head.
-//
-// This does not affect any other item.
+// Previous +0.125 was still too small.
+// This is now isolated to head/skull only.
 // ============================================================
 
 constexpr std::int32_t kSkullBlockShape =
     83;
 
 constexpr float kSkullGroundLift =
-    0.125f;
+    0.25f;
 
 // ============================================================
 // Thin horizontal block detection
@@ -63,6 +55,35 @@ constexpr std::string_view
 constexpr std::string_view
     kBannerId =
         "minecraft:banner";
+
+// Head/skull ids for fallback detection.
+constexpr std::string_view
+    kPlayerHeadId =
+        "minecraft:player_head";
+
+constexpr std::string_view
+    kZombieHeadId =
+        "minecraft:zombie_head";
+
+constexpr std::string_view
+    kCreeperHeadId =
+        "minecraft:creeper_head";
+
+constexpr std::string_view
+    kDragonHeadId =
+        "minecraft:dragon_head";
+
+constexpr std::string_view
+    kPiglinHeadId =
+        "minecraft:piglin_head";
+
+constexpr std::string_view
+    kSkeletonSkullId =
+        "minecraft:skeleton_skull";
+
+constexpr std::string_view
+    kWitherSkeletonSkullId =
+        "minecraft:wither_skeleton_skull";
 
 // ============================================================
 // MatrixStack scope
@@ -373,7 +394,7 @@ bool ItemPhysicsRuntime::install(
 
   mod.getLogger().info(
       "Item Physics active: "
-      "Atlas baseline + thin-block/skull compatibility");
+      "Atlas baseline + isolated skull ground lift");
 
   return true;
 }
@@ -700,7 +721,6 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
     }
   }
 
-  // Head/skull must remain upright.
   const bool skull =
       info.blockShape ==
       kSkullBlockShape;
@@ -1459,9 +1479,7 @@ void ItemPhysicsRuntime::onRender(
         1;
   }
 
-  // Exact Atlas behaviour:
-  //
-  // keep true for entire ItemRenderer call.
+  // Exact Atlas behavior:
   inItemFrame =
       1;
 
@@ -1481,10 +1499,6 @@ void ItemPhysicsRuntime::onRender(
       ModelClass::
           FlatItem;
 
-  // ==========================================================
-  // Ordinary Atlas item correction
-  // ==========================================================
-
   if (ordinaryItem) {
 
     position[1] =
@@ -1494,30 +1508,92 @@ void ItemPhysicsRuntime::onRender(
   }
 
   // ==========================================================
-  // SKULL GROUND FIX
+  // Robust head/skull detection:
   //
-  // Preserve:
-  //
-  // - mIsInItemFrame=true
-  // - Atlas transform
-  // - skull horizontal exception
-  //
-  // Only compensate its final Y when grounded.
-  //
-  // No other model sees this offset.
+  // 1) blockShape == 83
+  // 2) OR item id is one of the head/skull ids
   // ==========================================================
 
-  const bool groundedSkull =
+  bool headItemById =
+      false;
+
+  {
+    const auto itemHandle =
+        *reinterpret_cast<
+            const std::uintptr_t *>(
+
+            actorAddress +
+            profile::
+                kItemHandleOffset);
+
+    if (itemHandle) {
+
+      const auto item =
+          *reinterpret_cast<
+              const std::uintptr_t *>(
+              itemHandle);
+
+      if (item) {
+
+        const auto identifier =
+            item +
+            profile::
+                kItemIdentifierOffset;
+
+        headItemById =
+            libcxxStringEquals(
+                identifier,
+                kPlayerHeadId) ||
+
+            libcxxStringEquals(
+                identifier,
+                kZombieHeadId) ||
+
+            libcxxStringEquals(
+                identifier,
+                kCreeperHeadId) ||
+
+            libcxxStringEquals(
+                identifier,
+                kDragonHeadId) ||
+
+            libcxxStringEquals(
+                identifier,
+                kPiglinHeadId) ||
+
+            libcxxStringEquals(
+                identifier,
+                kSkeletonSkullId) ||
+
+            libcxxStringEquals(
+                identifier,
+                kWitherSkeletonSkullId);
+      }
+    }
+  }
+
+  const bool groundedHeadOrSkull =
       grounded &&
 
       traits.modelClass ==
           ModelClass::
               BlockItem &&
 
-      traits.block.blockShape ==
-          kSkullBlockShape;
+      (traits.block.blockShape ==
+           kSkullBlockShape ||
 
-  if (groundedSkull) {
+       headItemById);
+
+  // ==========================================================
+  // HEAD / SKULL isolated lift
+  //
+  // This is intentionally independent from:
+  // - ordinary flat item height (-0.38)
+  // - fence / torch / lever transforms
+  // - slab / carpet handling
+  // ==========================================================
+
+  if (groundedHeadOrSkull) {
 
     position[1] =
         oldY +
@@ -1568,10 +1644,6 @@ void ItemPhysicsRuntime::onRender(
 
     const float z =
         position[2];
-
-    // ========================================================
-    // Atlas matrix order
-    // ========================================================
 
     postTranslate(
         *matrix,
