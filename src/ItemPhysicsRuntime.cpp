@@ -18,6 +18,23 @@ constexpr float kDegToRad =
 constexpr auto kStateTtl =
     std::chrono::seconds(8);
 
+// ============================================================
+// Exact Atlas constants.
+//
+// Constructor:
+// +0x210 = +0.25
+// +0x260 = -0.38
+// +0x2B0 = 90.0
+// ============================================================
+
+constexpr float kAtlasFlatLocalY =
+    0.25f;
+
+// Used ONLY to recognize genuinely flat horizontal blocks.
+//
+// Examples:
+// slab    1.0 x 0.5    x 1.0
+// carpet  1.0 x 0.0625 x 1.0
 constexpr float kThinYRatio =
     0.70f;
 
@@ -33,7 +50,7 @@ constexpr std::string_view
         "minecraft:banner";
 
 // ============================================================
-// MatrixStack RAII
+// MatrixStack scope
 // ============================================================
 
 class MatrixPushScope {
@@ -97,8 +114,7 @@ private:
   ItemPhysicsRuntime::MatrixRefDtorFn
       mDtor{};
 
-  bool
-      mActive{};
+  bool mActive{};
 };
 
 } // namespace
@@ -106,12 +122,6 @@ private:
 ItemPhysicsRuntime *
 ItemPhysicsRuntime::sInstance =
     nullptr;
-
-thread_local
-    ItemPhysicsRuntime::
-        HelperOverrideContext
-            ItemPhysicsRuntime::
-                sHelperOverride{};
 
 // ============================================================
 // Config
@@ -150,78 +160,50 @@ void ItemPhysicsRuntime::applyConfig(
 }
 
 // ============================================================
-// Profile verification
+// Profile
 // ============================================================
 
 bool ItemPhysicsRuntime::verifyProfile(
     const ResolvedVirtual &resolved,
     ll::mod::NativeMod &mod) const {
 
-  const auto verifyWords =
-      [&](
-          std::uintptr_t address,
-          const auto &fingerprint,
-          std::string_view label) {
+  const auto target =
+      resolved.target;
 
-        const std::size_t bytes =
-            fingerprint.size() *
-            sizeof(std::uint32_t);
+  constexpr auto bytes =
+      profile::kRenderFingerprint.size() *
+      sizeof(std::uint32_t);
 
-        if (!resolved.module.readable(
-                address,
-                bytes)) {
+  if (!resolved.module.readable(
+          target,
+          bytes)) {
 
-          mod.getLogger().warn(
-              "{} is not readable",
-              label);
-
-          return false;
-        }
-
-        const auto *words =
-            reinterpret_cast<
-                const std::uint32_t *>(
-                address);
-
-        for (std::size_t i = 0;
-             i < fingerprint.size();
-             ++i) {
-
-          if (words[i] !=
-              fingerprint[i]) {
-
-            mod.getLogger().warn(
-                "Unsupported Minecraft profile: "
-                "{} fingerprint mismatch at word {}",
-                label,
-                i);
-
-            return false;
-          }
-        }
-
-        return true;
-      };
-
-  if (!verifyWords(
-          resolved.target,
-          profile::kRenderFingerprint,
-          "ItemRenderer::render")) {
+    mod.getLogger().warn(
+        "ItemRenderer target is not readable");
 
     return false;
   }
 
-  const auto helperTarget =
-      resolved.module.base +
-      profile::
-          kItemRendererRenderHelperRva;
+  const auto *words =
+      reinterpret_cast<
+          const std::uint32_t *>(
+          target);
 
-  if (!verifyWords(
-          helperTarget,
-          profile::kRenderHelperFingerprint,
-          "ItemRenderer render helper")) {
+  for (std::size_t i = 0;
+       i <
+       profile::kRenderFingerprint.size();
+       ++i) {
 
-    return false;
+    if (words[i] !=
+        profile::kRenderFingerprint[i]) {
+
+      mod.getLogger().warn(
+          "Unsupported Minecraft profile: "
+          "ItemRenderer fingerprint mismatch at word {}",
+          i);
+
+      return false;
+    }
   }
 
   const auto executable =
@@ -242,9 +224,6 @@ bool ItemPhysicsRuntime::verifyProfile(
           profile::kMatrixStackRefDtorRva) ||
 
       !executable(
-          profile::kItemRendererRenderHelperRva) ||
-
-      !executable(
           profile::kBlockGraphicsGetForBlockRva) ||
 
       !executable(
@@ -252,7 +231,7 @@ bool ItemPhysicsRuntime::verifyProfile(
 
     mod.getLogger().warn(
         "Unsupported Minecraft profile: "
-        "renderer helper RVA validation failed");
+        "renderer helper validation failed");
 
     return false;
   }
@@ -290,7 +269,7 @@ bool ItemPhysicsRuntime::install(
           mod)) {
 
     mod.getLogger().warn(
-        "Item Physics remains in passthrough mode");
+        "Item Physics remains in safe passthrough mode");
 
     return false;
   }
@@ -300,11 +279,6 @@ bool ItemPhysicsRuntime::install(
 
   mRenderTarget =
       resolved->target;
-
-  mRenderHelperTarget =
-      mMinecraftBase +
-      profile::
-          kItemRendererRenderHelperRva;
 
   mGetWorldMatrix =
       reinterpret_cast<
@@ -347,48 +321,12 @@ bool ItemPhysicsRuntime::install(
   mOriginal =
       nullptr;
 
-  mOriginalHelper =
-      nullptr;
-
   // ==========================================================
-  // Hook helper FIRST.
+  // ONLY ONE HOOK.
   //
-  // Outer ItemRenderer hook depends on this.
-  // ==========================================================
-
-  mHelperHook =
-      std::make_unique<
-          pl::memory::HookHandle>(
-
-          reinterpret_cast<void *>(
-              mRenderHelperTarget),
-
-          reinterpret_cast<void *>(
-              &ItemPhysicsRuntime::
-                  renderHelperDetour),
-
-          reinterpret_cast<void **>(
-              &mOriginalHelper),
-
-          pl::memory::
-              HookPriority::Normal);
-
-  if (!mHelperHook->installed() ||
-      !mOriginalHelper) {
-
-    mod.getLogger().error(
-        "Failed to hook ItemRenderer private render helper");
-
-    mHelperHook.reset();
-
-    sInstance =
-        nullptr;
-
-    return false;
-  }
-
-  // ==========================================================
-  // Main ItemRenderer hook
+  // No private ItemRenderer helper hook.
+  //
+  // This matches Atlas.
   // ==========================================================
 
   mHook =
@@ -416,12 +354,6 @@ bool ItemPhysicsRuntime::install(
 
     mHook.reset();
 
-    mHelperHook->reset();
-    mHelperHook.reset();
-
-    mOriginalHelper =
-        nullptr;
-
     sInstance =
         nullptr;
 
@@ -434,17 +366,7 @@ bool ItemPhysicsRuntime::install(
 
   mod.getLogger().info(
       "Item Physics active: "
-      "render=base+0x{:X}, helper=base+0x{:X}",
-
-      static_cast<
-          unsigned long long>(
-          mRenderTarget -
-          mMinecraftBase),
-
-      static_cast<
-          unsigned long long>(
-          mRenderHelperTarget -
-          mMinecraftBase));
+      "Atlas baseline + thin-block compatibility");
 
   return true;
 }
@@ -465,12 +387,6 @@ void ItemPhysicsRuntime::uninstall() {
     mHook.reset();
   }
 
-  if (mHelperHook) {
-
-    mHelperHook->reset();
-    mHelperHook.reset();
-  }
-
   if (sInstance ==
       this) {
 
@@ -479,9 +395,6 @@ void ItemPhysicsRuntime::uninstall() {
   }
 
   mOriginal =
-      nullptr;
-
-  mOriginalHelper =
       nullptr;
 
   mGetWorldMatrix =
@@ -502,20 +415,14 @@ void ItemPhysicsRuntime::uninstall() {
   mRenderTarget =
       0;
 
-  mRenderHelperTarget =
-      0;
-
   mMinecraftBase =
       0;
-
-  sHelperOverride =
-      {};
 
   clearStates();
 }
 
 // ============================================================
-// State reset
+// State
 // ============================================================
 
 void ItemPhysicsRuntime::clearStates() {
@@ -529,10 +436,6 @@ void ItemPhysicsRuntime::clearStates() {
       0;
 }
 
-// ============================================================
-// Main detour
-// ============================================================
-
 void ItemPhysicsRuntime::renderDetour(
     void *self,
     void *renderContext,
@@ -545,127 +448,6 @@ void ItemPhysicsRuntime::renderDetour(
         renderContext,
         renderData);
   }
-}
-
-// ============================================================
-// Private helper detour
-// ============================================================
-
-void ItemPhysicsRuntime::renderHelperDetour(
-    void *self,
-    void *renderContext,
-    void *itemStack,
-    void *itemActor,
-    void *block,
-    std::int32_t blockShape,
-    std::int32_t modelCount,
-    float partialTick) {
-
-  if (sInstance) {
-
-    sInstance->onRenderHelper(
-        self,
-        renderContext,
-        itemStack,
-        itemActor,
-        block,
-        blockShape,
-        modelCount,
-        partialTick);
-  }
-}
-
-// ============================================================
-// Private helper body
-// ============================================================
-
-void ItemPhysicsRuntime::onRenderHelper(
-    void *self,
-    void *renderContext,
-    void *itemStack,
-    void *itemActor,
-    void *block,
-    std::int32_t blockShape,
-    std::int32_t modelCount,
-    float partialTick) {
-
-  const auto original =
-      mOriginalHelper;
-
-  if (!original) {
-    return;
-  }
-
-  if (!sHelperOverride.active ||
-      !itemActor ||
-      itemActor !=
-          sHelperOverride.actor) {
-
-    original(
-        self,
-        renderContext,
-        itemStack,
-        itemActor,
-        block,
-        blockShape,
-        modelCount,
-        partialTick);
-
-    return;
-  }
-
-  auto &inItemFrame =
-      *reinterpret_cast<
-          std::uint8_t *>(
-
-          reinterpret_cast<
-              std::uintptr_t>(
-              itemActor) +
-
-          profile::
-              kIsInItemFrameOffset);
-
-  const auto mainValue =
-      inItemFrame;
-
-  // ==========================================================
-  // CRITICAL FIX
-  //
-  // ItemRenderer MAIN already saw:
-  //
-  // mIsInItemFrame = true
-  //
-  // therefore bob/spin has already been skipped.
-  //
-  // Now restore the real value ONLY while the private helper
-  // executes.
-  //
-  // This restores:
-  //
-  // - Skull -0.125 correction
-  // - torch/lever special transforms
-  // - normal block item transforms
-  // - normal dropped-item display context
-  //
-  // without restoring vanilla bob/spin.
-  // ==========================================================
-
-  inItemFrame =
-      sHelperOverride.
-          originalItemFrame;
-
-  original(
-      self,
-      renderContext,
-      itemStack,
-      itemActor,
-      block,
-      blockShape,
-      modelCount,
-      partialTick);
-
-  inItemFrame =
-      mainValue;
 }
 
 // ============================================================
@@ -757,35 +539,30 @@ bool ItemPhysicsRuntime::libcxxStringEquals(
   const char *data =
       nullptr;
 
-  if ((flag &
-       1u) ==
+  if ((flag & 1u) ==
       0) {
 
     length =
         static_cast<
             std::size_t>(
-            flag >>
-            1);
+            flag >> 1);
 
     data =
         reinterpret_cast<
             const char *>(
-            raw +
-            1);
+            raw + 1);
 
   } else {
 
     length =
         *reinterpret_cast<
             const std::size_t *>(
-            raw +
-            8);
+            raw + 8);
 
     data =
         *reinterpret_cast<
             const char *const *>(
-            raw +
-            16);
+            raw + 16);
   }
 
   return data &&
@@ -800,79 +577,17 @@ bool ItemPhysicsRuntime::libcxxStringEquals(
 }
 
 // ============================================================
-// Horizontal block shapes
-// ============================================================
-
-bool ItemPhysicsRuntime::
-    blockShapeShouldRemainHorizontal(
-        std::int32_t shape) noexcept {
-
-  switch (shape) {
-
-  case 9:
-    // rail
-
-  case 14:
-    // bed
-
-  case 15:
-    // diode
-
-  case 23:
-    // lilypad
-
-  case 67:
-    // slab / block_half
-
-  case 68:
-    // top snow
-
-  case 69:
-    // tripwire
-
-  case 72:
-    // repeater
-
-  case 73:
-    // comparator
-
-  case 80:
-    // end portal
-
-  case 83:
-    // skull / head
-
-  case 96:
-    // coral fan
-
-  case 99:
-    // trapdoor
-
-  case 114:
-    // campfire
-
-  case 126:
-    // sculk sensor
-
-  case 135:
-    // glow lichen
-
-  case 136:
-    // redstone wire
-
-  case 153:
-    // carpet-style / pale moss
-
-    return true;
-
-  default:
-
-    return false;
-  }
-}
-
-// ============================================================
-// Block info
+// Block compatibility
+//
+// Atlas does NOT use AABB to orient all blocks.
+//
+// We only use VisualShape to answer:
+//
+// "Is this clearly a thin horizontal block that should NOT be
+// turned onto its side?"
+//
+// Skull/head is one explicit compatibility exception because
+// its AABB is approximately cubic.
 // ============================================================
 
 bool ItemPhysicsRuntime::buildBlockRenderInfo(
@@ -885,6 +600,10 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
   if (!block) {
     return false;
   }
+
+  // ----------------------------------------------------------
+  // Get BlockShape.
+  // ----------------------------------------------------------
 
   if (mGetBlockGraphicsForBlock &&
       mGetBlockGraphicsShape) {
@@ -901,8 +620,14 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
     }
   }
 
-  bool thinY =
+  bool thinHorizontal =
       false;
+
+  // ----------------------------------------------------------
+  // VisualShape.
+  //
+  // Only used to detect Y-thin blocks.
+  // ----------------------------------------------------------
 
   const auto blockAddress =
       reinterpret_cast<
@@ -940,6 +665,12 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
 
         AabbAbi scratch{};
 
+        // IMPORTANT:
+        //
+        // use RETURN pointer.
+        //
+        // Some implementations return BlockType::mVisualShape
+        // directly and never write scratch.
         const AabbAbi *bounds =
             getVisualShape(
                 blockType,
@@ -973,11 +704,14 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
               dz >
                   kExtentEpsilon) {
 
-            thinY =
-                dy <=
+            const float horizontal =
                 std::min(
                     dx,
-                    dz) *
+                    dz);
+
+            thinHorizontal =
+                dy <=
+                horizontal *
                     kThinYRatio;
           }
         }
@@ -985,11 +719,22 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
     }
   }
 
-  info.keepHorizontal =
-      thinY ||
+  // ----------------------------------------------------------
+  // Skull / head.
+  //
+  // BlockShape::Skull = 83.
+  //
+  // It is approximately cubic, so thin-Y detection cannot
+  // identify it. Keep it upright explicitly.
+  // ----------------------------------------------------------
 
-      blockShapeShouldRemainHorizontal(
-          info.blockShape);
+  const bool skull =
+      info.blockShape ==
+      83;
+
+  info.keepHorizontal =
+      thinHorizontal ||
+      skull;
 
   info.valid =
       true;
@@ -1007,6 +752,16 @@ ItemPhysicsRuntime::classifyItem(
 
   ItemRenderTraits traits{};
 
+  // ----------------------------------------------------------
+  // BLOCK ITEM
+  //
+  // Atlas:
+  //
+  // Block* != nullptr
+  // → do NOT apply -0.38
+  // → do NOT apply +0.25
+  // ----------------------------------------------------------
+
   const auto block =
       *reinterpret_cast<
           const void *const *>(
@@ -1022,7 +777,7 @@ ItemPhysicsRuntime::classifyItem(
 
     traits.modelClass =
         ModelClass::
-            BlockModel;
+            BlockItem;
 
     (void)buildBlockRenderInfo(
         block,
@@ -1030,6 +785,10 @@ ItemPhysicsRuntime::classifyItem(
 
     return traits;
   }
+
+  // ----------------------------------------------------------
+  // NON-BLOCK ITEM
+  // ----------------------------------------------------------
 
   const auto itemHandle =
       *reinterpret_cast<
@@ -1070,12 +829,14 @@ ItemPhysicsRuntime::classifyItem(
   traits.valid =
       true;
 
+  // Atlas excludes shield and banner from ordinary
+  // -0.38/+0.25 correction.
   traits.modelClass =
       (shield ||
        banner)
 
           ? ModelClass::
-                Special3D
+                SpecialItem
 
           : ModelClass::
                 FlatItem;
@@ -1084,7 +845,7 @@ ItemPhysicsRuntime::classifyItem(
 }
 
 // ============================================================
-// Physics state
+// Physics state creation
 // ============================================================
 
 ItemPhysicsRuntime::PhysicsState &
@@ -1135,6 +896,7 @@ ItemPhysicsRuntime::stateFor(
     state.initialized =
         true;
 
+    // Atlas starts at zero.
     state.rotX =
         0.0f;
 
@@ -1145,25 +907,16 @@ ItemPhysicsRuntime::stateFor(
         0.0f;
 
     state.angularX =
-        (v *
-             2.0f -
+        (v * 2.0f -
          1.0f) *
         curve *
         kPi;
 
     state.angularZ =
-        (w *
-             2.0f -
+        (w * 2.0f -
          1.0f) *
         (1.0f -
          curve) *
-        kPi;
-
-    state.restYaw =
-        seededUnit(
-            entityId ^
-            0x27D4EB2Du) *
-        2.0f *
         kPi;
 
     if (std::abs(
@@ -1175,6 +928,13 @@ ItemPhysicsRuntime::stateFor(
       state.angularX +=
           0.65f;
     }
+
+    state.restYaw =
+        seededUnit(
+            entityId ^
+            0x27D4EB2Du) *
+        2.0f *
+        kPi;
 
     state.wasGrounded =
         false;
@@ -1219,11 +979,18 @@ void ItemPhysicsRuntime::updateState(
   state.lastSeen =
       now;
 
+  // Atlas:
+  //
+  // min(dt * 5, 1)
   const float frameFactor =
       std::min(
           dt *
               5.0f,
           1.0f);
+
+  // ----------------------------------------------------------
+  // AIRBORNE
+  // ----------------------------------------------------------
 
   if (!grounded) {
 
@@ -1233,12 +1000,15 @@ void ItemPhysicsRuntime::updateState(
             state.born)
             .count();
 
-    const float fade =
-        1.0f -
+    const float ageFactor =
         std::min(
             age /
                 4.0f,
             1.0f);
+
+    const float fade =
+        1.0f -
+        ageFactor;
 
     const float speed =
         mRotationSpeed.load(
@@ -1261,6 +1031,7 @@ void ItemPhysicsRuntime::updateState(
             state.angularZ *
                 step);
 
+    // Atlas keeps Y zero.
     state.rotY =
         0.0f;
 
@@ -1270,17 +1041,27 @@ void ItemPhysicsRuntime::updateState(
     return;
   }
 
+  // ----------------------------------------------------------
+  // GROUNDED
+  // ----------------------------------------------------------
+
   const float settle =
       frameFactor *
       mSettleSpeed.load(
           std::memory_order_relaxed);
 
-  if (traits.modelClass ==
-          ModelClass::
-              BlockModel &&
+  // ----------------------------------------------------------
+  // SMALL JAVA-COMPATIBILITY EXCEPTION
+  //
+  // slab / carpet / thin layer / skull
+  //
+  // Do not apply Atlas global X=90 final rotation because these
+  // block models already have their intended broad face on Y.
+  // ----------------------------------------------------------
 
-      traits.block.
-          keepHorizontal) {
+  if (traits.modelClass ==
+          ModelClass::BlockItem &&
+      traits.block.keepHorizontal) {
 
     state.rotX =
         approachAngle(
@@ -1302,6 +1083,21 @@ void ItemPhysicsRuntime::updateState(
 
   } else {
 
+    // --------------------------------------------------------
+    // EXACT ATLAS BASELINE.
+    //
+    // Fence
+    // torch
+    // lever
+    // brewing stand
+    // flower pot
+    // ordinary block
+    // sword
+    // tool
+    // shield
+    // etc.
+    // --------------------------------------------------------
+
     const float target =
         mGroundTiltDeg.load(
             std::memory_order_relaxed) *
@@ -1316,7 +1112,11 @@ void ItemPhysicsRuntime::updateState(
     state.rotY =
         0.0f;
 
-    // rotZ remains the landing direction.
+    // IMPORTANT:
+    //
+    // Atlas does NOT reset rotZ.
+    //
+    // It becomes the random ground direction.
   }
 
   state.wasGrounded =
@@ -1597,7 +1397,7 @@ bool ItemPhysicsRuntime::
 }
 
 // ============================================================
-// Main ItemRenderer body
+// ItemRenderer hook
 // ============================================================
 
 void ItemPhysicsRuntime::onRender(
@@ -1716,6 +1516,10 @@ void ItemPhysicsRuntime::onRender(
     }
   }
 
+  // ==========================================================
+  // Temporary ItemActor changes
+  // ==========================================================
+
   auto &count =
       *reinterpret_cast<
           std::uint8_t *>(
@@ -1738,9 +1542,6 @@ void ItemPhysicsRuntime::onRender(
   const auto oldInItemFrame =
       inItemFrame;
 
-  const auto previousOverride =
-      sHelperOverride;
-
   if (mSingleModel.load(
           std::memory_order_relaxed)) {
 
@@ -1749,30 +1550,16 @@ void ItemPhysicsRuntime::onRender(
   }
 
   // ==========================================================
-  // SPLIT FLAG
+  // EXACT ATLAS BEHAVIOR:
   //
-  // Outer ItemRenderer:
+  // Set TRUE before vanilla ItemRenderer and KEEP IT TRUE for
+  // the entire call.
   //
-  // TRUE
-  // → skip bob/spin
-  //
-  // Private helper:
-  //
-  // ORIGINAL VALUE
-  // → retain correct model transforms
+  // Do NOT restore it inside private helpers.
   // ==========================================================
 
   inItemFrame =
       1;
-
-  sHelperOverride.active =
-      true;
-
-  sHelperOverride.actor =
-      actor;
-
-  sHelperOverride.originalItemFrame =
-      oldInItemFrame;
 
   auto *position =
       reinterpret_cast<
@@ -1786,21 +1573,20 @@ void ItemPhysicsRuntime::onRender(
       position[1];
 
   // ==========================================================
-  // Old Atlas correction removed.
+  // Atlas ordinary-item classification:
   //
-  // No:
-  // -0.38
-  // +0.25
-  //
-  // Vanilla helper now gives us normal dropped-item transforms.
-  //
-  // heightOffset remains only as optional fine adjustment.
-  // Default after migration: 0.
+  // !Block &&
+  // !Shield &&
+  // !Banner
   // ==========================================================
 
-  if (traits.modelClass ==
+  const bool ordinaryItem =
+      traits.modelClass ==
       ModelClass::
-          FlatItem) {
+          FlatItem;
+
+  // Atlas +0x260 = -0.38.
+  if (ordinaryItem) {
 
     position[1] =
         oldY +
@@ -1825,39 +1611,95 @@ void ItemPhysicsRuntime::onRender(
     auto *matrix =
         matrixScope.matrix();
 
-    if (matrix) {
+    if (!matrix) {
 
-      const float x =
-          position[0];
+      position[1] =
+          oldY;
 
-      const float y =
-          position[1];
+      count =
+          oldCount;
 
-      const float z =
-          position[2];
+      inItemFrame =
+          oldInItemFrame;
 
-      rotateAround(
-          *matrix,
-          x,
-          y,
-          z,
-          snapshot.rotX,
-          snapshot.rotY,
-          snapshot.rotZ);
+      original(
+          self,
+          renderContext,
+          renderData);
+
+      return;
     }
 
-    // Always call through.
+    const float x =
+        position[0];
+
+    const float y =
+        position[1];
+
+    const float z =
+        position[2];
+
+    // ========================================================
+    // EXACT ATLAS MATRIX ORDER
     //
-    // Even when MatrixStack push failed, helper split still keeps
-    // vanilla model placement intact.
+    // T(position)
+    // Rx
+    // Ry
+    // Rz
+    //
+    // ordinary item:
+    // T(0, +0.25, 0)
+    //
+    // T(-position)
+    //
+    // IMPORTANT:
+    // +0.25 comes AFTER rotations.
+    // ========================================================
+
+    postTranslate(
+        *matrix,
+        x,
+        y,
+        z);
+
+    postRotateX(
+        *matrix,
+        snapshot.rotX);
+
+    postRotateY(
+        *matrix,
+        snapshot.rotY);
+
+    postRotateZ(
+        *matrix,
+        snapshot.rotZ);
+
+    if (ordinaryItem) {
+
+      postTranslate(
+          *matrix,
+          0.0f,
+          kAtlasFlatLocalY,
+          0.0f);
+    }
+
+    postTranslate(
+        *matrix,
+        -x,
+        -y,
+        -z);
+
+    // Entire vanilla renderer sees
+    // mIsInItemFrame == true.
     original(
         self,
         renderContext,
         renderData);
   }
 
-  sHelperOverride =
-      previousOverride;
+  // ==========================================================
+  // Restore temporary state AFTER full ItemRenderer returns.
+  // ==========================================================
 
   position[1] =
       oldY;
