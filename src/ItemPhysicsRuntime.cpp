@@ -18,17 +18,11 @@ constexpr float kDegToRad =
 constexpr auto kStateTtl =
     std::chrono::seconds(8);
 
-// Atlas:
-//
-// ordinary non-block item only:
-//
-// position.y += -0.38
-//
-// and AFTER rotations:
-//
-// T(0, +0.25, 0)
-constexpr float kAtlasFlatLocalY =
-    0.25f;
+constexpr float kThinYRatio =
+    0.70f;
+
+constexpr float kExtentEpsilon =
+    0.0005f;
 
 constexpr std::string_view
     kShieldId =
@@ -38,22 +32,8 @@ constexpr std::string_view
     kBannerId =
         "minecraft:banner";
 
-// A model whose Y extent is considerably smaller
-// than X/Z is already naturally floor-oriented.
-//
-// slab:
-// 1 × 0.5 × 1
-//
-// carpet:
-// 1 × .0625 × 1
-constexpr float kThinYRatio =
-    0.70f;
-
-constexpr float kExtentEpsilon =
-    0.0005f;
-
 // ============================================================
-// Matrix stack RAII
+// MatrixStack RAII
 // ============================================================
 
 class MatrixPushScope {
@@ -127,6 +107,12 @@ ItemPhysicsRuntime *
 ItemPhysicsRuntime::sInstance =
     nullptr;
 
+thread_local
+    ItemPhysicsRuntime::
+        HelperOverrideContext
+            ItemPhysicsRuntime::
+                sHelperOverride{};
+
 // ============================================================
 // Config
 // ============================================================
@@ -164,50 +150,78 @@ void ItemPhysicsRuntime::applyConfig(
 }
 
 // ============================================================
-// Target validation
+// Profile verification
 // ============================================================
 
 bool ItemPhysicsRuntime::verifyProfile(
     const ResolvedVirtual &resolved,
     ll::mod::NativeMod &mod) const {
 
-  const auto target =
-      resolved.target;
+  const auto verifyWords =
+      [&](
+          std::uintptr_t address,
+          const auto &fingerprint,
+          std::string_view label) {
 
-  constexpr auto bytes =
-      profile::kRenderFingerprint.size() *
-      sizeof(std::uint32_t);
+        const std::size_t bytes =
+            fingerprint.size() *
+            sizeof(std::uint32_t);
 
-  if (!resolved.module.readable(
-          target,
-          bytes)) {
+        if (!resolved.module.readable(
+                address,
+                bytes)) {
 
-    mod.getLogger().warn(
-        "ItemRenderer target is not readable");
+          mod.getLogger().warn(
+              "{} is not readable",
+              label);
+
+          return false;
+        }
+
+        const auto *words =
+            reinterpret_cast<
+                const std::uint32_t *>(
+                address);
+
+        for (std::size_t i = 0;
+             i < fingerprint.size();
+             ++i) {
+
+          if (words[i] !=
+              fingerprint[i]) {
+
+            mod.getLogger().warn(
+                "Unsupported Minecraft profile: "
+                "{} fingerprint mismatch at word {}",
+                label,
+                i);
+
+            return false;
+          }
+        }
+
+        return true;
+      };
+
+  if (!verifyWords(
+          resolved.target,
+          profile::kRenderFingerprint,
+          "ItemRenderer::render")) {
 
     return false;
   }
 
-  const auto *words =
-      reinterpret_cast<
-          const std::uint32_t *>(
-          target);
+  const auto helperTarget =
+      resolved.module.base +
+      profile::
+          kItemRendererRenderHelperRva;
 
-  for (std::size_t i = 0;
-       i <
-       profile::kRenderFingerprint.size();
-       ++i) {
+  if (!verifyWords(
+          helperTarget,
+          profile::kRenderHelperFingerprint,
+          "ItemRenderer render helper")) {
 
-    if (words[i] !=
-        profile::kRenderFingerprint[i]) {
-
-      mod.getLogger().warn(
-          "Unsupported Minecraft profile: "
-          "ItemRenderer fingerprint mismatch at word {}",
-          i);
-
-      return false;
-    }
+    return false;
   }
 
   const auto executable =
@@ -226,6 +240,9 @@ bool ItemPhysicsRuntime::verifyProfile(
 
       !executable(
           profile::kMatrixStackRefDtorRva) ||
+
+      !executable(
+          profile::kItemRendererRenderHelperRva) ||
 
       !executable(
           profile::kBlockGraphicsGetForBlockRva) ||
@@ -284,6 +301,11 @@ bool ItemPhysicsRuntime::install(
   mRenderTarget =
       resolved->target;
 
+  mRenderHelperTarget =
+      mMinecraftBase +
+      profile::
+          kItemRendererRenderHelperRva;
+
   mGetWorldMatrix =
       reinterpret_cast<
           GetWorldMatrixFn>(
@@ -325,6 +347,50 @@ bool ItemPhysicsRuntime::install(
   mOriginal =
       nullptr;
 
+  mOriginalHelper =
+      nullptr;
+
+  // ==========================================================
+  // Hook helper FIRST.
+  //
+  // Outer ItemRenderer hook depends on this.
+  // ==========================================================
+
+  mHelperHook =
+      std::make_unique<
+          pl::memory::HookHandle>(
+
+          reinterpret_cast<void *>(
+              mRenderHelperTarget),
+
+          reinterpret_cast<void *>(
+              &ItemPhysicsRuntime::
+                  renderHelperDetour),
+
+          reinterpret_cast<void **>(
+              &mOriginalHelper),
+
+          pl::memory::
+              HookPriority::Normal);
+
+  if (!mHelperHook->installed() ||
+      !mOriginalHelper) {
+
+    mod.getLogger().error(
+        "Failed to hook ItemRenderer private render helper");
+
+    mHelperHook.reset();
+
+    sInstance =
+        nullptr;
+
+    return false;
+  }
+
+  // ==========================================================
+  // Main ItemRenderer hook
+  // ==========================================================
+
   mHook =
       std::make_unique<
           pl::memory::HookHandle>(
@@ -350,6 +416,12 @@ bool ItemPhysicsRuntime::install(
 
     mHook.reset();
 
+    mHelperHook->reset();
+    mHelperHook.reset();
+
+    mOriginalHelper =
+        nullptr;
+
     sInstance =
         nullptr;
 
@@ -361,10 +433,17 @@ bool ItemPhysicsRuntime::install(
       std::memory_order_relaxed);
 
   mod.getLogger().info(
-      "Item Physics active at ItemRenderer +0x{:X}",
+      "Item Physics active: "
+      "render=base+0x{:X}, helper=base+0x{:X}",
+
       static_cast<
           unsigned long long>(
           mRenderTarget -
+          mMinecraftBase),
+
+      static_cast<
+          unsigned long long>(
+          mRenderHelperTarget -
           mMinecraftBase));
 
   return true;
@@ -386,6 +465,12 @@ void ItemPhysicsRuntime::uninstall() {
     mHook.reset();
   }
 
+  if (mHelperHook) {
+
+    mHelperHook->reset();
+    mHelperHook.reset();
+  }
+
   if (sInstance ==
       this) {
 
@@ -394,6 +479,9 @@ void ItemPhysicsRuntime::uninstall() {
   }
 
   mOriginal =
+      nullptr;
+
+  mOriginalHelper =
       nullptr;
 
   mGetWorldMatrix =
@@ -414,8 +502,14 @@ void ItemPhysicsRuntime::uninstall() {
   mRenderTarget =
       0;
 
+  mRenderHelperTarget =
+      0;
+
   mMinecraftBase =
       0;
+
+  sHelperOverride =
+      {};
 
   clearStates();
 }
@@ -436,7 +530,7 @@ void ItemPhysicsRuntime::clearStates() {
 }
 
 // ============================================================
-// Hook callback
+// Main detour
 // ============================================================
 
 void ItemPhysicsRuntime::renderDetour(
@@ -451,6 +545,127 @@ void ItemPhysicsRuntime::renderDetour(
         renderContext,
         renderData);
   }
+}
+
+// ============================================================
+// Private helper detour
+// ============================================================
+
+void ItemPhysicsRuntime::renderHelperDetour(
+    void *self,
+    void *renderContext,
+    void *itemStack,
+    void *itemActor,
+    void *block,
+    std::int32_t blockShape,
+    std::int32_t modelCount,
+    float partialTick) {
+
+  if (sInstance) {
+
+    sInstance->onRenderHelper(
+        self,
+        renderContext,
+        itemStack,
+        itemActor,
+        block,
+        blockShape,
+        modelCount,
+        partialTick);
+  }
+}
+
+// ============================================================
+// Private helper body
+// ============================================================
+
+void ItemPhysicsRuntime::onRenderHelper(
+    void *self,
+    void *renderContext,
+    void *itemStack,
+    void *itemActor,
+    void *block,
+    std::int32_t blockShape,
+    std::int32_t modelCount,
+    float partialTick) {
+
+  const auto original =
+      mOriginalHelper;
+
+  if (!original) {
+    return;
+  }
+
+  if (!sHelperOverride.active ||
+      !itemActor ||
+      itemActor !=
+          sHelperOverride.actor) {
+
+    original(
+        self,
+        renderContext,
+        itemStack,
+        itemActor,
+        block,
+        blockShape,
+        modelCount,
+        partialTick);
+
+    return;
+  }
+
+  auto &inItemFrame =
+      *reinterpret_cast<
+          std::uint8_t *>(
+
+          reinterpret_cast<
+              std::uintptr_t>(
+              itemActor) +
+
+          profile::
+              kIsInItemFrameOffset);
+
+  const auto mainValue =
+      inItemFrame;
+
+  // ==========================================================
+  // CRITICAL FIX
+  //
+  // ItemRenderer MAIN already saw:
+  //
+  // mIsInItemFrame = true
+  //
+  // therefore bob/spin has already been skipped.
+  //
+  // Now restore the real value ONLY while the private helper
+  // executes.
+  //
+  // This restores:
+  //
+  // - Skull -0.125 correction
+  // - torch/lever special transforms
+  // - normal block item transforms
+  // - normal dropped-item display context
+  //
+  // without restoring vanilla bob/spin.
+  // ==========================================================
+
+  inItemFrame =
+      sHelperOverride.
+          originalItemFrame;
+
+  original(
+      self,
+      renderContext,
+      itemStack,
+      itemActor,
+      block,
+      blockShape,
+      modelCount,
+      partialTick);
+
+  inItemFrame =
+      mainValue;
 }
 
 // ============================================================
@@ -517,7 +732,7 @@ float ItemPhysicsRuntime::approachAngle(
 }
 
 // ============================================================
-// libc++ std::string
+// libc++ string
 // ============================================================
 
 bool ItemPhysicsRuntime::libcxxStringEquals(
@@ -573,22 +788,19 @@ bool ItemPhysicsRuntime::libcxxStringEquals(
             16);
   }
 
-  if (!data ||
-      length !=
-          wanted.size()) {
+  return data &&
+         length ==
+             wanted.size() &&
 
-    return false;
-  }
-
-  return std::memcmp(
+         std::memcmp(
              data,
              wanted.data(),
              length) ==
-         0;
+             0;
 }
 
 // ============================================================
-// Shapes that must retain natural block orientation
+// Horizontal block shapes
 // ============================================================
 
 bool ItemPhysicsRuntime::
@@ -597,34 +809,59 @@ bool ItemPhysicsRuntime::
 
   switch (shape) {
 
-  case 9:   // rail
-  case 14:  // bed
-  case 15:  // diode
-  case 23:  // lilypad
+  case 9:
+    // rail
 
-  case 67:  // block_half / slab
-  case 68:  // top_snow
-  case 69:  // tripwire
+  case 14:
+    // bed
 
-  case 72:  // repeater
-  case 73:  // comparator
+  case 15:
+    // diode
 
-  case 80:  // end_portal
+  case 23:
+    // lilypad
 
-  case 83:  // skull / head
+  case 67:
+    // slab / block_half
 
-  case 96:  // coral_fan
+  case 68:
+    // top snow
 
-  case 99:  // trapdoor
+  case 69:
+    // tripwire
 
-  case 114: // campfire
+  case 72:
+    // repeater
 
-  case 126: // sculk_sensor
+  case 73:
+    // comparator
 
-  case 135: // glow_lichen
-  case 136: // redstone_wire
+  case 80:
+    // end portal
 
-  case 153: // pale moss / carpet style
+  case 83:
+    // skull / head
+
+  case 96:
+    // coral fan
+
+  case 99:
+    // trapdoor
+
+  case 114:
+    // campfire
+
+  case 126:
+    // sculk sensor
+
+  case 135:
+    // glow lichen
+
+  case 136:
+    // redstone wire
+
+  case 153:
+    // carpet-style / pale moss
 
     return true;
 
@@ -635,7 +872,7 @@ bool ItemPhysicsRuntime::
 }
 
 // ============================================================
-// Block VisualShape
+// Block info
 // ============================================================
 
 bool ItemPhysicsRuntime::buildBlockRenderInfo(
@@ -648,10 +885,6 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
   if (!block) {
     return false;
   }
-
-  // ----------------------------------------------------------
-  // BlockShape
-  // ----------------------------------------------------------
 
   if (mGetBlockGraphicsForBlock &&
       mGetBlockGraphicsShape) {
@@ -668,9 +901,8 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
     }
   }
 
-  // ----------------------------------------------------------
-  // BlockType
-  // ----------------------------------------------------------
+  bool thinY =
+      false;
 
   const auto blockAddress =
       reinterpret_cast<
@@ -680,12 +912,10 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
   auto *blockType =
       *reinterpret_cast<
           void *const *>(
+
           blockAddress +
           profile::
               kBlockTypeOffset);
-
-  bool thinY =
-      false;
 
   if (blockType) {
 
@@ -710,28 +940,6 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
 
         AabbAbi scratch{};
 
-        // ====================================================
-        // IMPORTANT ABI FIX
-        //
-        // Old code did:
-        //
-        // getVisualShape(..., &scratch);
-        // use scratch;
-        //
-        // That is WRONG.
-        //
-        // The default implementation in this binary is:
-        //
-        // add x0, x0, #0x188
-        // ret
-        //
-        // Meaning it returns:
-        //
-        // BlockType::mVisualShape
-        //
-        // WITHOUT touching scratch.
-        // ====================================================
-
         const AabbAbi *bounds =
             getVisualShape(
                 blockType,
@@ -740,63 +948,37 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
 
         if (bounds) {
 
-          const auto finite =
-              [](float value) {
+          const float dx =
+              bounds->maxX -
+              bounds->minX;
 
-                return std::isfinite(
-                    value);
-              };
+          const float dy =
+              bounds->maxY -
+              bounds->minY;
 
-          if (finite(
-                  bounds->minX) &&
-              finite(
-                  bounds->minY) &&
-              finite(
-                  bounds->minZ) &&
+          const float dz =
+              bounds->maxZ -
+              bounds->minZ;
 
-              finite(
-                  bounds->maxX) &&
-              finite(
-                  bounds->maxY) &&
-              finite(
-                  bounds->maxZ)) {
+          if (std::isfinite(dx) &&
+              std::isfinite(dy) &&
+              std::isfinite(dz) &&
 
-            const float dx =
-                bounds->maxX -
-                bounds->minX;
+              dx >
+                  kExtentEpsilon &&
 
-            const float dy =
-                bounds->maxY -
-                bounds->minY;
+              dy >
+                  kExtentEpsilon &&
 
-            const float dz =
-                bounds->maxZ -
-                bounds->minZ;
+              dz >
+                  kExtentEpsilon) {
 
-            if (dx >
-                    kExtentEpsilon &&
-                dy >
-                    kExtentEpsilon &&
-                dz >
-                    kExtentEpsilon) {
-
-              info.bounds =
-                  *bounds;
-
-              const float
-                  horizontalSize =
-                      std::min(
-                          dx,
-                          dz);
-
-              // Detect slabs, carpet, pressure
-              // plates and other genuinely flat
-              // block models without relying on name.
-              thinY =
-                  dy <=
-                  horizontalSize *
-                      kThinYRatio;
-            }
+            thinY =
+                dy <=
+                std::min(
+                    dx,
+                    dz) *
+                    kThinYRatio;
           }
         }
       }
@@ -805,6 +987,7 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
 
   info.keepHorizontal =
       thinY ||
+
       blockShapeShouldRemainHorizontal(
           info.blockShape);
 
@@ -815,7 +998,7 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
 }
 
 // ============================================================
-// Item classification
+// Classification
 // ============================================================
 
 ItemPhysicsRuntime::ItemRenderTraits
@@ -824,13 +1007,10 @@ ItemPhysicsRuntime::classifyItem(
 
   ItemRenderTraits traits{};
 
-  // ----------------------------------------------------------
-  // Block-backed item
-  // ----------------------------------------------------------
-
   const auto block =
       *reinterpret_cast<
           const void *const *>(
+
           actorAddress +
           profile::
               kBlockPtrOffset);
@@ -851,13 +1031,10 @@ ItemPhysicsRuntime::classifyItem(
     return traits;
   }
 
-  // ----------------------------------------------------------
-  // Ordinary item
-  // ----------------------------------------------------------
-
   const auto itemHandle =
       *reinterpret_cast<
           const std::uintptr_t *>(
+
           actorAddress +
           profile::
               kItemHandleOffset);
@@ -907,7 +1084,7 @@ ItemPhysicsRuntime::classifyItem(
 }
 
 // ============================================================
-// Physics state initialization
+// Physics state
 // ============================================================
 
 ItemPhysicsRuntime::PhysicsState &
@@ -1048,10 +1225,6 @@ void ItemPhysicsRuntime::updateState(
               5.0f,
           1.0f);
 
-  // ----------------------------------------------------------
-  // Airborne
-  // ----------------------------------------------------------
-
   if (!grounded) {
 
     const float age =
@@ -1060,15 +1233,12 @@ void ItemPhysicsRuntime::updateState(
             state.born)
             .count();
 
-    const float ageFactor =
+    const float fade =
+        1.0f -
         std::min(
             age /
                 4.0f,
             1.0f);
-
-    const float fade =
-        1.0f -
-        ageFactor;
 
     const float speed =
         mRotationSpeed.load(
@@ -1100,27 +1270,18 @@ void ItemPhysicsRuntime::updateState(
     return;
   }
 
-  // ----------------------------------------------------------
-  // Ground
-  // ----------------------------------------------------------
-
   const float settle =
       frameFactor *
       mSettleSpeed.load(
           std::memory_order_relaxed);
 
   if (traits.modelClass ==
-          ModelClass::BlockModel &&
-      traits.block.keepHorizontal) {
+          ModelClass::
+              BlockModel &&
 
-    // slab
-    // carpet
-    // rail
-    // skull/head
-    // snow layer
-    // etc.
-    //
-    // Their existing block Y-axis must remain vertical.
+      traits.block.
+          keepHorizontal) {
+
     state.rotX =
         approachAngle(
             state.rotX,
@@ -1133,7 +1294,6 @@ void ItemPhysicsRuntime::updateState(
             0.0f,
             settle);
 
-    // Safe horizontal randomization.
     state.rotY =
         approachAngle(
             state.rotY,
@@ -1142,19 +1302,6 @@ void ItemPhysicsRuntime::updateState(
 
   } else {
 
-    // Everything else follows Atlas/Java base pose:
-    //
-    // fence
-    // brewing stand
-    // flower pot
-    // torch
-    // lever
-    // chain
-    // lantern
-    // sword
-    // tools
-    // armor
-    // etc.
     const float target =
         mGroundTiltDeg.load(
             std::memory_order_relaxed) *
@@ -1169,7 +1316,7 @@ void ItemPhysicsRuntime::updateState(
     state.rotY =
         0.0f;
 
-    // Keep landing Z rotation.
+    // rotZ remains the landing direction.
   }
 
   state.wasGrounded =
@@ -1177,7 +1324,7 @@ void ItemPhysicsRuntime::updateState(
 }
 
 // ============================================================
-// Cleanup
+// State cleanup
 // ============================================================
 
 void ItemPhysicsRuntime::pruneStates(
@@ -1225,6 +1372,7 @@ bool ItemPhysicsRuntime::
   const auto registry =
       *reinterpret_cast<
           const std::uintptr_t *>(
+
           actorAddress +
           profile::
               kActorRegistryOffset);
@@ -1232,6 +1380,7 @@ bool ItemPhysicsRuntime::
   const auto entityId =
       *reinterpret_cast<
           const std::uint32_t *>(
+
           actorAddress +
           profile::
               kActorEntityIdOffset);
@@ -1310,7 +1459,9 @@ bool ItemPhysicsRuntime::
   std::int64_t nodeIndex =
       *reinterpret_cast<
           const std::int64_t *>(
+
           bucketsBegin +
+
           index *
               sizeof(
                   std::uintptr_t));
@@ -1321,13 +1472,13 @@ bool ItemPhysicsRuntime::
   for (int guard = 0;
 
        nodeIndex != -1 &&
-       guard <
-           4096;
+       guard < 4096;
 
        ++guard) {
 
     node =
         nodesBase +
+
         static_cast<
             std::uintptr_t>(
             nodeIndex) *
@@ -1410,7 +1561,9 @@ bool ItemPhysicsRuntime::
   const auto page =
       *reinterpret_cast<
           const std::uintptr_t *>(
+
           pagesBegin +
+
           pageIndex *
               sizeof(
                   std::uintptr_t));
@@ -1430,7 +1583,9 @@ bool ItemPhysicsRuntime::
   const auto slotValue =
       *reinterpret_cast<
           const std::uint32_t *>(
+
           page +
+
           slot *
               sizeof(
                   std::uint32_t));
@@ -1442,7 +1597,7 @@ bool ItemPhysicsRuntime::
 }
 
 // ============================================================
-// ItemRenderer hook
+// Main ItemRenderer body
 // ============================================================
 
 void ItemPhysicsRuntime::onRender(
@@ -1482,6 +1637,7 @@ void ItemPhysicsRuntime::onRender(
   auto *actor =
       *reinterpret_cast<
           void **>(
+
           renderDataAddress +
           profile::
               kRenderDataActorOffset);
@@ -1518,6 +1674,7 @@ void ItemPhysicsRuntime::onRender(
   const auto entityId =
       *reinterpret_cast<
           const std::uint32_t *>(
+
           actorAddress +
           profile::
               kActorEntityIdOffset);
@@ -1559,13 +1716,10 @@ void ItemPhysicsRuntime::onRender(
     }
   }
 
-  // ----------------------------------------------------------
-  // Temporary actor state
-  // ----------------------------------------------------------
-
   auto &count =
       *reinterpret_cast<
           std::uint8_t *>(
+
           actorAddress +
           profile::
               kItemCountOffset);
@@ -1573,6 +1727,7 @@ void ItemPhysicsRuntime::onRender(
   auto &inItemFrame =
       *reinterpret_cast<
           std::uint8_t *>(
+
           actorAddress +
           profile::
               kIsInItemFrameOffset);
@@ -1583,6 +1738,9 @@ void ItemPhysicsRuntime::onRender(
   const auto oldInItemFrame =
       inItemFrame;
 
+  const auto previousOverride =
+      sHelperOverride;
+
   if (mSingleModel.load(
           std::memory_order_relaxed)) {
 
@@ -1590,16 +1748,36 @@ void ItemPhysicsRuntime::onRender(
         1;
   }
 
-  // Atlas:
+  // ==========================================================
+  // SPLIT FLAG
   //
-  // disable vanilla dropped-item
-  // bob/spin.
+  // Outer ItemRenderer:
+  //
+  // TRUE
+  // → skip bob/spin
+  //
+  // Private helper:
+  //
+  // ORIGINAL VALUE
+  // → retain correct model transforms
+  // ==========================================================
+
   inItemFrame =
       1;
+
+  sHelperOverride.active =
+      true;
+
+  sHelperOverride.actor =
+      actor;
+
+  sHelperOverride.originalItemFrame =
+      oldInItemFrame;
 
   auto *position =
       reinterpret_cast<
           float *>(
+
           renderDataAddress +
           profile::
               kRenderDataPositionOffset);
@@ -1607,13 +1785,22 @@ void ItemPhysicsRuntime::onRender(
   const float oldY =
       position[1];
 
-  const bool ordinaryFlat =
-      traits.modelClass ==
-      ModelClass::
-          FlatItem;
+  // ==========================================================
+  // Old Atlas correction removed.
+  //
+  // No:
+  // -0.38
+  // +0.25
+  //
+  // Vanilla helper now gives us normal dropped-item transforms.
+  //
+  // heightOffset remains only as optional fine adjustment.
+  // Default after migration: 0.
+  // ==========================================================
 
-  // Only ordinary non-block items receive this.
-  if (ordinaryFlat) {
+  if (traits.modelClass ==
+      ModelClass::
+          FlatItem) {
 
     position[1] =
         oldY +
@@ -1638,99 +1825,39 @@ void ItemPhysicsRuntime::onRender(
     auto *matrix =
         matrixScope.matrix();
 
-    if (!matrix) {
+    if (matrix) {
 
-      position[1] =
-          oldY;
+      const float x =
+          position[0];
 
-      count =
-          oldCount;
+      const float y =
+          position[1];
 
-      inItemFrame =
-          oldInItemFrame;
+      const float z =
+          position[2];
 
-      original(
-          self,
-          renderContext,
-          renderData);
-
-      return;
-    }
-
-    const float x =
-        position[0];
-
-    const float y =
-        position[1];
-
-    const float z =
-        position[2];
-
-    // ========================================================
-    // EXACT ATLAS TRANSFORM ORDER
-    //
-    // OLD / WRONG:
-    //
-    // T(pos)
-    // T(0,.25,0)   <-- too early
-    // R
-    // T(-pos)
-    //
-    // This added approximately +0.25 world-Y
-    // when ground angle was 90 degrees.
-    //
-    //
-    // CORRECT:
-    //
-    // T(pos)
-    // R
-    // T(0,.25,0)
-    // T(-pos)
-    //
-    // ========================================================
-
-    postTranslate(
-        *matrix,
-        x,
-        y,
-        z);
-
-    postRotateX(
-        *matrix,
-        snapshot.rotX);
-
-    postRotateY(
-        *matrix,
-        snapshot.rotY);
-
-    postRotateZ(
-        *matrix,
-        snapshot.rotZ);
-
-    if (ordinaryFlat) {
-
-      postTranslate(
+      rotateAround(
           *matrix,
-          0.0f,
-          kAtlasFlatLocalY,
-          0.0f);
+          x,
+          y,
+          z,
+          snapshot.rotX,
+          snapshot.rotY,
+          snapshot.rotZ);
     }
 
-    postTranslate(
-        *matrix,
-        -x,
-        -y,
-        -z);
-
+    // Always call through.
+    //
+    // Even when MatrixStack push failed, helper split still keeps
+    // vanilla model placement intact.
     original(
         self,
         renderContext,
         renderData);
   }
 
-  // ----------------------------------------------------------
-  // Restore
-  // ----------------------------------------------------------
+  sHelperOverride =
+      previousOverride;
 
   position[1] =
       oldY;
