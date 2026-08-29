@@ -40,7 +40,6 @@ public:
 
   [[nodiscard]]
   bool profileSupported() const noexcept {
-
     return mProfileSupported.load(
         std::memory_order_relaxed);
   }
@@ -73,7 +72,7 @@ public:
 
 private:
   // ==========================================================
-  // AABB
+  // AABB ABI
   // ==========================================================
 
   struct AabbAbi {
@@ -90,17 +89,20 @@ private:
       sizeof(AabbAbi) == 24);
 
   // ==========================================================
-  // Model class
+  // Rendering class
   // ==========================================================
 
   enum class ModelClass :
       std::uint8_t {
 
+    // sword/tool/armor/ingot/etc.
     FlatItem,
 
-    BlockModel,
+    // any ItemStack backed by Block const*
+    BlockItem,
 
-    Special3D,
+    // shield/banner
+    SpecialItem,
   };
 
   struct BlockRenderInfo {
@@ -109,8 +111,11 @@ private:
     std::int32_t
         blockShape{-1};
 
-    bool
-        keepHorizontal{};
+    // Very small compatibility layer over Atlas:
+    //
+    // slab/carpet/thin layer/head should not receive
+    // Atlas's global final X=90 orientation.
+    bool keepHorizontal{};
   };
 
   struct ItemRenderTraits {
@@ -119,12 +124,11 @@ private:
     ModelClass modelClass{
         ModelClass::FlatItem};
 
-    BlockRenderInfo
-        block{};
+    BlockRenderInfo block{};
   };
 
   // ==========================================================
-  // Physics
+  // Physics state
   // ==========================================================
 
   struct PhysicsState {
@@ -138,6 +142,7 @@ private:
     float angularX{};
     float angularZ{};
 
+    // Used ONLY for horizontal compatibility blocks.
     float restYaw{};
 
     std::chrono::steady_clock::time_point
@@ -151,20 +156,7 @@ private:
   };
 
   // ==========================================================
-  // Split mIsInItemFrame context
-  // ==========================================================
-
-  struct HelperOverrideContext {
-    bool active{};
-
-    void *actor{};
-
-    std::uint8_t
-        originalItemFrame{};
-  };
-
-  // ==========================================================
-  // Minecraft helper types
+  // Minecraft helpers
   // ==========================================================
 
   using BlockGraphicsGetForBlockFn =
@@ -175,6 +167,11 @@ private:
       std::int32_t (*)(
           const void *graphics);
 
+  // AABB const&
+  // BlockType::getVisualShape(
+  //     Block const&,
+  //     AABB& scratch
+  // ) const
   using GetVisualShapeFn =
       const AabbAbi *(*)(
           void *blockType,
@@ -182,77 +179,21 @@ private:
           AabbAbi *scratch);
 
   // ==========================================================
-  // ItemRenderer private helper
-  //
-  // RVA 0xA29ED30
-  //
-  // Call from ItemRenderer:
-  //
-  // x0 self
-  // x1 BaseActorRenderContext
-  // x2 ItemStackBase
-  // x3 ItemActor
-  // x4 Block
-  // w5 BlockShape
-  // w6 model count
-  // s0 partial
-  // ==========================================================
-
-  using RenderHelperFn =
-      void (*)(
-          void *self,
-          void *renderContext,
-          void *itemStack,
-          void *itemActor,
-          void *block,
-          std::int32_t blockShape,
-          std::int32_t modelCount,
-          float partialTick);
-
-  // ==========================================================
-  // Static hooks
+  // Hook
   // ==========================================================
 
   static ItemPhysicsRuntime *
       sInstance;
-
-  static thread_local
-      HelperOverrideContext
-          sHelperOverride;
 
   static void renderDetour(
       void *self,
       void *renderContext,
       void *renderData);
 
-  static void renderHelperDetour(
-      void *self,
-      void *renderContext,
-      void *itemStack,
-      void *itemActor,
-      void *block,
-      std::int32_t blockShape,
-      std::int32_t modelCount,
-      float partialTick);
-
-  // ==========================================================
-  // Hook bodies
-  // ==========================================================
-
   void onRender(
       void *self,
       void *renderContext,
       void *renderData);
-
-  void onRenderHelper(
-      void *self,
-      void *renderContext,
-      void *itemStack,
-      void *itemActor,
-      void *block,
-      std::int32_t blockShape,
-      std::int32_t modelCount,
-      float partialTick);
 
   bool verifyProfile(
       const ResolvedVirtual &resolved,
@@ -271,12 +212,8 @@ private:
       const void *block,
       BlockRenderInfo &info) const noexcept;
 
-  [[nodiscard]]
-  static bool blockShapeShouldRemainHorizontal(
-      std::int32_t shape) noexcept;
-
   // ==========================================================
-  // Physics / ECS
+  // ECS / physics
   // ==========================================================
 
   [[nodiscard]]
@@ -312,7 +249,7 @@ private:
       std::string_view wanted) noexcept;
 
   // ==========================================================
-  // Settings
+  // Config
   // ==========================================================
 
   std::atomic_bool
@@ -331,13 +268,13 @@ private:
       mGroundTiltDeg{90.0f};
 
   std::atomic<float>
-      mHeightOffset{0.0f};
+      mHeightOffset{-0.38f};
 
   std::atomic_bool
       mProfileSupported{false};
 
   // ==========================================================
-  // Runtime addresses
+  // Runtime
   // ==========================================================
 
   std::uintptr_t
@@ -346,14 +283,8 @@ private:
   std::uintptr_t
       mRenderTarget{};
 
-  std::uintptr_t
-      mRenderHelperTarget{};
-
   RenderFn
       mOriginal{};
-
-  RenderHelperFn
-      mOriginalHelper{};
 
   GetWorldMatrixFn
       mGetWorldMatrix{};
@@ -370,13 +301,13 @@ private:
   BlockGraphicsGetBlockShapeFn
       mGetBlockGraphicsShape{};
 
-  std::unique_ptr<
-      pl::memory::HookHandle>
-      mHook;
+  // ==========================================================
+  // Hook / state
+  // ==========================================================
 
   std::unique_ptr<
       pl::memory::HookHandle>
-      mHelperHook;
+      mHook;
 
   mutable std::mutex
       mStateMutex;
