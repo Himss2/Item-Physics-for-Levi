@@ -9,7 +9,7 @@
 namespace itemphysics {
 
 struct ItemPhysicsConfig {
-  int version = 3;
+  int version = 4;
 
   bool enabled = true;
   bool singleModel = true;
@@ -17,15 +17,15 @@ struct ItemPhysicsConfig {
   double rotationSpeed = 1.0;
   double settleSpeed = 3.0;
 
+  // Atlas:
+  // ItemPhysics + 0x2B0 = 90.0
   double groundTilt = 90.0;
 
-  // v3:
+  // Atlas:
+  // ItemPhysics + 0x260 = -0.38
   //
-  // Vanilla dropped-item helper now handles the normal model
-  // placement again.
-  //
-  // This is only a small optional fine adjustment.
-  double heightOffset = 0.0;
+  // ONLY ordinary non-block items use this.
+  double heightOffset = -0.38;
 };
 
 inline constexpr double
@@ -47,10 +47,10 @@ inline constexpr double
     kMaxGroundTilt = 180.0;
 
 inline constexpr double
-    kMinHeightOffset = -0.30;
+    kMinHeightOffset = -0.60;
 
 inline constexpr double
-    kMaxHeightOffset = 0.30;
+    kMaxHeightOffset = 0.20;
 
 inline void normalize(
     ItemPhysicsConfig &config) {
@@ -59,36 +59,27 @@ inline void normalize(
       config.version;
 
   if (oldVersion < 2) {
-
     config.groundTilt =
         90.0;
   }
 
-  // ==========================================================
-  // v2 -> v3
+  // ----------------------------------------------------------
+  // v4
   //
-  // Old path:
-  //
-  // mIsInItemFrame=true was visible to the entire renderer,
-  // therefore Atlas-style compensation -0.38/+0.25 was needed.
-  //
-  // New path:
-  //
-  // main renderer sees true,
-  // private model helper sees original false.
-  //
-  // Therefore vanilla dropped-item model transforms are restored
-  // and the old -0.38 compensation must be removed.
-  // ==========================================================
+  // Restore the exact Atlas baseline after the experimental
+  // v3 helper-hook branch.
+  // ----------------------------------------------------------
 
-  if (oldVersion < 3) {
+  if (oldVersion < 4) {
+    config.groundTilt =
+        90.0;
 
     config.heightOffset =
-        0.0;
+        -0.38;
   }
 
   config.version =
-      3;
+      4;
 
   config.rotationSpeed =
       std::clamp(
@@ -127,7 +118,8 @@ struct Schema<
       "Levi Item Physics";
 
   static constexpr std::string_view description =
-      "Java-style dropped item physics rendered client-side.";
+      "Atlas-style dropped item physics with Java-like "
+      "compatibility for thin block models.";
 
   static constexpr FieldSchema field(
       std::string_view name) {
@@ -135,7 +127,6 @@ struct Schema<
     using namespace itemphysics;
 
     if (name == "version") {
-
       return {
           "Version",
           "Configuration schema version.",
@@ -146,7 +137,6 @@ struct Schema<
     }
 
     if (name == "enabled") {
-
       return {
           "Enabled",
           "Master Item Physics toggle.",
@@ -157,7 +147,6 @@ struct Schema<
     }
 
     if (name == "singleModel") {
-
       return {
           "Single Model",
           "Render one physical model instead of vanilla stack copies.",
@@ -168,7 +157,6 @@ struct Schema<
     }
 
     if (name == "rotationSpeed") {
-
       return {
           "Tumble Speed",
           "Airborne angular speed multiplier.",
@@ -179,7 +167,6 @@ struct Schema<
     }
 
     if (name == "settleSpeed") {
-
       return {
           "Settle Speed",
           "How quickly the item settles after landing.",
@@ -190,10 +177,9 @@ struct Schema<
     }
 
     if (name == "groundTilt") {
-
       return {
           "Ground Angle",
-          "Base floor angle for ordinary dropped items.",
+          "Atlas ground target. Default is 90 degrees.",
           kMinGroundTilt,
           kMaxGroundTilt,
           false
@@ -201,10 +187,9 @@ struct Schema<
     }
 
     if (name == "heightOffset") {
-
       return {
           "Flat Item Height",
-          "Small final vertical fine adjustment for ordinary non-block items.",
+          "Atlas vertical correction for ordinary non-block items.",
           kMinHeightOffset,
           kMaxHeightOffset,
           false
