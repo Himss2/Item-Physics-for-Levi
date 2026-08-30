@@ -98,7 +98,9 @@ private:
       std::uint8_t {
 
     FlatItem,
+
     BlockItem,
+
     SpecialItem,
   };
 
@@ -120,6 +122,36 @@ private:
 
     BlockRenderInfo
         block{};
+
+    // ------------------------------------------------------------------------
+    // Renderer truth.
+    //
+    // This comes from:
+    //
+    // ItemStackBase::getBlockTypeForRendering()
+    //      ↓
+    // BlockGraphics
+    //      ↓
+    // BlockShape
+    //
+    // IMPORTANT:
+    //
+    // renderShape does NOT control physics orientation.
+    //
+    // It is used for:
+    //
+    // 1. safe Skull detection
+    // 2. ground-height correction
+    //
+    // Therefore torch/fence/lantern can receive correct ground correction even
+    // if ItemStackBase::mBlock happens to be null.
+    // ------------------------------------------------------------------------
+
+    bool
+        hasRenderShape{};
+
+    std::int32_t
+        renderShape{-1};
   };
 
   // ==========================================================================
