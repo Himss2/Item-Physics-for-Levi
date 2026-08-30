@@ -46,6 +46,10 @@ public:
   }
 
 public:
+  // ==========================================================================
+  // Hook ABI
+  // ==========================================================================
+
   using RenderFn =
       void (*)(
           void *,
@@ -104,6 +108,16 @@ private:
     SpecialItem,
   };
 
+  enum class SpecialKind :
+      std::uint8_t {
+
+    None,
+
+    Shield,
+
+    Banner,
+  };
+
   struct BlockRenderInfo {
     bool valid{};
 
@@ -120,31 +134,21 @@ private:
     ModelClass modelClass{
         ModelClass::FlatItem};
 
+    SpecialKind specialKind{
+        SpecialKind::None};
+
     BlockRenderInfo
         block{};
 
     // ------------------------------------------------------------------------
-    // Renderer truth.
+    // Actual BlockShape used by vanilla ItemRenderer.
     //
-    // This comes from:
+    // This is independent from ModelClass.
     //
-    // ItemStackBase::getBlockTypeForRendering()
-    //      ↓
-    // BlockGraphics
-    //      ↓
-    // BlockShape
+    // Ground-height V4 uses this value to choose which slider controls the
+    // model.
     //
-    // IMPORTANT:
-    //
-    // renderShape does NOT control physics orientation.
-    //
-    // It is used for:
-    //
-    // 1. safe Skull detection
-    // 2. ground-height correction
-    //
-    // Therefore torch/fence/lantern can receive correct ground correction even
-    // if ItemStackBase::mBlock happens to be null.
+    // Physics orientation remains based on the already working classifier.
     // ------------------------------------------------------------------------
 
     bool
@@ -155,7 +159,7 @@ private:
   };
 
   // ==========================================================================
-  // Physics
+  // Physics state
   // ==========================================================================
 
   struct PhysicsState {
@@ -247,18 +251,6 @@ private:
       std::int32_t &shape) const noexcept;
 
   // ==========================================================================
-  // Ground height
-  // ==========================================================================
-
-  [[nodiscard]]
-  static float calculateBlockGroundCorrection(
-      const void *block,
-      std::int32_t shape,
-      float rotX,
-      float rotY,
-      float rotZ) noexcept;
-
-  // ==========================================================================
   // Physics / ECS
   // ==========================================================================
 
@@ -279,6 +271,10 @@ private:
   void pruneStates(
       std::chrono::steady_clock::time_point now);
 
+  // ==========================================================================
+  // Math / string helpers
+  // ==========================================================================
+
   static float seededUnit(
       std::uint32_t seed) noexcept;
 
@@ -295,7 +291,7 @@ private:
       std::string_view wanted) noexcept;
 
   // ==========================================================================
-  // Config
+  // Core config
   // ==========================================================================
 
   std::atomic_bool
@@ -313,8 +309,34 @@ private:
   std::atomic<float>
       mGroundTiltDeg{90.0f};
 
+  // Original Atlas ordinary-item height.
   std::atomic<float>
       mHeightOffset{-0.38f};
+
+  // ==========================================================================
+  // Ground Height V4 sliders
+  // ==========================================================================
+
+  std::atomic<float>
+      mBlockGroundHeight{-0.06f};
+
+  std::atomic<float>
+      mThinBlockGroundHeight{-0.08f};
+
+  std::atomic<float>
+      mTorchGroundHeight{-0.08f};
+
+  std::atomic<float>
+      mShapedBlockGroundHeight{-0.16f};
+
+  std::atomic<float>
+      mSkullGroundHeight{-0.22f};
+
+  std::atomic<float>
+      mShieldGroundHeight{-0.08f};
+
+  std::atomic<float>
+      mBannerGroundHeight{-0.075f};
 
   std::atomic_bool
       mProfileSupported{false};
