@@ -40,6 +40,7 @@ public:
 
   [[nodiscard]]
   bool profileSupported() const noexcept {
+
     return mProfileSupported.load(
         std::memory_order_relaxed);
   }
@@ -71,9 +72,9 @@ public:
           MatrixStackRefAbi *);
 
 private:
-  // ==========================================================
+  // ==========================================================================
   // AABB ABI
-  // ==========================================================
+  // ==========================================================================
 
   struct AabbAbi {
     float minX{};
@@ -88,20 +89,17 @@ private:
   static_assert(
       sizeof(AabbAbi) == 24);
 
-  // ==========================================================
-  // Rendering class
-  // ==========================================================
+  // ==========================================================================
+  // Model classes
+  // ==========================================================================
 
   enum class ModelClass :
       std::uint8_t {
 
-    // sword/tool/armor/ingot/etc.
     FlatItem,
 
-    // any ItemStack backed by Block const*
     BlockItem,
 
-    // shield/banner
     SpecialItem,
   };
 
@@ -111,11 +109,8 @@ private:
     std::int32_t
         blockShape{-1};
 
-    // Very small compatibility layer over Atlas:
-    //
-    // slab/carpet/thin layer/head should not receive
-    // Atlas's global final X=90 orientation.
-    bool keepHorizontal{};
+    bool
+        keepHorizontal{};
   };
 
   struct ItemRenderTraits {
@@ -124,12 +119,13 @@ private:
     ModelClass modelClass{
         ModelClass::FlatItem};
 
-    BlockRenderInfo block{};
+    BlockRenderInfo
+        block{};
   };
 
-  // ==========================================================
-  // Physics state
-  // ==========================================================
+  // ==========================================================================
+  // Physics
+  // ==========================================================================
 
   struct PhysicsState {
     bool initialized{};
@@ -142,7 +138,6 @@ private:
     float angularX{};
     float angularZ{};
 
-    // Used ONLY for horizontal compatibility blocks.
     float restYaw{};
 
     std::chrono::steady_clock::time_point
@@ -155,10 +150,27 @@ private:
         lastSeen{};
   };
 
-  // ==========================================================
-  // Minecraft helpers
-  // ==========================================================
+  // ==========================================================================
+  // Minecraft helper ABI
+  // ==========================================================================
 
+  // ItemStackBase::getBlockTypeForRendering()
+  //
+  // Actual C++ return type:
+  //
+  // WeakPtr<BlockType const> const&
+  //
+  // We only need the returned object's address.
+  using GetBlockTypeForRenderingFn =
+      const void *(*)(
+          const void *itemStackBase);
+
+  // BlockGraphics::getForBlock(BlockType const&)
+  using BlockGraphicsGetForBlockTypeFn =
+      void *(*)(
+          const void *blockType);
+
+  // BlockGraphics::getForBlock(Block const&)
   using BlockGraphicsGetForBlockFn =
       void *(*)(
           const void *block);
@@ -167,20 +179,15 @@ private:
       std::int32_t (*)(
           const void *graphics);
 
-  // AABB const&
-  // BlockType::getVisualShape(
-  //     Block const&,
-  //     AABB& scratch
-  // ) const
   using GetVisualShapeFn =
       const AabbAbi *(*)(
           void *blockType,
           const void *block,
           AabbAbi *scratch);
 
-  // ==========================================================
+  // ==========================================================================
   // Hook
-  // ==========================================================
+  // ==========================================================================
 
   static ItemPhysicsRuntime *
       sInstance;
@@ -199,9 +206,9 @@ private:
       const ResolvedVirtual &resolved,
       ll::mod::NativeMod &mod) const;
 
-  // ==========================================================
+  // ==========================================================================
   // Classification
-  // ==========================================================
+  // ==========================================================================
 
   [[nodiscard]]
   ItemRenderTraits classifyItem(
@@ -212,9 +219,21 @@ private:
       const void *block,
       BlockRenderInfo &info) const noexcept;
 
-  // ==========================================================
+  // Uses the EXACT path used by vanilla ItemRenderer:
+  //
+  // ItemStackBase
+  // -> getBlockTypeForRendering()
+  // -> WeakPtr<BlockType>
+  // -> BlockGraphics
+  // -> BlockShape
+  [[nodiscard]]
+  bool tryGetRenderBlockShape(
+      std::uintptr_t actorAddress,
+      std::int32_t &shape) const noexcept;
+
+  // ==========================================================================
   // ECS / physics
-  // ==========================================================
+  // ==========================================================================
 
   [[nodiscard]]
   bool hasOnGroundComponent(
@@ -248,9 +267,9 @@ private:
       std::uintptr_t stringAddress,
       std::string_view wanted) noexcept;
 
-  // ==========================================================
+  // ==========================================================================
   // Config
-  // ==========================================================
+  // ==========================================================================
 
   std::atomic_bool
       mEnabled{true};
@@ -273,9 +292,9 @@ private:
   std::atomic_bool
       mProfileSupported{false};
 
-  // ==========================================================
+  // ==========================================================================
   // Runtime
-  // ==========================================================
+  // ==========================================================================
 
   std::uintptr_t
       mMinecraftBase{};
@@ -295,15 +314,21 @@ private:
   MatrixRefDtorFn
       mMatrixRefDtor{};
 
+  GetBlockTypeForRenderingFn
+      mGetBlockTypeForRendering{};
+
+  BlockGraphicsGetForBlockTypeFn
+      mGetBlockGraphicsForBlockType{};
+
   BlockGraphicsGetForBlockFn
       mGetBlockGraphicsForBlock{};
 
   BlockGraphicsGetBlockShapeFn
       mGetBlockGraphicsShape{};
 
-  // ==========================================================
+  // ==========================================================================
   // Hook / state
-  // ==========================================================
+  // ==========================================================================
 
   std::unique_ptr<
       pl::memory::HookHandle>
