@@ -73,7 +73,7 @@ public:
 
 private:
   // ==========================================================================
-  // AABB ABI
+  // AABB
   // ==========================================================================
 
   struct AabbAbi {
@@ -87,19 +87,18 @@ private:
   };
 
   static_assert(
-      sizeof(AabbAbi) == 24);
+      sizeof(AabbAbi) ==
+      24);
 
   // ==========================================================================
-  // Model classes
+  // Model classification
   // ==========================================================================
 
   enum class ModelClass :
       std::uint8_t {
 
     FlatItem,
-
     BlockItem,
-
     SpecialItem,
   };
 
@@ -151,26 +150,17 @@ private:
   };
 
   // ==========================================================================
-  // Minecraft helper ABI
+  // Minecraft ABI
   // ==========================================================================
 
-  // ItemStackBase::getBlockTypeForRendering()
-  //
-  // Actual C++ return type:
-  //
-  // WeakPtr<BlockType const> const&
-  //
-  // We only need the returned object's address.
   using GetBlockTypeForRenderingFn =
       const void *(*)(
           const void *itemStackBase);
 
-  // BlockGraphics::getForBlock(BlockType const&)
   using BlockGraphicsGetForBlockTypeFn =
       void *(*)(
           const void *blockType);
 
-  // BlockGraphics::getForBlock(Block const&)
   using BlockGraphicsGetForBlockFn =
       void *(*)(
           const void *block);
@@ -219,20 +209,25 @@ private:
       const void *block,
       BlockRenderInfo &info) const noexcept;
 
-  // Uses the EXACT path used by vanilla ItemRenderer:
-  //
-  // ItemStackBase
-  // -> getBlockTypeForRendering()
-  // -> WeakPtr<BlockType>
-  // -> BlockGraphics
-  // -> BlockShape
   [[nodiscard]]
   bool tryGetRenderBlockShape(
       std::uintptr_t actorAddress,
       std::int32_t &shape) const noexcept;
 
   // ==========================================================================
-  // ECS / physics
+  // Ground height
+  // ==========================================================================
+
+  [[nodiscard]]
+  static float calculateBlockGroundCorrection(
+      const void *block,
+      std::int32_t shape,
+      float rotX,
+      float rotY,
+      float rotZ) noexcept;
+
+  // ==========================================================================
+  // Physics / ECS
   // ==========================================================================
 
   [[nodiscard]]
@@ -293,7 +288,7 @@ private:
       mProfileSupported{false};
 
   // ==========================================================================
-  // Runtime
+  // Minecraft runtime
   // ==========================================================================
 
   std::uintptr_t
