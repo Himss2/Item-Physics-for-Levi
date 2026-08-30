@@ -7,15 +7,15 @@
 
 namespace itemphysics::profile {
 
-// ============================================================
-// Minecraft 1.26.45.1 ARM64
+// ============================================================================
+// Minecraft Bedrock 1.26.45.1 ARM64
 //
 // SHA-256:
 // 444e77434bdd3789a0d90978d06336a99831e78e52955e528258cc375dfa0557
 //
 // Build ID:
 // 868e275cb295e9a275bb29d2258edc2f7dc48761
-// ============================================================
+// ============================================================================
 
 inline constexpr std::string_view kMinecraftModule =
     "libminecraftpe.so";
@@ -27,20 +27,9 @@ inline constexpr std::size_t
     kItemRendererRenderVtableOffset =
         0x18;
 
-// ============================================================
-// ItemRenderer
-// ============================================================
-
-inline constexpr std::uintptr_t
-    kItemRendererRenderRva =
-        0x0A29F708;
-
-// ============================================================
+// ============================================================================
 // ItemActor / ItemStackBase
-//
-// Layout confirmed again directly from
-// ItemRenderer::render on 1.26.45.1.
-// ============================================================
+// ============================================================================
 
 inline constexpr std::ptrdiff_t
     kActorRegistryOffset =
@@ -51,7 +40,20 @@ inline constexpr std::ptrdiff_t
         0x18;
 
 // ItemStackBase begins at ItemActor + 0x390.
+inline constexpr std::ptrdiff_t
+    kItemStackBaseOffset =
+        0x390;
 
+// ItemStackBase:
+//
+// +0x08 mItem
+// +0x10 mUserData
+// +0x18 mBlock
+//
+// Actor:
+//
+// 0x390 + 0x08 = 0x398
+// 0x390 + 0x18 = 0x3A8
 inline constexpr std::ptrdiff_t
     kItemHandleOffset =
         0x398;
@@ -68,14 +70,14 @@ inline constexpr std::ptrdiff_t
     kIsInItemFrameOffset =
         0x440;
 
-// libc++ std::string identifier inside Item.
+// Item libc++ std::string identifier.
 inline constexpr std::ptrdiff_t
     kItemIdentifierOffset =
         0xF0;
 
-// ============================================================
+// ============================================================================
 // ActorRenderData
-// ============================================================
+// ============================================================================
 
 inline constexpr std::ptrdiff_t
     kRenderDataActorOffset =
@@ -85,48 +87,67 @@ inline constexpr std::ptrdiff_t
     kRenderDataPositionOffset =
         0x10;
 
-// ============================================================
-// Matrix helpers - Minecraft 1.26.45.1
-// ============================================================
-
-// Tiny getter:
-//
-// ldr x8, [x0,#0x28]
-// ldr x8, [x8,#0x18]
-// add x0, x8,#0x48
-// ret
+// ============================================================================
+// MatrixStack - MC 1.26.45.1
+// ============================================================================
 
 inline constexpr std::uintptr_t
     kGetWorldMatrixRva =
         0x0A5C67C8;
 
-// MatrixStack::push(...)
 inline constexpr std::uintptr_t
     kMatrixStackPushRva =
         0x107CBFFC;
 
-// Correct matching MatrixStack ref destructor.
-//
-// NOTE:
-// 0x107CC618 contains another identical implementation,
-// but ItemRenderer 1.26.45.1 itself uses the second copy:
-//
-// 0x107CC6C0
 inline constexpr std::uintptr_t
     kMatrixStackRefDtorRva =
         0x107CC6C0;
 
-// ============================================================
+// ============================================================================
+// ItemStackBase::getBlockTypeForRendering()
+//
+// Vanilla ItemRenderer 1.26.45.1:
+//
+// add x0, ItemActor, #0x390
+// bl  0xF642ADC
+//
+// Return:
+// WeakPtr<BlockType const>&
+//
+// WeakPtr:
+// [0x00] SharedCounter*
+//
+// SharedCounter:
+// [0x00] BlockType*
+//
+// Vanilla immediately performs:
+//
+// ldr x8, [x0]
+// ldr BlockType, [x8]
+// ============================================================================
+
+inline constexpr std::uintptr_t
+    kGetBlockTypeForRenderingRva =
+        0x0F642ADC;
+
+// ============================================================================
 // BlockGraphics
-// ============================================================
+// ============================================================================
+
+// BlockGraphics::getForBlock(BlockType const&)
+//
+// This is the overload used directly by ItemRenderer.
+inline constexpr std::uintptr_t
+    kBlockGraphicsGetForBlockTypeRva =
+        0x0A2189DC;
 
 // BlockGraphics::getForBlock(Block const&)
 //
-// starts:
+// Used by our existing block-backed path.
+//
+// Internally:
 //
 // ldr x0, [x0,#0x68]
-//
-// proving Block::mBlockType remains +0x68.
 inline constexpr std::uintptr_t
     kBlockGraphicsGetForBlockRva =
         0x0A2189F0;
@@ -139,67 +160,52 @@ inline constexpr std::uintptr_t
     kBlockGraphicsGetBlockShapeRva =
         0x0A219718;
 
-// Vanilla ItemRenderer BlockShape classifier.
+// Vanilla block-shape classifier.
 inline constexpr std::uintptr_t
     kIsBlockShape3DRva =
         0x0A280E68;
 
-// ============================================================
+// ============================================================================
 // Block / BlockType
-// ============================================================
+// ============================================================================
 
 inline constexpr std::ptrdiff_t
     kBlockTypeOffset =
         0x68;
 
-// Layout remained compatible in 1.26.45.1.
-//
-// BlockType vptr + 0x50
-// = getVisualShape(...) slot.
 inline constexpr std::size_t
     kBlockTypeGetVisualShapeVtableOffset =
         0x50;
 
-// ============================================================
-// ItemRenderer private helper
+// ============================================================================
+// ItemRenderer private block helper
 //
-// Not currently hooked by the stable implementation.
-// Kept here for continued RE.
+// Not hooked.
+// Kept only as RE reference.
 //
-// It still:
-// - reads ItemActor +0x440
-// - recognizes Skull = 0x53 / 83
-// - contains skull translation -0.125
-// ============================================================
+// Skull is still:
+// BlockShape = 83 / 0x53.
+// ============================================================================
 
 inline constexpr std::uintptr_t
     kItemRendererRenderHelperRva =
         0x0A29EC90;
 
-// ============================================================
+// ============================================================================
 // ECS
-// ============================================================
+// ============================================================================
 
 inline constexpr std::uint32_t
     kOnGroundFlagComponentHash =
         0xC29078A0u;
 
-// ============================================================
-// Stronger ItemRenderer fingerprint
+// ============================================================================
+// ItemRenderer fingerprint
 //
-// IMPORTANT:
+// RVA 0xA29F708
 //
-// Previous fingerprint contained only 16 words.
-// Those 16 words are IDENTICAL between the old Minecraft
-// binary and 1.26.45.1, which is why the stale profile was
-// incorrectly accepted.
-//
-// This profile now uses 24 words.
-//
-// Word 21 differs between the two binaries, therefore the old
-// binary and the new binary can no longer silently share this
-// profile.
-// ============================================================
+// 24 words instead of the old 16-word fingerprint.
+// ============================================================================
 
 inline constexpr std::array<
     std::uint32_t,
@@ -232,89 +238,49 @@ inline constexpr std::array<
         0x52800801u,
 
         0xAA0003F4u,
-
-        // Minecraft 1.26.45.1-specific call encoding.
         0x9527B25Eu,
-
         0x36002240u,
         0x394ECE88u,
 };
 
-// ============================================================
-// Helper fingerprints
-//
-// These can be used next to harden verifyProfile() so future
-// Minecraft updates fail safely instead of calling a stale RVA.
-// ============================================================
+// ============================================================================
+// getBlockTypeForRendering fingerprint
+// ============================================================================
 
 inline constexpr std::array<
     std::uint32_t,
-    4>
-    kGetWorldMatrixFingerprint = {
+    7>
+    kGetBlockTypeForRenderingFingerprint = {
 
-        0xF9401408u,
-        0xF9400D08u,
-        0x91012100u,
-        0xD65F03C0u,
+        0xF9400408u,
+        0xB40000C8u,
+        0xF9400100u,
+        0xB4000080u,
+
+        0xF9400008u,
+        0xF9401D01u,
+        0xD61F0020u,
 };
 
-inline constexpr std::array<
-    std::uint32_t,
-    12>
-    kMatrixStackPushFingerprint = {
-
-        0xA9BE7BFDu,
-        0xA9014FF4u,
-        0x910003FDu,
-        0xAA0803F3u,
-
-        0xF9401408u,
-        0xAA0003F4u,
-        0x52800029u,
-        0x39010009u,
-
-        0x36000061u,
-        0xF9001A88u,
-        0x3900E289u,
-        0xF9401289u,
-};
+// ============================================================================
+// BlockGraphics(BlockType) fingerprint
+// ============================================================================
 
 inline constexpr std::array<
     std::uint32_t,
-    12>
-    kMatrixStackRefDtorFingerprint = {
-
-        0xA9BE7BFDu,
-        0xA9014FF4u,
-        0x910003FDu,
-        0xF9400013u,
-
-        0xB4000453u,
-        0x3940E268u,
-        0x52800029u,
-        0x39010269u,
-
-        0x360000E8u,
-        0xA942AA68u,
-        0xD1000509u,
-        0xEB0A013Fu,
-};
-
-inline constexpr std::array<
-    std::uint32_t,
-    8>
-    kBlockGraphicsGetForBlockFingerprint = {
+    5>
+    kBlockGraphicsGetForBlockTypeFingerprint = {
 
         0xA9BF7BFDu,
         0x910003FDu,
-        0xF9403400u,
-        0x9556EC72u,
-
-        0x955A115Fu,
-        0x90041CC8u,
-        0xF9454509u,
-        0xB4000709u,
+        0x9556EC78u,
+        0xA8C17BFDu,
+        0x17FFFFA1u,
 };
+
+// ============================================================================
+// getBlockShape fingerprint
+// ============================================================================
 
 inline constexpr std::array<
     std::uint32_t,
