@@ -1,6 +1,5 @@
 #include "ItemPhysicsConfig.hpp"
 #include "ItemPhysicsRuntime.hpp"
-#include "ItemShadowRuntime.hpp"
 
 #include <cerrno>
 #include <cmath>
@@ -25,6 +24,12 @@ constexpr std::string_view kModuleId =
 
 // ============================================================================
 // Config keys
+//
+// These strings MUST match the keys supplied to ModuleBuilder::config() and
+// handleConfigChanged().
+//
+// Mod Menu does not automatically expose every field from
+// ItemPhysicsConfig::Schema. Therefore every slider must be registered here.
 // ============================================================================
 
 constexpr std::string_view kEnabledKey =
@@ -167,7 +172,8 @@ public:
     static LeviItemPhysicsMod
         value;
 
-    return value;
+    return
+        value;
   }
 
   LeviItemPhysicsMod()
@@ -196,6 +202,13 @@ public:
       return false;
     }
 
+    // ------------------------------------------------------------------------
+    // Migrate / clamp old config.
+    //
+    // With version 5 this also creates defaults for all new ground-height
+    // fields when upgrading from the previous version.
+    // ------------------------------------------------------------------------
+
     normalize(
         mConfig->value());
 
@@ -205,12 +218,12 @@ public:
           "Loaded config but failed to persist normalization");
     }
 
+    // ------------------------------------------------------------------------
+    // Push the current config into the native renderer.
+    // ------------------------------------------------------------------------
+
     mRuntime.applyConfig(
         mConfig->value());
-
-    // Shadow suppression follows the master Item Physics toggle.
-    mShadowRuntime.setEnabled(
-        mConfig->value().enabled);
 
     mSelf.getLogger().info(
         "Loaded Item Physics config from {}",
@@ -228,28 +241,23 @@ public:
     const auto snapshot =
         snapshotConfig();
 
+    // Runtime receives config before hook installation.
     mRuntime.applyConfig(
         snapshot);
 
-    mShadowRuntime.setEnabled(
-        snapshot.enabled);
-
-    const bool physicsHookActive =
+    const bool hookActive =
         mRuntime.install(
-            mSelf);
-
-    // ------------------------------------------------------------------------
-    // Shadow hook is deliberately separate from ItemRenderer physics.
-    //
-    // A shadow-hook failure does NOT disable the physics runtime.
-    // ------------------------------------------------------------------------
-
-    const bool shadowHookActive =
-        mShadowRuntime.install(
             mSelf);
 
     // ========================================================================
     // MOD MENU
+    //
+    // IMPORTANT:
+    //
+    // Every option visible in Levi Mod Menu MUST be explicitly registered
+    // here.
+    //
+    // ItemPhysicsConfig::Schema alone is NOT enough.
     // ========================================================================
 
     const bool registered =
@@ -268,8 +276,8 @@ public:
                 mSelf.getId())
 
             .description(
-                "Atlas/Java-style dropped item physics with "
-                "dropped-item shadow suppression.")
+                "Atlas/Java-style dropped item physics. "
+                "Client-side renderer only.")
 
             .defaultEnabled(
                 snapshot.enabled)
@@ -357,6 +365,8 @@ public:
 
             // ================================================================
             // ORDINARY FLAT ITEM
+            //
+            // Sword / pickaxe / tools / food / ingot / ordinary 2D items.
             // ================================================================
 
             .config(
@@ -529,7 +539,6 @@ public:
       mSelf.getLogger().error(
           "Failed to register Item Physics in Mod Menu");
 
-      mShadowRuntime.uninstall();
       mRuntime.uninstall();
 
       return false;
@@ -538,28 +547,17 @@ public:
     mModuleRegistered =
         true;
 
-    if (physicsHookActive) {
+    if (hookActive) {
 
       mSelf.getLogger().info(
-          "Item Physics renderer hook active");
+          "Item Physics enabled and registered in Mod Menu "
+          "with Ground Height V4 sliders");
 
     } else {
 
       mSelf.getLogger().warn(
           "Item Physics registered in Mod Menu, "
-          "but ItemRenderer physics hook is inactive");
-    }
-
-    if (shadowHookActive) {
-
-      mSelf.getLogger().info(
-          "Dropped-item shadow suppression hook active");
-
-    } else {
-
-      mSelf.getLogger().warn(
-          "Dropped-item shadow suppression is inactive; "
-          "physics remains available");
+          "but runtime hook is inactive for this Minecraft binary");
     }
 
     return true;
@@ -573,7 +571,6 @@ public:
 
     unregisterMenu();
 
-    mShadowRuntime.uninstall();
     mRuntime.uninstall();
 
     mSelf.getLogger().info(
@@ -590,7 +587,6 @@ public:
 
     unregisterMenu();
 
-    mShadowRuntime.uninstall();
     mRuntime.uninstall();
 
     std::lock_guard lock(
@@ -611,11 +607,6 @@ private:
 
   ItemPhysicsRuntime
       mRuntime;
-
-  // Shadow rendering is kept separate from ItemPhysicsRuntime so this change
-  // cannot alter item transform, ground-height categories or landing physics.
-  ItemShadowRuntime
-      mShadowRuntime;
 
   // ==========================================================================
   // Config
@@ -654,11 +645,12 @@ private:
     normalize(
         value);
 
-    return value;
+    return
+        value;
   }
 
   // ==========================================================================
-  // Persist + live apply
+  // Persist + apply
   // ==========================================================================
 
   void persistAndApplyLocked(
@@ -669,18 +661,16 @@ private:
       return;
     }
 
+    // Clamp sliders and handle migration.
     normalize(
         mConfig->value());
 
+    // Apply immediately.
+    //
+    // This is what makes moving a slider update item rendering without
+    // rebuilding or restarting the mod.
     mRuntime.applyConfig(
         mConfig->value());
-
-    // Hooks remain installed while the native mod is active.
-    //
-    // If the user switches Item Physics OFF, shadow detours stop suppressing
-    // SimpleItemShadow and immediately delegate to vanilla again.
-    mShadowRuntime.setEnabled(
-        mConfig->value().enabled);
 
     if (mConfig->save()) {
 
@@ -753,6 +743,8 @@ private:
 
   // ==========================================================================
   // Config callback
+  //
+  // Every ModuleBuilder key above MUST have a corresponding branch here.
   // ==========================================================================
 
   void handleConfigChanged(
@@ -825,7 +817,7 @@ private:
     }
 
     // ========================================================================
-    // Ordinary flat-item height
+    // Ordinary flat item height
     // ========================================================================
 
     else if (
@@ -933,6 +925,8 @@ private:
 
     // ========================================================================
     // Live apply
+    //
+    // Slider movement takes effect immediately.
     // ========================================================================
 
     persistAndApplyLocked(
