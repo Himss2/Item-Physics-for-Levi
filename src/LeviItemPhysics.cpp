@@ -15,8 +15,22 @@
 
 namespace itemphysics {
 
+// ============================================================================
+// Module
+// ============================================================================
+
 constexpr std::string_view kModuleId =
     "item_physics.main";
+
+// ============================================================================
+// Config keys
+//
+// These strings MUST match the keys supplied to ModuleBuilder::config() and
+// handleConfigChanged().
+//
+// Mod Menu does not automatically expose every field from
+// ItemPhysicsConfig::Schema. Therefore every slider must be registered here.
+// ============================================================================
 
 constexpr std::string_view kEnabledKey =
     "enabled";
@@ -35,6 +49,35 @@ constexpr std::string_view kGroundTiltKey =
 
 constexpr std::string_view kHeightOffsetKey =
     "heightOffset";
+
+// ============================================================================
+// Ground Height V4
+// ============================================================================
+
+constexpr std::string_view kBlockGroundHeightKey =
+    "blockGroundHeight";
+
+constexpr std::string_view kThinBlockGroundHeightKey =
+    "thinBlockGroundHeight";
+
+constexpr std::string_view kTorchGroundHeightKey =
+    "torchGroundHeight";
+
+constexpr std::string_view kShapedBlockGroundHeightKey =
+    "shapedBlockGroundHeight";
+
+constexpr std::string_view kSkullGroundHeightKey =
+    "skullGroundHeight";
+
+constexpr std::string_view kShieldGroundHeightKey =
+    "shieldGroundHeight";
+
+constexpr std::string_view kBannerGroundHeightKey =
+    "bannerGroundHeight";
+
+// ============================================================================
+// Parsing helpers
+// ============================================================================
 
 bool parseBool(
     std::string_view value,
@@ -69,7 +112,8 @@ double parseDouble(
   char *end =
       nullptr;
 
-  errno = 0;
+  errno =
+      0;
 
   const double parsed =
       std::strtod(
@@ -78,8 +122,12 @@ double parseDouble(
 
   if (end ==
           text.c_str() ||
+
       *end != '\0' ||
-      errno == ERANGE ||
+
+      errno ==
+          ERANGE ||
+
       !std::isfinite(
           parsed)) {
 
@@ -88,6 +136,10 @@ double parseDouble(
 
   return parsed;
 }
+
+// ============================================================================
+// Mod Menu value conversion
+// ============================================================================
 
 std::string boolText(
     bool value) {
@@ -108,20 +160,30 @@ std::string numberText(
   return stream.str();
 }
 
+// ============================================================================
+// Levi Item Physics
+// ============================================================================
+
 class LeviItemPhysicsMod {
 public:
   static LeviItemPhysicsMod &
   instance() {
 
-    static LeviItemPhysicsMod value;
+    static LeviItemPhysicsMod
+        value;
 
-    return value;
+    return
+        value;
   }
 
   LeviItemPhysicsMod()
       : mSelf(
             *ll::mod::
                 NativeMod::current()) {}
+
+  // ==========================================================================
+  // LOAD
+  // ==========================================================================
 
   bool load() {
 
@@ -140,6 +202,13 @@ public:
       return false;
     }
 
+    // ------------------------------------------------------------------------
+    // Migrate / clamp old config.
+    //
+    // With version 5 this also creates defaults for all new ground-height
+    // fields when upgrading from the previous version.
+    // ------------------------------------------------------------------------
+
     normalize(
         mConfig->value());
 
@@ -148,6 +217,10 @@ public:
       mSelf.getLogger().warn(
           "Loaded config but failed to persist normalization");
     }
+
+    // ------------------------------------------------------------------------
+    // Push the current config into the native renderer.
+    // ------------------------------------------------------------------------
 
     mRuntime.applyConfig(
         mConfig->value());
@@ -159,11 +232,16 @@ public:
     return true;
   }
 
+  // ==========================================================================
+  // ENABLE
+  // ==========================================================================
+
   bool enable() {
 
     const auto snapshot =
         snapshotConfig();
 
+    // Runtime receives config before hook installation.
     mRuntime.applyConfig(
         snapshot);
 
@@ -171,12 +249,28 @@ public:
         mRuntime.install(
             mSelf);
 
+    // ========================================================================
+    // MOD MENU
+    //
+    // IMPORTANT:
+    //
+    // Every option visible in Levi Mod Menu MUST be explicitly registered
+    // here.
+    //
+    // ItemPhysicsConfig::Schema alone is NOT enough.
+    // ========================================================================
+
     const bool registered =
         pl::modmenu::
             ModuleBuilder(
                 std::string(
                     kModuleId),
+
                 "Item Physics")
+
+            // ----------------------------------------------------------------
+            // Module
+            // ----------------------------------------------------------------
 
             .modId(
                 mSelf.getId())
@@ -191,6 +285,10 @@ public:
             .onToggle(
                 onToggle)
 
+            // ================================================================
+            // GENERAL
+            // ================================================================
+
             .config(
                 std::string(
                     kSingleModelKey),
@@ -198,10 +296,15 @@ public:
                 "Single Model",
 
                 pl::modmenu::
-                    ConfigType::Toggle,
+                    ConfigType::
+                        Toggle,
 
                 boolText(
                     snapshot.singleModel))
+
+            // ================================================================
+            // PHYSICS
+            // ================================================================
 
             .config(
                 std::string(
@@ -260,6 +363,12 @@ public:
                 numberText(
                     kMaxGroundTilt))
 
+            // ================================================================
+            // ORDINARY FLAT ITEM
+            //
+            // Sword / pickaxe / tools / food / ingot / ordinary 2D items.
+            // ================================================================
+
             .config(
                 std::string(
                     kHeightOffsetKey),
@@ -278,6 +387,147 @@ public:
 
                 numberText(
                     kMaxHeightOffset))
+
+            // ================================================================
+            // GROUND HEIGHT V4
+            // ================================================================
+
+            .config(
+                std::string(
+                    kBlockGroundHeightKey),
+
+                "Block Ground Height",
+
+                pl::modmenu::
+                    ConfigType::
+                        SliderFloat,
+
+                numberText(
+                    snapshot.blockGroundHeight),
+
+                numberText(
+                    kMinGroundHeight),
+
+                numberText(
+                    kMaxGroundHeight))
+
+            .config(
+                std::string(
+                    kThinBlockGroundHeightKey),
+
+                "Thin Block Height",
+
+                pl::modmenu::
+                    ConfigType::
+                        SliderFloat,
+
+                numberText(
+                    snapshot.thinBlockGroundHeight),
+
+                numberText(
+                    kMinGroundHeight),
+
+                numberText(
+                    kMaxGroundHeight))
+
+            .config(
+                std::string(
+                    kTorchGroundHeightKey),
+
+                "Torch / Cross Height",
+
+                pl::modmenu::
+                    ConfigType::
+                        SliderFloat,
+
+                numberText(
+                    snapshot.torchGroundHeight),
+
+                numberText(
+                    kMinGroundHeight),
+
+                numberText(
+                    kMaxGroundHeight))
+
+            .config(
+                std::string(
+                    kShapedBlockGroundHeightKey),
+
+                "Shaped Block Height",
+
+                pl::modmenu::
+                    ConfigType::
+                        SliderFloat,
+
+                numberText(
+                    snapshot.shapedBlockGroundHeight),
+
+                numberText(
+                    kMinGroundHeight),
+
+                numberText(
+                    kMaxGroundHeight))
+
+            .config(
+                std::string(
+                    kSkullGroundHeightKey),
+
+                "Head / Skull Height",
+
+                pl::modmenu::
+                    ConfigType::
+                        SliderFloat,
+
+                numberText(
+                    snapshot.skullGroundHeight),
+
+                numberText(
+                    kMinGroundHeight),
+
+                numberText(
+                    kMaxGroundHeight))
+
+            .config(
+                std::string(
+                    kShieldGroundHeightKey),
+
+                "Shield Height",
+
+                pl::modmenu::
+                    ConfigType::
+                        SliderFloat,
+
+                numberText(
+                    snapshot.shieldGroundHeight),
+
+                numberText(
+                    kMinGroundHeight),
+
+                numberText(
+                    kMaxGroundHeight))
+
+            .config(
+                std::string(
+                    kBannerGroundHeightKey),
+
+                "Banner Height",
+
+                pl::modmenu::
+                    ConfigType::
+                        SliderFloat,
+
+                numberText(
+                    snapshot.bannerGroundHeight),
+
+                numberText(
+                    kMinGroundHeight),
+
+                numberText(
+                    kMaxGroundHeight))
+
+            // ================================================================
+            // CONFIG CALLBACK
+            // ================================================================
 
             .onConfigChanged(
                 onConfigChanged)
@@ -300,7 +550,8 @@ public:
     if (hookActive) {
 
       mSelf.getLogger().info(
-          "Item Physics enabled and registered in Mod Menu");
+          "Item Physics enabled and registered in Mod Menu "
+          "with Ground Height V4 sliders");
 
     } else {
 
@@ -311,6 +562,10 @@ public:
 
     return true;
   }
+
+  // ==========================================================================
+  // DISABLE
+  // ==========================================================================
 
   bool disable() {
 
@@ -323,6 +578,10 @@ public:
 
     return true;
   }
+
+  // ==========================================================================
+  // UNLOAD
+  // ==========================================================================
 
   bool unload() {
 
@@ -339,11 +598,19 @@ public:
   }
 
 private:
+  // ==========================================================================
+  // Runtime
+  // ==========================================================================
+
   ll::mod::NativeMod &
-  mSelf;
+      mSelf;
 
   ItemPhysicsRuntime
       mRuntime;
+
+  // ==========================================================================
+  // Config
+  // ==========================================================================
 
   std::mutex
       mConfigMutex;
@@ -354,7 +621,12 @@ private:
               ItemPhysicsConfig>>
       mConfig;
 
-  bool mModuleRegistered{};
+  bool
+      mModuleRegistered{};
+
+  // ==========================================================================
+  // Config snapshot
+  // ==========================================================================
 
   ItemPhysicsConfig
   snapshotConfig() {
@@ -363,6 +635,7 @@ private:
         mConfigMutex);
 
     if (!mConfig) {
+
       return {};
     }
 
@@ -372,19 +645,30 @@ private:
     normalize(
         value);
 
-    return value;
+    return
+        value;
   }
+
+  // ==========================================================================
+  // Persist + apply
+  // ==========================================================================
 
   void persistAndApplyLocked(
       std::string_view reason) {
 
     if (!mConfig) {
+
       return;
     }
 
+    // Clamp sliders and handle migration.
     normalize(
         mConfig->value());
 
+    // Apply immediately.
+    //
+    // This is what makes moving a slider update item rendering without
+    // rebuilding or restarting the mod.
     mRuntime.applyConfig(
         mConfig->value());
 
@@ -402,13 +686,18 @@ private:
     }
   }
 
+  // ==========================================================================
+  // Static callbacks
+  // ==========================================================================
+
   static void onToggle(
       std::string_view moduleId,
       bool enabled) {
 
-    instance().handleToggle(
-        moduleId,
-        enabled);
+    instance().
+        handleToggle(
+            moduleId,
+            enabled);
   }
 
   static void onConfigChanged(
@@ -416,11 +705,16 @@ private:
       std::string_view key,
       std::string_view value) {
 
-    instance().handleConfigChanged(
-        moduleId,
-        key,
-        value);
+    instance().
+        handleConfigChanged(
+            moduleId,
+            key,
+            value);
   }
+
+  // ==========================================================================
+  // Module toggle
+  // ==========================================================================
 
   void handleToggle(
       std::string_view moduleId,
@@ -436,6 +730,7 @@ private:
         mConfigMutex);
 
     if (!mConfig) {
+
       return;
     }
 
@@ -445,6 +740,12 @@ private:
     persistAndApplyLocked(
         "module toggle");
   }
+
+  // ==========================================================================
+  // Config callback
+  //
+  // Every ModuleBuilder key above MUST have a corresponding branch here.
+  // ==========================================================================
 
   void handleConfigChanged(
       std::string_view moduleId,
@@ -461,11 +762,16 @@ private:
         mConfigMutex);
 
     if (!mConfig) {
+
       return;
     }
 
     auto &config =
         mConfig->value();
+
+    // ========================================================================
+    // General
+    // ========================================================================
 
     if (key ==
         kSingleModelKey) {
@@ -474,8 +780,13 @@ private:
           parseBool(
               value,
               config.singleModel);
+    }
 
-    } else if (
+    // ========================================================================
+    // Physics
+    // ========================================================================
+
+    else if (
         key ==
         kRotationSpeedKey) {
 
@@ -483,8 +794,9 @@ private:
           parseDouble(
               value,
               config.rotationSpeed);
+    }
 
-    } else if (
+    else if (
         key ==
         kSettleSpeedKey) {
 
@@ -492,8 +804,9 @@ private:
           parseDouble(
               value,
               config.settleSpeed);
+    }
 
-    } else if (
+    else if (
         key ==
         kGroundTiltKey) {
 
@@ -501,8 +814,13 @@ private:
           parseDouble(
               value,
               config.groundTilt);
+    }
 
-    } else if (
+    // ========================================================================
+    // Ordinary flat item height
+    // ========================================================================
+
+    else if (
         key ==
         kHeightOffsetKey) {
 
@@ -510,8 +828,87 @@ private:
           parseDouble(
               value,
               config.heightOffset);
+    }
 
-    } else if (
+    // ========================================================================
+    // Ground Height V4
+    // ========================================================================
+
+    else if (
+        key ==
+        kBlockGroundHeightKey) {
+
+      config.blockGroundHeight =
+          parseDouble(
+              value,
+              config.blockGroundHeight);
+    }
+
+    else if (
+        key ==
+        kThinBlockGroundHeightKey) {
+
+      config.thinBlockGroundHeight =
+          parseDouble(
+              value,
+              config.thinBlockGroundHeight);
+    }
+
+    else if (
+        key ==
+        kTorchGroundHeightKey) {
+
+      config.torchGroundHeight =
+          parseDouble(
+              value,
+              config.torchGroundHeight);
+    }
+
+    else if (
+        key ==
+        kShapedBlockGroundHeightKey) {
+
+      config.shapedBlockGroundHeight =
+          parseDouble(
+              value,
+              config.shapedBlockGroundHeight);
+    }
+
+    else if (
+        key ==
+        kSkullGroundHeightKey) {
+
+      config.skullGroundHeight =
+          parseDouble(
+              value,
+              config.skullGroundHeight);
+    }
+
+    else if (
+        key ==
+        kShieldGroundHeightKey) {
+
+      config.shieldGroundHeight =
+          parseDouble(
+              value,
+              config.shieldGroundHeight);
+    }
+
+    else if (
+        key ==
+        kBannerGroundHeightKey) {
+
+      config.bannerGroundHeight =
+          parseDouble(
+              value,
+              config.bannerGroundHeight);
+    }
+
+    // ========================================================================
+    // Enabled
+    // ========================================================================
+
+    else if (
         key ==
         kEnabledKey) {
 
@@ -519,24 +916,37 @@ private:
           parseBool(
               value,
               config.enabled);
+    }
 
-    } else {
+    else {
 
       return;
     }
+
+    // ========================================================================
+    // Live apply
+    //
+    // Slider movement takes effect immediately.
+    // ========================================================================
 
     persistAndApplyLocked(
         key);
   }
 
+  // ==========================================================================
+  // Mod Menu unregister
+  // ==========================================================================
+
   void unregisterMenu() {
 
     if (!mModuleRegistered) {
+
       return;
     }
 
-    pl::modmenu::unregisterModule(
-        kModuleId);
+    pl::modmenu::
+        unregisterModule(
+            kModuleId);
 
     mModuleRegistered =
         false;
