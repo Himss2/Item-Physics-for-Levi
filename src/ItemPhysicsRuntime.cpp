@@ -18,36 +18,39 @@ constexpr float kDegToRad =
 constexpr auto kStateTtl =
     std::chrono::seconds(8);
 
-// ============================================================
-// Atlas constants
-// ============================================================
+// ============================================================================
+// Atlas ordinary-item transform
+// ============================================================================
 
-// Atlas ordinary non-block item:
-// local Y translation performed AFTER rotations.
 constexpr float kAtlasFlatLocalY =
     0.25f;
 
-// ============================================================
-// Skull / Head fix
-// ============================================================
+// ============================================================================
+// Skull
+// ============================================================================
 
-// BlockShape::Skull
-constexpr std::int32_t kSkullBlockShape =
-    83;
+constexpr std::int32_t
+    kSkullBlockShape =
+        83;
 
 // IMPORTANT:
 //
-// This correction applies ONLY to grounded skull/head block
-// items.
+// No manual SkullGroundLift.
 //
-// Previous 0.125 was not enough.
-// Do not apply this value globally.
-constexpr float kSkullGroundLift =
-    0.25f;
+// Correct classification is the fix.
+//
+// When Skull enters BlockItem:
+//
+// - it no longer receives -0.38
+// - it no longer receives ordinary-item +0.25
+// - it no longer settles to Rx = 90
+//
+// This reproduces the earlier state where head rendering was correct.
+// ============================================================================
 
-// ============================================================
-// Thin horizontal block detection
-// ============================================================
+// ============================================================================
+// Thin horizontal detection
+// ============================================================================
 
 constexpr float kThinYRatio =
     0.70f;
@@ -55,9 +58,9 @@ constexpr float kThinYRatio =
 constexpr float kExtentEpsilon =
     0.0005f;
 
-// ============================================================
+// ============================================================================
 // Atlas special item identifiers
-// ============================================================
+// ============================================================================
 
 constexpr std::string_view kShieldId =
     "minecraft:shield";
@@ -65,9 +68,9 @@ constexpr std::string_view kShieldId =
 constexpr std::string_view kBannerId =
     "minecraft:banner";
 
-// ============================================================
+// ============================================================================
 // MatrixStack scope
-// ============================================================
+// ============================================================================
 
 class MatrixPushScope {
 public:
@@ -136,17 +139,17 @@ private:
 
 } // namespace
 
-// ============================================================
-// Static instance
-// ============================================================
+// ============================================================================
+// Static
+// ============================================================================
 
 ItemPhysicsRuntime *
 ItemPhysicsRuntime::sInstance =
     nullptr;
 
-// ============================================================
+// ============================================================================
 // Config
-// ============================================================
+// ============================================================================
 
 void ItemPhysicsRuntime::applyConfig(
     const ItemPhysicsConfig &config) noexcept {
@@ -180,51 +183,114 @@ void ItemPhysicsRuntime::applyConfig(
       std::memory_order_relaxed);
 }
 
-// ============================================================
-// Profile validation
-// ============================================================
+// ============================================================================
+// Profile verification
+// ============================================================================
 
 bool ItemPhysicsRuntime::verifyProfile(
     const ResolvedVirtual &resolved,
     ll::mod::NativeMod &mod) const {
 
-  const auto target =
-      resolved.target;
+  const auto verifyWords =
+      [&](
+          std::uintptr_t address,
+          const auto &fingerprint,
+          const char *name) {
 
-  constexpr auto bytes =
-      profile::kRenderFingerprint.size() *
-      sizeof(std::uint32_t);
+        const std::size_t bytes =
+            fingerprint.size() *
+            sizeof(std::uint32_t);
 
-  if (!resolved.module.readable(
-          target,
-          bytes)) {
+        if (!resolved.module.readable(
+                address,
+                bytes)) {
 
-    mod.getLogger().warn(
-        "ItemRenderer target is not readable");
+          mod.getLogger().warn(
+              "{} is not readable",
+              name);
+
+          return false;
+        }
+
+        const auto *words =
+            reinterpret_cast<
+                const std::uint32_t *>(
+                address);
+
+        for (std::size_t i = 0;
+             i < fingerprint.size();
+             ++i) {
+
+          if (words[i] !=
+              fingerprint[i]) {
+
+            mod.getLogger().warn(
+                "Minecraft profile mismatch: "
+                "{} word {}",
+                name,
+                i);
+
+            return false;
+          }
+        }
+
+        return true;
+      };
+
+  // --------------------------------------------------------------------------
+  // Main ItemRenderer
+  // --------------------------------------------------------------------------
+
+  if (!verifyWords(
+          resolved.target,
+          profile::
+              kRenderFingerprint,
+          "ItemRenderer::render")) {
 
     return false;
   }
 
-  const auto *words =
-      reinterpret_cast<
-          const std::uint32_t *>(
-          target);
+  // --------------------------------------------------------------------------
+  // New 1.26.45 renderer block path.
+  // --------------------------------------------------------------------------
 
-  for (std::size_t i = 0;
-       i <
-       profile::kRenderFingerprint.size();
-       ++i) {
+  if (!verifyWords(
+          resolved.module.base +
+              profile::
+                  kGetBlockTypeForRenderingRva,
 
-    if (words[i] !=
-        profile::kRenderFingerprint[i]) {
+          profile::
+              kGetBlockTypeForRenderingFingerprint,
 
-      mod.getLogger().warn(
-          "Unsupported Minecraft profile: "
-          "ItemRenderer fingerprint mismatch at word {}",
-          i);
+          "ItemStackBase::getBlockTypeForRendering")) {
 
-      return false;
-    }
+    return false;
+  }
+
+  if (!verifyWords(
+          resolved.module.base +
+              profile::
+                  kBlockGraphicsGetForBlockTypeRva,
+
+          profile::
+              kBlockGraphicsGetForBlockTypeFingerprint,
+
+          "BlockGraphics::getForBlock(BlockType)")) {
+
+    return false;
+  }
+
+  if (!verifyWords(
+          resolved.module.base +
+              profile::
+                  kBlockGraphicsGetBlockShapeRva,
+
+          profile::
+              kBlockGraphicsGetBlockShapeFingerprint,
+
+          "BlockGraphics::getBlockShape")) {
+
+    return false;
   }
 
   const auto executable =
@@ -236,23 +302,35 @@ bool ItemPhysicsRuntime::verifyProfile(
       };
 
   if (!executable(
-          profile::kGetWorldMatrixRva) ||
+          profile::
+              kGetWorldMatrixRva) ||
 
       !executable(
-          profile::kMatrixStackPushRva) ||
+          profile::
+              kMatrixStackPushRva) ||
 
       !executable(
-          profile::kMatrixStackRefDtorRva) ||
+          profile::
+              kMatrixStackRefDtorRva) ||
 
       !executable(
-          profile::kBlockGraphicsGetForBlockRva) ||
+          profile::
+              kGetBlockTypeForRenderingRva) ||
 
       !executable(
-          profile::kBlockGraphicsGetBlockShapeRva)) {
+          profile::
+              kBlockGraphicsGetForBlockTypeRva) ||
+
+      !executable(
+          profile::
+              kBlockGraphicsGetForBlockRva) ||
+
+      !executable(
+          profile::
+              kBlockGraphicsGetBlockShapeRva)) {
 
     mod.getLogger().warn(
-        "Unsupported Minecraft profile: "
-        "renderer helper validation failed");
+        "Minecraft 1.26.45 renderer helper validation failed");
 
     return false;
   }
@@ -260,9 +338,9 @@ bool ItemPhysicsRuntime::verifyProfile(
   return true;
 }
 
-// ============================================================
+// ============================================================================
 // Install
-// ============================================================
+// ============================================================================
 
 bool ItemPhysicsRuntime::install(
     ll::mod::NativeMod &mod) {
@@ -271,8 +349,12 @@ bool ItemPhysicsRuntime::install(
 
   auto resolved =
       resolveVirtualByRtti(
-          profile::kMinecraftModule,
-          profile::kItemRendererRtti,
+          profile::
+              kMinecraftModule,
+
+          profile::
+              kItemRendererRtti,
+
           profile::
               kItemRendererRenderVtableOffset);
 
@@ -290,7 +372,8 @@ bool ItemPhysicsRuntime::install(
           mod)) {
 
     mod.getLogger().warn(
-        "Item Physics remains in safe passthrough mode");
+        "Item Physics safe passthrough: "
+        "Minecraft profile unsupported");
 
     return false;
   }
@@ -304,6 +387,7 @@ bool ItemPhysicsRuntime::install(
   mGetWorldMatrix =
       reinterpret_cast<
           GetWorldMatrixFn>(
+
           mMinecraftBase +
           profile::
               kGetWorldMatrixRva);
@@ -311,6 +395,7 @@ bool ItemPhysicsRuntime::install(
   mMatrixPush =
       reinterpret_cast<
           MatrixPushFn>(
+
           mMinecraftBase +
           profile::
               kMatrixStackPushRva);
@@ -318,13 +403,39 @@ bool ItemPhysicsRuntime::install(
   mMatrixRefDtor =
       reinterpret_cast<
           MatrixRefDtorFn>(
+
           mMinecraftBase +
           profile::
               kMatrixStackRefDtorRva);
 
+  // --------------------------------------------------------------------------
+  // EXACT vanilla block-rendering path.
+  // --------------------------------------------------------------------------
+
+  mGetBlockTypeForRendering =
+      reinterpret_cast<
+          GetBlockTypeForRenderingFn>(
+
+          mMinecraftBase +
+          profile::
+              kGetBlockTypeForRenderingRva);
+
+  mGetBlockGraphicsForBlockType =
+      reinterpret_cast<
+          BlockGraphicsGetForBlockTypeFn>(
+
+          mMinecraftBase +
+          profile::
+              kBlockGraphicsGetForBlockTypeRva);
+
+  // --------------------------------------------------------------------------
+  // Existing Block const* path.
+  // --------------------------------------------------------------------------
+
   mGetBlockGraphicsForBlock =
       reinterpret_cast<
           BlockGraphicsGetForBlockFn>(
+
           mMinecraftBase +
           profile::
               kBlockGraphicsGetForBlockRva);
@@ -332,6 +443,7 @@ bool ItemPhysicsRuntime::install(
   mGetBlockGraphicsShape =
       reinterpret_cast<
           BlockGraphicsGetBlockShapeFn>(
+
           mMinecraftBase +
           profile::
               kBlockGraphicsGetBlockShapeRva);
@@ -341,13 +453,6 @@ bool ItemPhysicsRuntime::install(
 
   mOriginal =
       nullptr;
-
-  // ==========================================================
-  // Only ItemRenderer::render is hooked.
-  //
-  // No private helper hook.
-  // This matches the Atlas behavior we RE'd.
-  // ==========================================================
 
   mHook =
       std::make_unique<
@@ -386,14 +491,14 @@ bool ItemPhysicsRuntime::install(
 
   mod.getLogger().info(
       "Item Physics active: "
-      "Atlas baseline + safe isolated skull lift");
+      "Minecraft 1.26.45 + vanilla render-shape skull detection");
 
   return true;
 }
 
-// ============================================================
+// ============================================================================
 // Uninstall
-// ============================================================
+// ============================================================================
 
 void ItemPhysicsRuntime::uninstall() {
 
@@ -404,6 +509,7 @@ void ItemPhysicsRuntime::uninstall() {
   if (mHook) {
 
     mHook->reset();
+
     mHook.reset();
   }
 
@@ -426,6 +532,12 @@ void ItemPhysicsRuntime::uninstall() {
   mMatrixRefDtor =
       nullptr;
 
+  mGetBlockTypeForRendering =
+      nullptr;
+
+  mGetBlockGraphicsForBlockType =
+      nullptr;
+
   mGetBlockGraphicsForBlock =
       nullptr;
 
@@ -441,9 +553,9 @@ void ItemPhysicsRuntime::uninstall() {
   clearStates();
 }
 
-// ============================================================
-// State
-// ============================================================
+// ============================================================================
+// State reset
+// ============================================================================
 
 void ItemPhysicsRuntime::clearStates() {
 
@@ -456,9 +568,9 @@ void ItemPhysicsRuntime::clearStates() {
       0;
 }
 
-// ============================================================
-// Main detour
-// ============================================================
+// ============================================================================
+// Detour
+// ============================================================================
 
 void ItemPhysicsRuntime::renderDetour(
     void *self,
@@ -474,9 +586,9 @@ void ItemPhysicsRuntime::renderDetour(
   }
 }
 
-// ============================================================
+// ============================================================================
 // Math
-// ============================================================
+// ============================================================================
 
 float ItemPhysicsRuntime::seededUnit(
     std::uint32_t seed) noexcept {
@@ -537,14 +649,9 @@ float ItemPhysicsRuntime::approachAngle(
               1.0f));
 }
 
-// ============================================================
-// libc++ std::string
-//
-// Used ONLY for ordinary non-block special cases:
-// shield / banner.
-//
-// We DO NOT use this path for heads anymore.
-// ============================================================
+// ============================================================================
+// libc++ string
+// ============================================================================
 
 bool ItemPhysicsRuntime::libcxxStringEquals(
     std::uintptr_t stringAddress,
@@ -568,7 +675,8 @@ bool ItemPhysicsRuntime::libcxxStringEquals(
   const char *data =
       nullptr;
 
-  if ((flag & 1u) ==
+  if ((flag &
+       1u) ==
       0) {
 
     length =
@@ -609,16 +717,118 @@ bool ItemPhysicsRuntime::libcxxStringEquals(
              0;
 }
 
-// ============================================================
-// Block compatibility
-//
-// Atlas itself does not use the AABB to rotate every block.
-//
-// We only use VisualShape to detect clearly horizontal/thin
-// block models.
-//
-// Everything else stays on the Atlas baseline.
-// ============================================================
+// ============================================================================
+// Vanilla ItemRenderer render-shape lookup
+// ============================================================================
+
+bool ItemPhysicsRuntime::tryGetRenderBlockShape(
+    std::uintptr_t actorAddress,
+    std::int32_t &shape) const noexcept {
+
+  shape =
+      -1;
+
+  if (!actorAddress ||
+      !mGetBlockTypeForRendering ||
+      !mGetBlockGraphicsForBlockType ||
+      !mGetBlockGraphicsShape) {
+
+    return false;
+  }
+
+  // --------------------------------------------------------------------------
+  // ItemStackBase inside ItemActor.
+  // --------------------------------------------------------------------------
+
+  const void *itemStackBase =
+      reinterpret_cast<
+          const void *>(
+
+          actorAddress +
+          profile::
+              kItemStackBaseOffset);
+
+  // --------------------------------------------------------------------------
+  // WeakPtr<BlockType const>&
+  //
+  // Vanilla call:
+  //
+  // add x0, actor, #0x390
+  // bl getBlockTypeForRendering
+  // --------------------------------------------------------------------------
+
+  const void *weakPtrAddress =
+      mGetBlockTypeForRendering(
+          itemStackBase);
+
+  if (!weakPtrAddress) {
+
+    return false;
+  }
+
+  // --------------------------------------------------------------------------
+  // WeakPtr<T>:
+  //
+  // [0] SharedCounter<T>*
+  // --------------------------------------------------------------------------
+
+  const auto counter =
+      *reinterpret_cast<
+          const std::uintptr_t *>(
+          weakPtrAddress);
+
+  if (!counter) {
+
+    return false;
+  }
+
+  // --------------------------------------------------------------------------
+  // SharedCounter<T>:
+  //
+  // [0] T*
+  //
+  // This matches vanilla ItemRenderer:
+  //
+  // ldr x8, [x0]
+  // ldr x22, [x8]
+  // --------------------------------------------------------------------------
+
+  const auto blockType =
+      *reinterpret_cast<
+          const std::uintptr_t *>(
+          counter);
+
+  if (!blockType) {
+
+    return false;
+  }
+
+  // --------------------------------------------------------------------------
+  // BlockGraphics::getForBlock(BlockType const&)
+  // --------------------------------------------------------------------------
+
+  const void *graphics =
+      mGetBlockGraphicsForBlockType(
+
+          reinterpret_cast<
+              const void *>(
+              blockType));
+
+  if (!graphics) {
+
+    return false;
+  }
+
+  shape =
+      mGetBlockGraphicsShape(
+          graphics);
+
+  return true;
+}
+
+// ============================================================================
+// Existing block compatibility
+// ============================================================================
 
 bool ItemPhysicsRuntime::buildBlockRenderInfo(
     const void *block,
@@ -628,12 +838,13 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
       {};
 
   if (!block) {
+
     return false;
   }
 
-  // ==========================================================
+  // --------------------------------------------------------------------------
   // BlockShape
-  // ==========================================================
+  // --------------------------------------------------------------------------
 
   if (mGetBlockGraphicsForBlock &&
       mGetBlockGraphicsShape) {
@@ -653,9 +864,9 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
   bool thinHorizontal =
       false;
 
-  // ==========================================================
-  // VisualShape
-  // ==========================================================
+  // --------------------------------------------------------------------------
+  // VisualShape only for thin-horizontal detection.
+  // --------------------------------------------------------------------------
 
   const auto blockAddress =
       reinterpret_cast<
@@ -693,14 +904,6 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
 
         AabbAbi scratch{};
 
-        // IMPORTANT:
-        //
-        // getVisualShape returns AABB const&.
-        //
-        // Some implementations write scratch,
-        // others return BlockType::mVisualShape directly.
-        //
-        // Therefore always use the returned pointer.
         const AabbAbi *bounds =
             getVisualShape(
                 blockType,
@@ -749,15 +952,6 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
     }
   }
 
-  // ==========================================================
-  // Skull exception
-  //
-  // Skull/head is approximately cubic, so it cannot be
-  // recognized as "thin Y".
-  //
-  // BlockShape 83 is therefore handled explicitly.
-  // ==========================================================
-
   const bool skull =
       info.blockShape ==
       kSkullBlockShape;
@@ -772,9 +966,9 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
   return true;
 }
 
-// ============================================================
-// Classification
-// ============================================================
+// ============================================================================
+// Item classification
+// ============================================================================
 
 ItemPhysicsRuntime::ItemRenderTraits
 ItemPhysicsRuntime::classifyItem(
@@ -782,15 +976,53 @@ ItemPhysicsRuntime::classifyItem(
 
   ItemRenderTraits traits{};
 
-  // ==========================================================
-  // BLOCK-BACKED ITEM
+  // ==========================================================================
+  // FIRST:
+  // ask vanilla renderer what BlockShape it will actually render.
   //
-  // This branch returns immediately.
+  // But ONLY intercept Skull.
   //
-  // That is important:
-  // block-backed head/skull NEVER enters the raw Item string
-  // parser below.
-  // ==========================================================
+  // Other blocks continue through our already-working old path,
+  // therefore fence/torch/lever/etc are untouched.
+  // ==========================================================================
+
+  std::int32_t rendererShape =
+      -1;
+
+  if (tryGetRenderBlockShape(
+          actorAddress,
+          rendererShape) &&
+
+      rendererShape ==
+          kSkullBlockShape) {
+
+    traits.valid =
+        true;
+
+    traits.modelClass =
+        ModelClass::
+            BlockItem;
+
+    traits.block.valid =
+        true;
+
+    traits.block.blockShape =
+        kSkullBlockShape;
+
+    // Critical:
+    //
+    // head does NOT settle to Atlas Rx=90.
+    traits.block.keepHorizontal =
+        true;
+
+    return traits;
+  }
+
+  // ==========================================================================
+  // EXISTING BLOCK PATH
+  //
+  // Leave it unchanged for everything else.
+  // ==========================================================================
 
   const auto block =
       *reinterpret_cast<
@@ -816,9 +1048,9 @@ ItemPhysicsRuntime::classifyItem(
     return traits;
   }
 
-  // ==========================================================
+  // ==========================================================================
   // NON-BLOCK ITEM
-  // ==========================================================
+  // ==========================================================================
 
   const auto itemHandle =
       *reinterpret_cast<
@@ -829,6 +1061,7 @@ ItemPhysicsRuntime::classifyItem(
               kItemHandleOffset);
 
   if (!itemHandle) {
+
     return traits;
   }
 
@@ -838,6 +1071,7 @@ ItemPhysicsRuntime::classifyItem(
           itemHandle);
 
   if (!item) {
+
     return traits;
   }
 
@@ -872,9 +1106,9 @@ ItemPhysicsRuntime::classifyItem(
   return traits;
 }
 
-// ============================================================
-// Physics state creation
-// ============================================================
+// ============================================================================
+// Physics state
+// ============================================================================
 
 ItemPhysicsRuntime::PhysicsState &
 ItemPhysicsRuntime::stateFor(
@@ -924,7 +1158,6 @@ ItemPhysicsRuntime::stateFor(
     state.initialized =
         true;
 
-    // Atlas initial rotations.
     state.rotX =
         0.0f;
 
@@ -982,9 +1215,9 @@ ItemPhysicsRuntime::stateFor(
   return state;
 }
 
-// ============================================================
-// Physics update
-// ============================================================
+// ============================================================================
+// Physics
+// ============================================================================
 
 void ItemPhysicsRuntime::updateState(
     PhysicsState &state,
@@ -1009,18 +1242,15 @@ void ItemPhysicsRuntime::updateState(
   state.lastSeen =
       now;
 
-  // Atlas:
-  //
-  // frameFactor = min(dt * 5, 1)
   const float frameFactor =
       std::min(
           dt *
               5.0f,
           1.0f);
 
-  // ==========================================================
-  // AIRBORNE
-  // ==========================================================
+  // --------------------------------------------------------------------------
+  // Airborne
+  // --------------------------------------------------------------------------
 
   if (!grounded) {
 
@@ -1061,7 +1291,6 @@ void ItemPhysicsRuntime::updateState(
             state.angularZ *
                 step);
 
-    // Atlas keeps Y zero in air.
     state.rotY =
         0.0f;
 
@@ -1071,25 +1300,14 @@ void ItemPhysicsRuntime::updateState(
     return;
   }
 
-  // ==========================================================
-  // GROUNDED
-  // ==========================================================
+  // --------------------------------------------------------------------------
+  // Ground
+  // --------------------------------------------------------------------------
 
   const float settle =
       frameFactor *
       mSettleSpeed.load(
           std::memory_order_relaxed);
-
-  // ==========================================================
-  // Compatibility block:
-  //
-  // slab
-  // carpet
-  // snow layer
-  // head/skull
-  //
-  // These keep their natural horizontal block orientation.
-  // ==========================================================
 
   if (traits.modelClass ==
           ModelClass::
@@ -1097,6 +1315,10 @@ void ItemPhysicsRuntime::updateState(
 
       traits.block.
           keepHorizontal) {
+
+    // ------------------------------------------------------------------------
+    // Slab / carpet / skull/head.
+    // ------------------------------------------------------------------------
 
     state.rotX =
         approachAngle(
@@ -1115,21 +1337,12 @@ void ItemPhysicsRuntime::updateState(
             state.rotY,
             state.restYaw,
             settle);
-  }
 
-  // ==========================================================
-  // Atlas baseline:
-  //
-  // ordinary item
-  // fence
-  // torch
-  // lever
-  // brewing stand
-  // flower pot
-  // etc.
-  // ==========================================================
+  } else {
 
-  else {
+    // ------------------------------------------------------------------------
+    // Existing Atlas behavior.
+    // ------------------------------------------------------------------------
 
     const float target =
         mGroundTiltDeg.load(
@@ -1144,17 +1357,15 @@ void ItemPhysicsRuntime::updateState(
 
     state.rotY =
         0.0f;
-
-    // Atlas does not reset rotZ.
   }
 
   state.wasGrounded =
       true;
 }
 
-// ============================================================
-// State cleanup
-// ============================================================
+// ============================================================================
+// Cleanup
+// ============================================================================
 
 void ItemPhysicsRuntime::pruneStates(
     std::chrono::steady_clock::
@@ -1181,15 +1392,16 @@ void ItemPhysicsRuntime::pruneStates(
   }
 }
 
-// ============================================================
+// ============================================================================
 // OnGroundFlagComponent
-// ============================================================
+// ============================================================================
 
 bool ItemPhysicsRuntime::
     hasOnGroundComponent(
         void *actor) const noexcept {
 
   if (!actor) {
+
     return false;
   }
 
@@ -1215,6 +1427,7 @@ bool ItemPhysicsRuntime::
               kActorEntityIdOffset);
 
   if (!registry) {
+
     return false;
   }
 
@@ -1347,6 +1560,7 @@ bool ItemPhysicsRuntime::
           0x10);
 
   if (!storage) {
+
     return false;
   }
 
@@ -1398,6 +1612,7 @@ bool ItemPhysicsRuntime::
                   std::uintptr_t));
 
   if (!page) {
+
     return false;
   }
 
@@ -1425,9 +1640,9 @@ bool ItemPhysicsRuntime::
          0x3FFFEu;
 }
 
-// ============================================================
-// ItemRenderer hook body
-// ============================================================
+// ============================================================================
+// ItemRenderer hook
+// ============================================================================
 
 void ItemPhysicsRuntime::onRender(
     void *self,
@@ -1438,6 +1653,7 @@ void ItemPhysicsRuntime::onRender(
       mOriginal;
 
   if (!original) {
+
     return;
   }
 
@@ -1545,9 +1761,9 @@ void ItemPhysicsRuntime::onRender(
     }
   }
 
-  // ==========================================================
-  // Temporary ItemActor state
-  // ==========================================================
+  // ==========================================================================
+  // Temporary actor state
+  // ==========================================================================
 
   auto &count =
       *reinterpret_cast<
@@ -1578,12 +1794,7 @@ void ItemPhysicsRuntime::onRender(
         1;
   }
 
-  // ==========================================================
-  // Exact Atlas behavior:
-  //
-  // keep true throughout the entire vanilla ItemRenderer call.
-  // ==========================================================
-
+  // Atlas behavior.
   inItemFrame =
       1;
 
@@ -1598,9 +1809,17 @@ void ItemPhysicsRuntime::onRender(
   const float oldY =
       position[1];
 
-  // ==========================================================
-  // Atlas ordinary non-block correction
-  // ==========================================================
+  // ==========================================================================
+  // IMPORTANT:
+  //
+  // Head detected through vanilla render shape enters BlockItem.
+  //
+  // Therefore:
+  //
+  // ordinaryItem == false
+  //
+  // and it will NOT receive the old -0.38 correction.
+  // ==========================================================================
 
   const bool ordinaryItem =
       traits.modelClass ==
@@ -1615,45 +1834,17 @@ void ItemPhysicsRuntime::onRender(
             std::memory_order_relaxed);
   }
 
-  // ==========================================================
-  // SAFE SKULL DETECTION
+  // ==========================================================================
+  // NO SKULL Y HACK.
   //
-  // IMPORTANT:
+  // Do not add:
   //
-  // Do NOT attempt to read an Item identifier for a block-backed
-  // skull/head.
+  // +0.125
+  // +0.25
+  // +0.30
   //
-  // The previous build did that and produced the SIGBUS crash.
-  //
-  // BlockGraphics already gives us the correct discriminator.
-  // ==========================================================
-
-  const bool groundedSkull =
-      grounded &&
-
-      traits.modelClass ==
-          ModelClass::
-              BlockItem &&
-
-      traits.block.blockShape ==
-          kSkullBlockShape;
-
-  // ==========================================================
-  // Isolated head correction.
-  //
-  // Nothing except BlockShape 83 reaches this code.
-  // ==========================================================
-
-  if (groundedSkull) {
-
-    position[1] =
-        oldY +
-        kSkullGroundLift;
-  }
-
-  // ==========================================================
-  // MatrixStack
-  // ==========================================================
+  // Correct render classification solves the actual bug.
+  // ==========================================================================
 
   void *stack =
       mGetWorldMatrix
@@ -1674,7 +1865,6 @@ void ItemPhysicsRuntime::onRender(
 
     if (!matrix) {
 
-      // Restore before vanilla fallback.
       position[1] =
           oldY;
 
@@ -1701,19 +1891,9 @@ void ItemPhysicsRuntime::onRender(
     const float z =
         position[2];
 
-    // ========================================================
-    // Atlas matrix order:
-    //
-    // T(position)
-    // Rx
-    // Ry
-    // Rz
-    //
-    // ordinary item:
-    // T(0,+0.25,0)
-    //
-    // T(-position)
-    // ========================================================
+    // ========================================================================
+    // Atlas transform sequence.
+    // ========================================================================
 
     postTranslate(
         *matrix,
@@ -1748,18 +1928,15 @@ void ItemPhysicsRuntime::onRender(
         -y,
         -z);
 
-    // Entire vanilla ItemRenderer still sees:
-    //
-    // mIsInItemFrame == true
     original(
         self,
         renderContext,
         renderData);
   }
 
-  // ==========================================================
-  // Restore everything after rendering
-  // ==========================================================
+  // ==========================================================================
+  // Restore
+  // ==========================================================================
 
   position[1] =
       oldY;
