@@ -18,39 +18,12 @@ constexpr float kDegToRad =
 constexpr auto kStateTtl =
     std::chrono::seconds(8);
 
-// ============================================================================
-// Atlas ordinary-item transform
-// ============================================================================
-
 constexpr float kAtlasFlatLocalY =
     0.25f;
-
-// ============================================================================
-// Skull
-// ============================================================================
 
 constexpr std::int32_t
     kSkullBlockShape =
         83;
-
-// IMPORTANT:
-//
-// No manual SkullGroundLift.
-//
-// Correct classification is the fix.
-//
-// When Skull enters BlockItem:
-//
-// - it no longer receives -0.38
-// - it no longer receives ordinary-item +0.25
-// - it no longer settles to Rx = 90
-//
-// This reproduces the earlier state where head rendering was correct.
-// ============================================================================
-
-// ============================================================================
-// Thin horizontal detection
-// ============================================================================
 
 constexpr float kThinYRatio =
     0.70f;
@@ -59,17 +32,412 @@ constexpr float kExtentEpsilon =
     0.0005f;
 
 // ============================================================================
-// Atlas special item identifiers
+// Ground-contact pass
+//
+// Full 0..1 block rendered at scale 0.25:
+// bottom = (0 - 0.5) * 0.25 = -0.125.
+//
+// We use this as the normal dropped-block contact reference.
+//
+// IMPORTANT:
+// this stage can ONLY move a model downward.
+// It never raises an item.
 // ============================================================================
 
-constexpr std::string_view kShieldId =
-    "minecraft:shield";
+constexpr float kGroundReferenceY =
+    -0.125f;
 
-constexpr std::string_view kBannerId =
-    "minecraft:banner";
+// Vanilla ItemRenderer 1.26.45.1:
+//
+// BlockShape::Skull == 83
+//
+// When mIsInItemFrame == false:
+//
+//     translate Y -0.125
+//
+// Item Physics deliberately keeps mIsInItemFrame=true,
+// therefore vanilla skips this transform.
+//
+// Restore only this missing skull translation.
+constexpr float kSkullMissingGroundTranslation =
+    -0.125f;
+
+// Safety cap.
+//
+// Never lower an item by more than 1/8 block in this pass.
+constexpr float kMaxGroundLowering =
+    0.125f;
+
+struct GroundAabbAbi {
+  float minX{};
+  float minY{};
+  float minZ{};
+
+  float maxX{};
+  float maxY{};
+  float maxZ{};
+};
+
+static_assert(
+    sizeof(GroundAabbAbi) ==
+    24);
+
+using GroundGetVisualShapeFn =
+    const GroundAabbAbi *(*)(
+        void *blockType,
+        const void *block,
+        GroundAabbAbi *scratch);
 
 // ============================================================================
-// MatrixStack scope
+// Exact block render scale from ItemRenderer 1.26.45.1.
+//
+// Private helper RVA:
+// 0xA29EC90
+//
+// Default:
+//     0.25
+//
+// 0.5 scale:
+//     1, 2, 83, 90, 101, 155
+// ============================================================================
+
+[[nodiscard]]
+float renderScaleForBlockShape(
+    std::int32_t shape) noexcept {
+
+  switch (shape) {
+
+  case 1:
+  case 2:
+  case 83:
+  case 90:
+  case 101:
+  case 155:
+
+    return 0.5f;
+
+  default:
+
+    return 0.25f;
+  }
+}
+
+// ============================================================================
+// Read actual Block::VisualShape.
+//
+// This does NOT choose orientation.
+//
+// It is only used to answer:
+//
+// "After the orientation we ALREADY have,
+//  how far is the lowest point from the ground?"
+// ============================================================================
+
+[[nodiscard]]
+bool tryReadGroundVisualBounds(
+    const void *block,
+    GroundAabbAbi &out) noexcept {
+
+  if (!block) {
+    return false;
+  }
+
+  const auto blockAddress =
+      reinterpret_cast<
+          std::uintptr_t>(
+          block);
+
+  auto *blockType =
+      *reinterpret_cast<
+          void *const *>(
+
+          blockAddress +
+          profile::
+              kBlockTypeOffset);
+
+  if (!blockType) {
+    return false;
+  }
+
+  auto **vtable =
+      *reinterpret_cast<
+          void ***>(
+          blockType);
+
+  if (!vtable) {
+    return false;
+  }
+
+  constexpr std::size_t slot =
+      profile::
+          kBlockTypeGetVisualShapeVtableOffset /
+      sizeof(void *);
+
+  auto getVisualShape =
+      reinterpret_cast<
+          GroundGetVisualShapeFn>(
+          vtable[slot]);
+
+  if (!getVisualShape) {
+    return false;
+  }
+
+  GroundAabbAbi scratch{};
+
+  const GroundAabbAbi *bounds =
+      getVisualShape(
+          blockType,
+          block,
+          &scratch);
+
+  if (!bounds) {
+    return false;
+  }
+
+  const float dx =
+      bounds->maxX -
+      bounds->minX;
+
+  const float dy =
+      bounds->maxY -
+      bounds->minY;
+
+  const float dz =
+      bounds->maxZ -
+      bounds->minZ;
+
+  if (!std::isfinite(dx) ||
+      !std::isfinite(dy) ||
+      !std::isfinite(dz) ||
+
+      dx <=
+          kExtentEpsilon ||
+
+      dy <=
+          kExtentEpsilon ||
+
+      dz <=
+          kExtentEpsilon) {
+
+    return false;
+  }
+
+  out =
+      *bounds;
+
+  return true;
+}
+
+// ============================================================================
+// Calculate ONLY vertical ground correction.
+//
+// No rotation is changed here.
+// No model classification is changed here.
+//
+// Skull:
+//     exact vanilla -0.125.
+//
+// Other block-backed models:
+//     transform 8 AABB corners using CURRENT physics rotation,
+//     calculate lowest Y,
+//     lower until it reaches the normal full-block contact plane.
+//
+// If model is already low enough:
+//     correction = 0.
+//
+// Therefore this pass cannot create new floating caused by raising.
+// ============================================================================
+
+[[nodiscard]]
+float calculateBlockGroundCorrection(
+    const void *block,
+    std::int32_t shape,
+    float rotX,
+    float rotY,
+    float rotZ) noexcept {
+
+  // Skull uses a dedicated custom renderer.
+  //
+  // Do not attempt to infer its final contact point through
+  // Block AABB.
+  //
+  // Restore exact vanilla missing translation instead.
+  if (shape ==
+      kSkullBlockShape) {
+
+    return
+        kSkullMissingGroundTranslation;
+  }
+
+  GroundAabbAbi bounds{};
+
+  if (!tryReadGroundVisualBounds(
+          block,
+          bounds)) {
+
+    return 0.0f;
+  }
+
+  const float scale =
+      renderScaleForBlockShape(
+          shape);
+
+  const float cx =
+      std::cos(
+          rotX);
+
+  const float sx =
+      std::sin(
+          rotX);
+
+  const float cy =
+      std::cos(
+          rotY);
+
+  const float sy =
+      std::sin(
+          rotY);
+
+  const float cz =
+      std::cos(
+          rotZ);
+
+  const float sz =
+      std::sin(
+          rotZ);
+
+  float lowestY =
+      9999.0f;
+
+  const float xs[2] = {
+      bounds.minX,
+      bounds.maxX
+  };
+
+  const float ys[2] = {
+      bounds.minY,
+      bounds.maxY
+  };
+
+  const float zs[2] = {
+      bounds.minZ,
+      bounds.maxZ
+  };
+
+  for (const float bx : xs) {
+
+    for (const float by : ys) {
+
+      for (const float bz : zs) {
+
+        // Minecraft block model coordinates:
+        //
+        // 0..1
+        //
+        // Item model is centered around 0.5 then receives
+        // renderer scale.
+        float x =
+            (bx -
+             0.5f) *
+            scale;
+
+        float y =
+            (by -
+             0.5f) *
+            scale;
+
+        float z =
+            (bz -
+             0.5f) *
+            scale;
+
+        // Our matrix is constructed:
+        //
+        // M * Rx * Ry * Rz
+        //
+        // With column-vector convention a local point receives:
+        //
+        // Rz
+        // Ry
+        // Rx
+        //
+        // in that order.
+
+        const float xAfterZ =
+            cz * x -
+            sz * y;
+
+        const float yAfterZ =
+            sz * x +
+            cz * y;
+
+        const float zAfterZ =
+            z;
+
+        const float xAfterY =
+            cy * xAfterZ +
+            sy * zAfterZ;
+
+        const float yAfterY =
+            yAfterZ;
+
+        const float zAfterY =
+            -sy * xAfterZ +
+             cy * zAfterZ;
+
+        (void)xAfterY;
+
+        const float finalY =
+            cx * yAfterY -
+            sx * zAfterY;
+
+        lowestY =
+            std::min(
+                lowestY,
+                finalY);
+      }
+    }
+  }
+
+  if (!std::isfinite(
+          lowestY)) {
+
+    return 0.0f;
+  }
+
+  const float correction =
+      kGroundReferenceY -
+      lowestY;
+
+  // Positive correction would raise the model.
+  //
+  // We deliberately do NOT do that in this stage.
+  if (correction >=
+      0.0f) {
+
+    return 0.0f;
+  }
+
+  return std::clamp(
+      correction,
+      -kMaxGroundLowering,
+      0.0f);
+}
+
+// ============================================================================
+// Atlas special items
+// ============================================================================
+
+constexpr std::string_view
+    kShieldId =
+        "minecraft:shield";
+
+constexpr std::string_view
+    kBannerId =
+        "minecraft:banner";
+
+// ============================================================================
+// MatrixStack RAII
 // ============================================================================
 
 class MatrixPushScope {
@@ -140,7 +508,7 @@ private:
 } // namespace
 
 // ============================================================================
-// Static
+// Static instance
 // ============================================================================
 
 ItemPhysicsRuntime *
@@ -218,7 +586,8 @@ bool ItemPhysicsRuntime::verifyProfile(
                 address);
 
         for (std::size_t i = 0;
-             i < fingerprint.size();
+             i <
+             fingerprint.size();
              ++i) {
 
           if (words[i] !=
@@ -237,22 +606,16 @@ bool ItemPhysicsRuntime::verifyProfile(
         return true;
       };
 
-  // --------------------------------------------------------------------------
-  // Main ItemRenderer
-  // --------------------------------------------------------------------------
-
   if (!verifyWords(
           resolved.target,
+
           profile::
               kRenderFingerprint,
+
           "ItemRenderer::render")) {
 
     return false;
   }
-
-  // --------------------------------------------------------------------------
-  // New 1.26.45 renderer block path.
-  // --------------------------------------------------------------------------
 
   if (!verifyWords(
           resolved.module.base +
@@ -296,9 +659,10 @@ bool ItemPhysicsRuntime::verifyProfile(
   const auto executable =
       [&](std::uintptr_t rva) {
 
-        return resolved.module.executable(
-            resolved.module.base +
-            rva);
+        return
+            resolved.module.executable(
+                resolved.module.base +
+                rva);
       };
 
   if (!executable(
@@ -408,10 +772,6 @@ bool ItemPhysicsRuntime::install(
           profile::
               kMatrixStackRefDtorRva);
 
-  // --------------------------------------------------------------------------
-  // EXACT vanilla block-rendering path.
-  // --------------------------------------------------------------------------
-
   mGetBlockTypeForRendering =
       reinterpret_cast<
           GetBlockTypeForRenderingFn>(
@@ -427,10 +787,6 @@ bool ItemPhysicsRuntime::install(
           mMinecraftBase +
           profile::
               kBlockGraphicsGetForBlockTypeRva);
-
-  // --------------------------------------------------------------------------
-  // Existing Block const* path.
-  // --------------------------------------------------------------------------
 
   mGetBlockGraphicsForBlock =
       reinterpret_cast<
@@ -491,7 +847,7 @@ bool ItemPhysicsRuntime::install(
 
   mod.getLogger().info(
       "Item Physics active: "
-      "Minecraft 1.26.45 + vanilla render-shape skull detection");
+      "Minecraft 1.26.45 + ground-contact pass");
 
   return true;
 }
@@ -509,7 +865,6 @@ void ItemPhysicsRuntime::uninstall() {
   if (mHook) {
 
     mHook->reset();
-
     mHook.reset();
   }
 
@@ -718,7 +1073,7 @@ bool ItemPhysicsRuntime::libcxxStringEquals(
 }
 
 // ============================================================================
-// Vanilla ItemRenderer render-shape lookup
+// Vanilla renderer block-shape lookup
 // ============================================================================
 
 bool ItemPhysicsRuntime::tryGetRenderBlockShape(
@@ -736,10 +1091,6 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
     return false;
   }
 
-  // --------------------------------------------------------------------------
-  // ItemStackBase inside ItemActor.
-  // --------------------------------------------------------------------------
-
   const void *itemStackBase =
       reinterpret_cast<
           const void *>(
@@ -748,29 +1099,13 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
           profile::
               kItemStackBaseOffset);
 
-  // --------------------------------------------------------------------------
-  // WeakPtr<BlockType const>&
-  //
-  // Vanilla call:
-  //
-  // add x0, actor, #0x390
-  // bl getBlockTypeForRendering
-  // --------------------------------------------------------------------------
-
   const void *weakPtrAddress =
       mGetBlockTypeForRendering(
           itemStackBase);
 
   if (!weakPtrAddress) {
-
     return false;
   }
-
-  // --------------------------------------------------------------------------
-  // WeakPtr<T>:
-  //
-  // [0] SharedCounter<T>*
-  // --------------------------------------------------------------------------
 
   const auto counter =
       *reinterpret_cast<
@@ -778,20 +1113,8 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
           weakPtrAddress);
 
   if (!counter) {
-
     return false;
   }
-
-  // --------------------------------------------------------------------------
-  // SharedCounter<T>:
-  //
-  // [0] T*
-  //
-  // This matches vanilla ItemRenderer:
-  //
-  // ldr x8, [x0]
-  // ldr x22, [x8]
-  // --------------------------------------------------------------------------
 
   const auto blockType =
       *reinterpret_cast<
@@ -799,23 +1122,16 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
           counter);
 
   if (!blockType) {
-
     return false;
   }
 
-  // --------------------------------------------------------------------------
-  // BlockGraphics::getForBlock(BlockType const&)
-  // --------------------------------------------------------------------------
-
   const void *graphics =
       mGetBlockGraphicsForBlockType(
-
           reinterpret_cast<
               const void *>(
               blockType));
 
   if (!graphics) {
-
     return false;
   }
 
@@ -827,7 +1143,7 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
 }
 
 // ============================================================================
-// Existing block compatibility
+// Existing block compatibility.
 // ============================================================================
 
 bool ItemPhysicsRuntime::buildBlockRenderInfo(
@@ -838,13 +1154,8 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
       {};
 
   if (!block) {
-
     return false;
   }
-
-  // --------------------------------------------------------------------------
-  // BlockShape
-  // --------------------------------------------------------------------------
 
   if (mGetBlockGraphicsForBlock &&
       mGetBlockGraphicsShape) {
@@ -863,10 +1174,6 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
 
   bool thinHorizontal =
       false;
-
-  // --------------------------------------------------------------------------
-  // VisualShape only for thin-horizontal detection.
-  // --------------------------------------------------------------------------
 
   const auto blockAddress =
       reinterpret_cast<
@@ -976,16 +1283,11 @@ ItemPhysicsRuntime::classifyItem(
 
   ItemRenderTraits traits{};
 
-  // ==========================================================================
-  // FIRST:
-  // ask vanilla renderer what BlockShape it will actually render.
+  // First use vanilla render-shape path ONLY for skull/head.
   //
-  // But ONLY intercept Skull.
+  // This is the fix that already solved the old head clipping.
   //
-  // Other blocks continue through our already-working old path,
-  // therefore fence/torch/lever/etc are untouched.
-  // ==========================================================================
-
+  // Do not broaden this to every block here.
   std::int32_t rendererShape =
       -1;
 
@@ -1009,21 +1311,13 @@ ItemPhysicsRuntime::classifyItem(
     traits.block.blockShape =
         kSkullBlockShape;
 
-    // Critical:
-    //
-    // head does NOT settle to Atlas Rx=90.
     traits.block.keepHorizontal =
         true;
 
     return traits;
   }
 
-  // ==========================================================================
-  // EXISTING BLOCK PATH
-  //
-  // Leave it unchanged for everything else.
-  // ==========================================================================
-
+  // Existing block-backed path.
   const auto block =
       *reinterpret_cast<
           const void *const *>(
@@ -1048,10 +1342,7 @@ ItemPhysicsRuntime::classifyItem(
     return traits;
   }
 
-  // ==========================================================================
-  // NON-BLOCK ITEM
-  // ==========================================================================
-
+  // Non-block item.
   const auto itemHandle =
       *reinterpret_cast<
           const std::uintptr_t *>(
@@ -1061,7 +1352,6 @@ ItemPhysicsRuntime::classifyItem(
               kItemHandleOffset);
 
   if (!itemHandle) {
-
     return traits;
   }
 
@@ -1071,7 +1361,6 @@ ItemPhysicsRuntime::classifyItem(
           itemHandle);
 
   if (!item) {
-
     return traits;
   }
 
@@ -1216,7 +1505,7 @@ ItemPhysicsRuntime::stateFor(
 }
 
 // ============================================================================
-// Physics
+// Physics update
 // ============================================================================
 
 void ItemPhysicsRuntime::updateState(
@@ -1248,10 +1537,7 @@ void ItemPhysicsRuntime::updateState(
               5.0f,
           1.0f);
 
-  // --------------------------------------------------------------------------
-  // Airborne
-  // --------------------------------------------------------------------------
-
+  // Airborne.
   if (!grounded) {
 
     const float age =
@@ -1300,10 +1586,7 @@ void ItemPhysicsRuntime::updateState(
     return;
   }
 
-  // --------------------------------------------------------------------------
-  // Ground
-  // --------------------------------------------------------------------------
-
+  // Grounded.
   const float settle =
       frameFactor *
       mSettleSpeed.load(
@@ -1316,10 +1599,7 @@ void ItemPhysicsRuntime::updateState(
       traits.block.
           keepHorizontal) {
 
-    // ------------------------------------------------------------------------
-    // Slab / carpet / skull/head.
-    // ------------------------------------------------------------------------
-
+    // Existing slab/carpet/head path.
     state.rotX =
         approachAngle(
             state.rotX,
@@ -1340,10 +1620,7 @@ void ItemPhysicsRuntime::updateState(
 
   } else {
 
-    // ------------------------------------------------------------------------
-    // Existing Atlas behavior.
-    // ------------------------------------------------------------------------
-
+    // Existing Atlas baseline.
     const float target =
         mGroundTiltDeg.load(
             std::memory_order_relaxed) *
@@ -1357,6 +1634,8 @@ void ItemPhysicsRuntime::updateState(
 
     state.rotY =
         0.0f;
+
+    // rotZ intentionally remains landing direction.
   }
 
   state.wasGrounded =
@@ -1401,7 +1680,6 @@ bool ItemPhysicsRuntime::
         void *actor) const noexcept {
 
   if (!actor) {
-
     return false;
   }
 
@@ -1427,7 +1705,6 @@ bool ItemPhysicsRuntime::
               kActorEntityIdOffset);
 
   if (!registry) {
-
     return false;
   }
 
@@ -1560,7 +1837,6 @@ bool ItemPhysicsRuntime::
           0x10);
 
   if (!storage) {
-
     return false;
   }
 
@@ -1612,7 +1888,6 @@ bool ItemPhysicsRuntime::
                   std::uintptr_t));
 
   if (!page) {
-
     return false;
   }
 
@@ -1641,7 +1916,7 @@ bool ItemPhysicsRuntime::
 }
 
 // ============================================================================
-// ItemRenderer hook
+// ItemRenderer
 // ============================================================================
 
 void ItemPhysicsRuntime::onRender(
@@ -1653,7 +1928,6 @@ void ItemPhysicsRuntime::onRender(
       mOriginal;
 
   if (!original) {
-
     return;
   }
 
@@ -1761,10 +2035,7 @@ void ItemPhysicsRuntime::onRender(
     }
   }
 
-  // ==========================================================================
-  // Temporary actor state
-  // ==========================================================================
-
+  // Temporary ItemActor state.
   auto &count =
       *reinterpret_cast<
           std::uint8_t *>(
@@ -1794,7 +2065,7 @@ void ItemPhysicsRuntime::onRender(
         1;
   }
 
-  // Atlas behavior.
+  // Preserve exact Atlas behavior for the renderer.
   inItemFrame =
       1;
 
@@ -1809,18 +2080,9 @@ void ItemPhysicsRuntime::onRender(
   const float oldY =
       position[1];
 
-  // ==========================================================================
-  // IMPORTANT:
+  // Existing Atlas flat/non-block path.
   //
-  // Head detected through vanilla render shape enters BlockItem.
-  //
-  // Therefore:
-  //
-  // ordinaryItem == false
-  //
-  // and it will NOT receive the old -0.38 correction.
-  // ==========================================================================
-
+  // Intentionally unchanged.
   const bool ordinaryItem =
       traits.modelClass ==
       ModelClass::
@@ -1834,17 +2096,44 @@ void ItemPhysicsRuntime::onRender(
             std::memory_order_relaxed);
   }
 
-  // ==========================================================================
-  // NO SKULL Y HACK.
+  // ========================================================================
+  // NEW GROUND-CONTACT PASS
   //
-  // Do not add:
+  // Only grounded BlockItem reaches this.
   //
-  // +0.125
-  // +0.25
-  // +0.30
+  // The current rotation is NOT altered.
   //
-  // Correct render classification solves the actual bug.
-  // ==========================================================================
+  // Head:
+  //     exactly -0.125.
+  //
+  // Other block-backed models:
+  //     lower based on rotated VisualShape.
+  //
+  // Flat items / shield / banner:
+  //     untouched in this stage.
+  // ========================================================================
+
+  if (grounded &&
+      traits.modelClass ==
+          ModelClass::
+              BlockItem) {
+
+    const auto block =
+        *reinterpret_cast<
+            const void *const *>(
+
+            actorAddress +
+            profile::
+                kBlockPtrOffset);
+
+    position[1] +=
+        calculateBlockGroundCorrection(
+            block,
+            traits.block.blockShape,
+            snapshot.rotX,
+            snapshot.rotY,
+            snapshot.rotZ);
+  }
 
   void *stack =
       mGetWorldMatrix
@@ -1891,10 +2180,7 @@ void ItemPhysicsRuntime::onRender(
     const float z =
         position[2];
 
-    // ========================================================================
-    // Atlas transform sequence.
-    // ========================================================================
-
+    // Existing Atlas transformation.
     postTranslate(
         *matrix,
         x,
@@ -1934,10 +2220,7 @@ void ItemPhysicsRuntime::onRender(
         renderData);
   }
 
-  // ==========================================================================
-  // Restore
-  // ==========================================================================
-
+  // Restore original temporary state.
   position[1] =
       oldY;
 
