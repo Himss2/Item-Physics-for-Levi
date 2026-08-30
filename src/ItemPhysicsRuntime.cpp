@@ -29,8 +29,9 @@ constexpr float kAtlasFlatLocalY =
 // BlockShape
 // ============================================================================
 
-constexpr std::int32_t kSkullBlockShape =
-    83;
+constexpr std::int32_t
+    kSkullBlockShape =
+        83;
 
 // ============================================================================
 // Thin horizontal detection
@@ -43,61 +44,133 @@ constexpr float kExtentEpsilon =
     0.0005f;
 
 // ============================================================================
-// Ground contact V2
+// Ground Contact V3
 //
-// IMPORTANT:
+// Major difference from V2:
 //
-// Ground correction sekarang TIDAK menentukan rotasi.
+// OLD:
 //
-// Rotasi item yang sudah benar tetap dipertahankan.
+// if (traits.modelClass == BlockItem)
+//     apply correction;
 //
-// Kita hanya mengubah position.y ketika entity benar-benar grounded.
+// This failed for some items because Minecraft can render an ItemStack as a
+// block even when ItemStackBase::mBlock == nullptr.
+//
+// Head worked because we already explicitly forced rendererShape 83 into
+// BlockItem.
+//
+// NEW:
+//
+// We preserve the ORIGINAL physics/model classification,
+// but ground correction uses Minecraft's actual render BlockShape.
+//
+// Therefore:
+//
+// torch
+// fence
+// lantern
+// lever
+// etc.
+//
+// can receive their Y correction without changing their rotation.
 // ============================================================================
 
-// Head pada build -0.125 sebelumnya sudah bergerak ke arah benar,
-// tetapi masih terlihat melayang.
+// ----------------------------------------------------------------------------
+// Head / skull
 //
-// Sekarang test berikutnya:
-// total correction = -0.25.
+// V2:
+// -0.25
 //
-// HANYA Skull shape 83.
-constexpr float kSkullGroundLowering =
-    -0.25f;
+// Screenshot shows some heads beginning to sit slightly too low.
+//
+// Move them back upward by 0.07.
+//
+// New:
+// -0.18
+//
+// This is intentionally one common compromise for Skull renderer type 83.
+// We are NOT reintroducing unsafe item-id dereferencing for block-backed heads.
+// ----------------------------------------------------------------------------
 
-// Cross-texture / torch / beberapa model scale 0.5.
-//
-// Correction sedikit lebih agresif karena origin model-nya
-// terlihat lebih tinggi.
-constexpr float kLargeScaleBlockGroundLowering =
+constexpr float kSkullGroundLowering =
+    -0.18f;
+
+// ----------------------------------------------------------------------------
+// Individual important shapes.
+// ----------------------------------------------------------------------------
+
+constexpr float kTorchGroundLowering =
+    -0.16f;
+
+constexpr float kFenceGroundLowering =
     -0.125f;
 
-// Fence / lever / brewing stand / flower pot / lantern / chain
-// dan shaped 3D lainnya.
-constexpr float kShapedBlockGroundLowering =
-    -0.085f;
+constexpr float kLanternGroundLowering =
+    -0.14f;
 
-// Unknown non-full block.
-//
-// Conservative fallback.
-constexpr float kFallbackBlockGroundLowering =
-    -0.0625f;
-
-// Shield / banner.
-//
-// Atlas tidak memasukkannya ke ordinary flat-item correction
-// -0.38/+0.25, jadi mempunyai correction grounded sendiri.
-constexpr float kSpecialItemGroundLowering =
+constexpr float kLeverGroundLowering =
     -0.12f;
+
+constexpr float kBrewingStandGroundLowering =
+    -0.12f;
+
+constexpr float kFlowerPotGroundLowering =
+    -0.105f;
+
+constexpr float kChainGroundLowering =
+    -0.13f;
+
+constexpr float kEndRodGroundLowering =
+    -0.13f;
+
+constexpr float kScaffoldingGroundLowering =
+    -0.11f;
+
+// ----------------------------------------------------------------------------
+// Generic classes.
+// ----------------------------------------------------------------------------
+
+constexpr float kLargeScaleBlockGroundLowering =
+    -0.14f;
+
+constexpr float kShapedBlockGroundLowering =
+    -0.10f;
+
+constexpr float kFallbackBlockGroundLowering =
+    -0.075f;
+
+// ============================================================================
+// Special non-block items
+//
+// V2 used:
+//
+// shield/banner = -0.12
+//
+// Screenshot shows they are now clipping into the ground.
+//
+// Reduce the correction substantially.
+//
+// Shield and banner are deliberately separated because their rendered model
+// dimensions are not identical.
+// ============================================================================
+
+constexpr float kShieldGroundLowering =
+    -0.045f;
+
+constexpr float kBannerGroundLowering =
+    -0.035f;
 
 // ============================================================================
 // Atlas special item identifiers
 // ============================================================================
 
-constexpr std::string_view kShieldId =
-    "minecraft:shield";
+constexpr std::string_view
+    kShieldId =
+        "minecraft:shield";
 
-constexpr std::string_view kBannerId =
-    "minecraft:banner";
+constexpr std::string_view
+    kBannerId =
+        "minecraft:banner";
 
 // ============================================================================
 // Matrix stack scope
@@ -171,7 +244,7 @@ private:
 } // namespace
 
 // ============================================================================
-// Static
+// Static instance
 // ============================================================================
 
 ItemPhysicsRuntime *
@@ -270,7 +343,7 @@ bool ItemPhysicsRuntime::verifyProfile(
       };
 
   // --------------------------------------------------------------------------
-  // ItemRenderer
+  // ItemRenderer.
   // --------------------------------------------------------------------------
 
   if (!verifyWords(
@@ -285,7 +358,7 @@ bool ItemPhysicsRuntime::verifyProfile(
   }
 
   // --------------------------------------------------------------------------
-  // Vanilla block type for rendering.
+  // ItemStackBase::getBlockTypeForRendering.
   // --------------------------------------------------------------------------
 
   if (!verifyWords(
@@ -302,7 +375,7 @@ bool ItemPhysicsRuntime::verifyProfile(
   }
 
   // --------------------------------------------------------------------------
-  // BlockGraphics(BlockType).
+  // BlockGraphics::getForBlock(BlockType).
   // --------------------------------------------------------------------------
 
   if (!verifyWords(
@@ -319,7 +392,7 @@ bool ItemPhysicsRuntime::verifyProfile(
   }
 
   // --------------------------------------------------------------------------
-  // BlockShape getter.
+  // BlockGraphics::getBlockShape.
   // --------------------------------------------------------------------------
 
   if (!verifyWords(
@@ -455,7 +528,7 @@ bool ItemPhysicsRuntime::install(
               kMatrixStackRefDtorRva);
 
   // --------------------------------------------------------------------------
-  // Vanilla rendering block lookup.
+  // Vanilla renderer block lookup.
   // --------------------------------------------------------------------------
 
   mGetBlockTypeForRendering =
@@ -475,7 +548,7 @@ bool ItemPhysicsRuntime::install(
               kBlockGraphicsGetForBlockTypeRva);
 
   // --------------------------------------------------------------------------
-  // Existing Block const* lookup.
+  // Existing Block pointer path.
   // --------------------------------------------------------------------------
 
   mGetBlockGraphicsForBlock =
@@ -503,7 +576,7 @@ bool ItemPhysicsRuntime::install(
   // --------------------------------------------------------------------------
   // Only ItemRenderer::render is hooked.
   //
-  // No private-helper hook.
+  // No private helper hook.
   // --------------------------------------------------------------------------
 
   mHook =
@@ -543,7 +616,7 @@ bool ItemPhysicsRuntime::install(
 
   mod.getLogger().info(
       "Item Physics active: "
-      "Minecraft 1.26.45 + Ground Contact V2");
+      "Minecraft 1.26.45 + Ground Contact V3");
 
   return true;
 }
@@ -771,7 +844,7 @@ bool ItemPhysicsRuntime::libcxxStringEquals(
 }
 
 // ============================================================================
-// Vanilla render BlockShape lookup
+// Vanilla renderer BlockShape lookup
 // ============================================================================
 
 bool ItemPhysicsRuntime::tryGetRenderBlockShape(
@@ -789,10 +862,6 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
     return false;
   }
 
-  // --------------------------------------------------------------------------
-  // ItemStackBase inside ItemActor.
-  // --------------------------------------------------------------------------
-
   const void *itemStackBase =
       reinterpret_cast<
           const void *>(
@@ -800,10 +869,6 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
           actorAddress +
           profile::
               kItemStackBaseOffset);
-
-  // --------------------------------------------------------------------------
-  // WeakPtr<BlockType const>&.
-  // --------------------------------------------------------------------------
 
   const void *weakPtrAddress =
       mGetBlockTypeForRendering(
@@ -814,7 +879,9 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
     return false;
   }
 
-  // WeakPtr<T>[0] -> SharedCounter<T>*
+  // WeakPtr<T>[0]
+  //      ↓
+  // SharedCounter<T>*
   const auto counter =
       *reinterpret_cast<
           const std::uintptr_t *>(
@@ -825,7 +892,9 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
     return false;
   }
 
-  // SharedCounter<T>[0] -> T*
+  // SharedCounter<T>[0]
+  //      ↓
+  // BlockType*
   const auto blockType =
       *reinterpret_cast<
           const std::uintptr_t *>(
@@ -856,18 +925,7 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
 }
 
 // ============================================================================
-// Existing block information.
-//
-// IMPORTANT:
-//
-// This still controls orientation compatibility for:
-//
-// - slab
-// - carpet
-// - thin blocks
-// - head
-//
-// Do not use this AABB to decide generic orientation.
+// Existing block information
 // ============================================================================
 
 bool ItemPhysicsRuntime::buildBlockRenderInfo(
@@ -907,7 +965,11 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
   // --------------------------------------------------------------------------
   // VisualShape.
   //
-  // Only detects thin horizontal block models.
+  // IMPORTANT:
+  //
+  // Still used ONLY for orientation compatibility of clearly thin blocks.
+  //
+  // It is NOT used for generic ground-height anymore.
   // --------------------------------------------------------------------------
 
   const auto blockAddress =
@@ -1019,10 +1081,11 @@ ItemPhysicsRuntime::classifyItem(
   ItemRenderTraits traits{};
 
   // ==========================================================================
-  // Vanilla rendering lookup ONLY for Skull.
+  // FIRST:
   //
-  // This part is intentionally narrow because it is what fixed head rendering
-  // without changing fence/torch/lever.
+  // Record the renderer's real BlockShape for ALL items.
+  //
+  // This does NOT change ModelClass.
   // ==========================================================================
 
   std::int32_t rendererShape =
@@ -1030,9 +1093,23 @@ ItemPhysicsRuntime::classifyItem(
 
   if (tryGetRenderBlockShape(
           actorAddress,
-          rendererShape) &&
+          rendererShape)) {
 
-      rendererShape ==
+    traits.hasRenderShape =
+        true;
+
+    traits.renderShape =
+        rendererShape;
+  }
+
+  // ==========================================================================
+  // Skull remains the ONLY renderer-shape based classification override.
+  //
+  // This preserves the successful head orientation fix.
+  // ==========================================================================
+
+  if (traits.hasRenderShape &&
+      traits.renderShape ==
           kSkullBlockShape) {
 
     traits.valid =
@@ -1055,7 +1132,9 @@ ItemPhysicsRuntime::classifyItem(
   }
 
   // ==========================================================================
-  // Existing block-backed path.
+  // Existing Block pointer classifier.
+  //
+  // Do not broaden this.
   // ==========================================================================
 
   const auto block =
@@ -1143,20 +1222,14 @@ ItemPhysicsRuntime::classifyItem(
 // ============================================================================
 // Ground correction
 //
-// V2 deliberately uses BlockShape classes instead of AABB contact.
+// IMPORTANT:
 //
-// Why:
+// This function does NOT change rotation.
 //
-// The previous AABB pass correctly described a bounding box but did not
-// reproduce several ItemRenderer-specific display transforms.
+// It only returns a Y translation.
 //
-// The consequence was:
-//
-// correction ≈ 0
-//
-// for many models that still visibly floated.
-//
-// This function changes ONLY vertical translation.
+// Ground Contact V3 now receives the BlockShape produced by Minecraft's actual
+// ItemRenderer path even when ItemStackBase::mBlock is null.
 // ============================================================================
 
 float ItemPhysicsRuntime::calculateBlockGroundCorrection(
@@ -1166,14 +1239,29 @@ float ItemPhysicsRuntime::calculateBlockGroundCorrection(
     float rotY,
     float rotZ) noexcept {
 
-  // Preserve signature so no caller logic needs special branches.
+  // Signature intentionally retained.
+  //
+  // Ground Contact V3 currently needs only shape.
   (void)block;
   (void)rotX;
   (void)rotY;
   (void)rotZ;
 
   // ==========================================================================
-  // HEAD / SKULL
+  // Invalid
+  // ==========================================================================
+
+  if (shape <
+      0) {
+
+    return
+        0.0f;
+  }
+
+  // ==========================================================================
+  // Skull
+  //
+  // V2 -0.25 was slightly too low for some variants.
   // ==========================================================================
 
   if (shape ==
@@ -1184,9 +1272,9 @@ float ItemPhysicsRuntime::calculateBlockGroundCorrection(
   }
 
   // ==========================================================================
-  // FULL BLOCK
+  // Full block.
   //
-  // Leave exact position unchanged.
+  // Do not alter.
   // ==========================================================================
 
   if (shape ==
@@ -1197,9 +1285,9 @@ float ItemPhysicsRuntime::calculateBlockGroundCorrection(
   }
 
   // ==========================================================================
-  // Horizontal models we already fixed.
+  // Horizontal / thin models that are already correct.
   //
-  // Do not lower them again because they could begin clipping.
+  // Do NOT lower them.
   // ==========================================================================
 
   switch (shape) {
@@ -1261,7 +1349,63 @@ float ItemPhysicsRuntime::calculateBlockGroundCorrection(
   }
 
   // ==========================================================================
-  // Large-scale / cross-style models.
+  // Explicit calibration for the models visible in current tests.
+  // ==========================================================================
+
+  switch (shape) {
+
+  case 2:
+    // Torch.
+    return
+        kTorchGroundLowering;
+
+  case 11:
+    // Fence.
+    return
+        kFenceGroundLowering;
+
+  case 12:
+    // Lever.
+    return
+        kLeverGroundLowering;
+
+  case 25:
+    // Brewing stand.
+    return
+        kBrewingStandGroundLowering;
+
+  case 42:
+    // Flower pot.
+    return
+        kFlowerPotGroundLowering;
+
+  case 81:
+    // End rod.
+    return
+        kEndRodGroundLowering;
+
+  case 110:
+    // Scaffolding.
+    return
+        kScaffoldingGroundLowering;
+
+  case 113:
+    // Lantern.
+    return
+        kLanternGroundLowering;
+
+  case 123:
+    // Chain.
+    return
+        kChainGroundLowering;
+
+  default:
+
+    break;
+  }
+
+  // ==========================================================================
+  // Large-scale / cross-style renderer.
   // ==========================================================================
 
   switch (shape) {
@@ -1269,11 +1413,8 @@ float ItemPhysicsRuntime::calculateBlockGroundCorrection(
   case 1:
     // cross texture
 
-  case 2:
-    // torch
-
   case 90:
-    // doublesided cross texture
+    // double-sided cross texture
 
   case 101:
     // conduit
@@ -1289,9 +1430,7 @@ float ItemPhysicsRuntime::calculateBlockGroundCorrection(
   }
 
   // ==========================================================================
-  // Shaped 3D models.
-  //
-  // These retain EXACTLY the orientation they already have.
+  // General shaped blocks.
   // ==========================================================================
 
   switch (shape) {
@@ -1304,12 +1443,6 @@ float ItemPhysicsRuntime::calculateBlockGroundCorrection(
 
   case 10:
     // stairs
-
-  case 11:
-    // fence
-
-  case 12:
-    // lever
 
   case 13:
     // cactus
@@ -1329,9 +1462,6 @@ float ItemPhysicsRuntime::calculateBlockGroundCorrection(
   case 22:
     // chest
 
-  case 25:
-    // brewing stand
-
   case 26:
     // portal frame
 
@@ -1346,9 +1476,6 @@ float ItemPhysicsRuntime::calculateBlockGroundCorrection(
 
   case 40:
     // double plant
-
-  case 42:
-    // flower pot
 
   case 43:
     // anvil
@@ -1377,14 +1504,11 @@ float ItemPhysicsRuntime::calculateBlockGroundCorrection(
   case 79:
     // chorus flower
 
-  case 81:
-    // end rod
-
   case 84:
     // facing block
 
   case 87:
-    // double-side fence
+    // double side fence
 
   case 89:
     // shulker box
@@ -1401,17 +1525,11 @@ float ItemPhysicsRuntime::calculateBlockGroundCorrection(
   case 108:
     // bamboo
 
-  case 110:
-    // scaffolding
-
   case 111:
     // grindstone
 
   case 112:
     // bell
-
-  case 113:
-    // lantern
 
   case 115:
     // lectern
@@ -1422,11 +1540,8 @@ float ItemPhysicsRuntime::calculateBlockGroundCorrection(
   case 119:
     // stonecutter
 
-  case 123:
-    // chain
-
   case 133:
-    // azalea-style block
+    // azalea-style
 
     return
         kShapedBlockGroundLowering;
@@ -1437,9 +1552,9 @@ float ItemPhysicsRuntime::calculateBlockGroundCorrection(
   }
 
   // ==========================================================================
-  // Unknown non-full BlockShape.
+  // Unknown non-full renderer shape.
   //
-  // Small conservative lowering.
+  // Conservative fallback.
   // ==========================================================================
 
   return
@@ -1447,7 +1562,7 @@ float ItemPhysicsRuntime::calculateBlockGroundCorrection(
 }
 
 // ============================================================================
-// State creation
+// Physics state creation
 // ============================================================================
 
 ItemPhysicsRuntime::PhysicsState &
@@ -1589,7 +1704,7 @@ void ItemPhysicsRuntime::updateState(
           1.0f);
 
   // ==========================================================================
-  // AIRBORNE
+  // Airborne
   // ==========================================================================
 
   if (!grounded) {
@@ -1641,7 +1756,7 @@ void ItemPhysicsRuntime::updateState(
   }
 
   // ==========================================================================
-  // GROUNDED
+  // Grounded
   // ==========================================================================
 
   const float settle =
@@ -1652,7 +1767,7 @@ void ItemPhysicsRuntime::updateState(
   // --------------------------------------------------------------------------
   // Horizontal compatibility blocks.
   //
-  // Keep exactly the existing behavior.
+  // UNCHANGED from the successful build.
   // --------------------------------------------------------------------------
 
   if (traits.modelClass ==
@@ -1683,6 +1798,8 @@ void ItemPhysicsRuntime::updateState(
 
   // --------------------------------------------------------------------------
   // Atlas baseline.
+  //
+  // UNCHANGED.
   // --------------------------------------------------------------------------
 
   else {
@@ -1701,7 +1818,7 @@ void ItemPhysicsRuntime::updateState(
     state.rotY =
         0.0f;
 
-    // Atlas keeps rotZ from landing.
+    // Atlas preserves rotZ.
   }
 
   state.wasGrounded =
@@ -1859,7 +1976,8 @@ bool ItemPhysicsRuntime::
   for (int guard = 0;
 
        nodeIndex != -1 &&
-       guard < 4096;
+       guard <
+           4096;
 
        ++guard) {
 
@@ -2141,6 +2259,8 @@ void ItemPhysicsRuntime::onRender(
 
   // ==========================================================================
   // Atlas behavior.
+  //
+  // UNCHANGED.
   // ==========================================================================
 
   inItemFrame =
@@ -2158,7 +2278,9 @@ void ItemPhysicsRuntime::onRender(
       position[1];
 
   // ==========================================================================
-  // Ordinary non-block item
+  // Existing Atlas ordinary-item classification.
+  //
+  // Do NOT alter because rotation / general Atlas behavior is already working.
   // ==========================================================================
 
   const bool ordinaryItem =
@@ -2175,37 +2297,80 @@ void ItemPhysicsRuntime::onRender(
   }
 
   // ==========================================================================
-  // Ground contact V2 - BlockItem
+  // Ground Contact V3
   //
-  // ONLY modifies Y.
+  // IMPORTANT DIFFERENCE:
+  //
+  // Ground Y correction follows the ACTUAL BlockShape reported by Minecraft's
+  // renderer.
+  //
+  // It does NOT require:
+  //
+  // traits.modelClass == BlockItem
+  //
+  // anymore.
+  //
+  // Therefore torch/fence/lantern can finally reach this path even if mBlock
+  // is null.
   // ==========================================================================
 
   if (grounded &&
-      traits.modelClass ==
+      traits.modelClass !=
           ModelClass::
-              BlockItem) {
+              SpecialItem) {
 
-    const auto block =
-        *reinterpret_cast<
-            const void *const *>(
+    std::int32_t groundShape =
+        -1;
 
-            actorAddress +
-            profile::
-                kBlockPtrOffset);
+    // Preferred:
+    // exact renderer shape.
+    if (traits.hasRenderShape) {
 
-    position[1] +=
-        calculateBlockGroundCorrection(
-            block,
-            traits.block.blockShape,
-            snapshot.rotX,
-            snapshot.rotY,
-            snapshot.rotZ);
+      groundShape =
+          traits.renderShape;
+    }
+
+    // Fallback:
+    // old Block pointer classification.
+    else if (
+        traits.modelClass ==
+            ModelClass::
+                BlockItem) {
+
+      groundShape =
+          traits.block.blockShape;
+    }
+
+    if (groundShape >=
+        0) {
+
+      const auto block =
+          *reinterpret_cast<
+              const void *const *>(
+
+              actorAddress +
+              profile::
+                  kBlockPtrOffset);
+
+      position[1] +=
+          calculateBlockGroundCorrection(
+              block,
+              groundShape,
+              snapshot.rotX,
+              snapshot.rotY,
+              snapshot.rotZ);
+    }
   }
 
   // ==========================================================================
-  // Ground contact V2 - SpecialItem
+  // Shield / banner correction.
   //
-  // Shield/banner are excluded from Atlas's ordinary -0.38 path.
+  // Safe:
+  //
+  // This is executed ONLY after classifyItem has already positively classified
+  // the item through the non-block Item pointer path.
+  //
+  // We never use this for skull/head.
   // ==========================================================================
 
   if (grounded &&
@@ -2213,8 +2378,46 @@ void ItemPhysicsRuntime::onRender(
           ModelClass::
               SpecialItem) {
 
-    position[1] +=
-        kSpecialItemGroundLowering;
+    const auto itemHandle =
+        *reinterpret_cast<
+            const std::uintptr_t *>(
+
+            actorAddress +
+            profile::
+                kItemHandleOffset);
+
+    if (itemHandle) {
+
+      const auto item =
+          *reinterpret_cast<
+              const std::uintptr_t *>(
+              itemHandle);
+
+      if (item) {
+
+        const auto identifier =
+            item +
+            profile::
+                kItemIdentifierOffset;
+
+        if (libcxxStringEquals(
+                identifier,
+                kShieldId)) {
+
+          position[1] +=
+              kShieldGroundLowering;
+        }
+
+        else if (
+            libcxxStringEquals(
+                identifier,
+                kBannerId)) {
+
+          position[1] +=
+              kBannerGroundLowering;
+        }
+      }
+    }
   }
 
   // ==========================================================================
@@ -2240,7 +2443,6 @@ void ItemPhysicsRuntime::onRender(
 
     if (!matrix) {
 
-      // Restore before fallback.
       position[1] =
           oldY;
 
@@ -2270,7 +2472,7 @@ void ItemPhysicsRuntime::onRender(
     // ========================================================================
     // Existing Atlas matrix order.
     //
-    // DO NOT change for ground-height stage.
+    // ABSOLUTELY UNCHANGED in this ground-height pass.
     // ========================================================================
 
     postTranslate(
