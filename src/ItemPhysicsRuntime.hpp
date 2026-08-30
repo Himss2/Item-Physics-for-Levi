@@ -72,9 +72,9 @@ public:
           MatrixStackRefAbi *);
 
 private:
-  // ==========================================================
-  // AABB
-  // ==========================================================
+  // ==========================================================================
+  // AABB ABI
+  // ==========================================================================
 
   struct AabbAbi {
     float minX{};
@@ -87,18 +87,19 @@ private:
   };
 
   static_assert(
-      sizeof(AabbAbi) ==
-      24);
+      sizeof(AabbAbi) == 24);
 
-  // ==========================================================
-  // Item classes
-  // ==========================================================
+  // ==========================================================================
+  // Model classes
+  // ==========================================================================
 
   enum class ModelClass :
       std::uint8_t {
 
     FlatItem,
+
     BlockItem,
+
     SpecialItem,
   };
 
@@ -110,17 +111,6 @@ private:
 
     bool
         keepHorizontal{};
-
-    // Actual Block::getVisualShape result.
-    bool
-        hasBounds{};
-
-    AabbAbi
-        bounds{};
-
-    // ItemRenderer scale for this BlockShape.
-    float
-        renderScale{0.25f};
   };
 
   struct ItemRenderTraits {
@@ -133,9 +123,9 @@ private:
         block{};
   };
 
-  // ==========================================================
-  // Physics state
-  // ==========================================================
+  // ==========================================================================
+  // Physics
+  // ==========================================================================
 
   struct PhysicsState {
     bool initialized{};
@@ -160,18 +150,27 @@ private:
         lastSeen{};
   };
 
-  // ==========================================================
-  // Minecraft ABI
-  // ==========================================================
+  // ==========================================================================
+  // Minecraft helper ABI
+  // ==========================================================================
 
+  // ItemStackBase::getBlockTypeForRendering()
+  //
+  // Actual C++ return type:
+  //
+  // WeakPtr<BlockType const> const&
+  //
+  // We only need the returned object's address.
   using GetBlockTypeForRenderingFn =
       const void *(*)(
           const void *itemStackBase);
 
+  // BlockGraphics::getForBlock(BlockType const&)
   using BlockGraphicsGetForBlockTypeFn =
       void *(*)(
           const void *blockType);
 
+  // BlockGraphics::getForBlock(Block const&)
   using BlockGraphicsGetForBlockFn =
       void *(*)(
           const void *block);
@@ -186,9 +185,9 @@ private:
           const void *block,
           AabbAbi *scratch);
 
-  // ==========================================================
+  // ==========================================================================
   // Hook
-  // ==========================================================
+  // ==========================================================================
 
   static ItemPhysicsRuntime *
       sInstance;
@@ -207,9 +206,9 @@ private:
       const ResolvedVirtual &resolved,
       ll::mod::NativeMod &mod) const;
 
-  // ==========================================================
+  // ==========================================================================
   // Classification
-  // ==========================================================
+  // ==========================================================================
 
   [[nodiscard]]
   ItemRenderTraits classifyItem(
@@ -220,29 +219,21 @@ private:
       const void *block,
       BlockRenderInfo &info) const noexcept;
 
+  // Uses the EXACT path used by vanilla ItemRenderer:
+  //
+  // ItemStackBase
+  // -> getBlockTypeForRendering()
+  // -> WeakPtr<BlockType>
+  // -> BlockGraphics
+  // -> BlockShape
   [[nodiscard]]
   bool tryGetRenderBlockShape(
       std::uintptr_t actorAddress,
       std::int32_t &shape) const noexcept;
 
-  // ==========================================================
-  // Ground contact
-  // ==========================================================
-
-  [[nodiscard]]
-  static float renderScaleForBlockShape(
-      std::int32_t shape) noexcept;
-
-  [[nodiscard]]
-  static float calculateBlockGroundCorrection(
-      const BlockRenderInfo &block,
-      float rotX,
-      float rotY,
-      float rotZ) noexcept;
-
-  // ==========================================================
+  // ==========================================================================
   // ECS / physics
-  // ==========================================================
+  // ==========================================================================
 
   [[nodiscard]]
   bool hasOnGroundComponent(
@@ -276,9 +267,9 @@ private:
       std::uintptr_t stringAddress,
       std::string_view wanted) noexcept;
 
-  // ==========================================================
+  // ==========================================================================
   // Config
-  // ==========================================================
+  // ==========================================================================
 
   std::atomic_bool
       mEnabled{true};
@@ -301,9 +292,9 @@ private:
   std::atomic_bool
       mProfileSupported{false};
 
-  // ==========================================================
+  // ==========================================================================
   // Runtime
-  // ==========================================================
+  // ==========================================================================
 
   std::uintptr_t
       mMinecraftBase{};
@@ -335,9 +326,9 @@ private:
   BlockGraphicsGetBlockShapeFn
       mGetBlockGraphicsShape{};
 
-  // ==========================================================
+  // ==========================================================================
   // Hook / state
-  // ==========================================================
+  // ==========================================================================
 
   std::unique_ptr<
       pl::memory::HookHandle>
