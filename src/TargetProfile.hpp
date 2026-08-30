@@ -39,21 +39,10 @@ inline constexpr std::ptrdiff_t
     kActorEntityIdOffset =
         0x18;
 
-// ItemStackBase begins at ItemActor + 0x390.
 inline constexpr std::ptrdiff_t
     kItemStackBaseOffset =
         0x390;
 
-// ItemStackBase:
-//
-// +0x08 mItem
-// +0x10 mUserData
-// +0x18 mBlock
-//
-// Actor:
-//
-// 0x390 + 0x08 = 0x398
-// 0x390 + 0x18 = 0x3A8
 inline constexpr std::ptrdiff_t
     kItemHandleOffset =
         0x398;
@@ -70,7 +59,6 @@ inline constexpr std::ptrdiff_t
     kIsInItemFrameOffset =
         0x440;
 
-// Item libc++ std::string identifier.
 inline constexpr std::ptrdiff_t
     kItemIdentifierOffset =
         0xF0;
@@ -88,7 +76,7 @@ inline constexpr std::ptrdiff_t
         0x10;
 
 // ============================================================================
-// MatrixStack - MC 1.26.45.1
+// MatrixStack
 // ============================================================================
 
 inline constexpr std::uintptr_t
@@ -104,26 +92,7 @@ inline constexpr std::uintptr_t
         0x107CC6C0;
 
 // ============================================================================
-// ItemStackBase::getBlockTypeForRendering()
-//
-// Vanilla ItemRenderer 1.26.45.1:
-//
-// add x0, ItemActor, #0x390
-// bl  0xF642ADC
-//
-// Return:
-// WeakPtr<BlockType const>&
-//
-// WeakPtr:
-// [0x00] SharedCounter*
-//
-// SharedCounter:
-// [0x00] BlockType*
-//
-// Vanilla immediately performs:
-//
-// ldr x8, [x0]
-// ldr BlockType, [x8]
+// ItemStackBase::getBlockTypeForRendering
 // ============================================================================
 
 inline constexpr std::uintptr_t
@@ -134,33 +103,18 @@ inline constexpr std::uintptr_t
 // BlockGraphics
 // ============================================================================
 
-// BlockGraphics::getForBlock(BlockType const&)
-//
-// This is the overload used directly by ItemRenderer.
 inline constexpr std::uintptr_t
     kBlockGraphicsGetForBlockTypeRva =
         0x0A2189DC;
 
-// BlockGraphics::getForBlock(Block const&)
-//
-// Used by our existing block-backed path.
-//
-// Internally:
-//
-// ldr x0, [x0,#0x68]
 inline constexpr std::uintptr_t
     kBlockGraphicsGetForBlockRva =
         0x0A2189F0;
 
-// BlockGraphics::getBlockShape()
-//
-// ldr w0, [x0,#0x10]
-// ret
 inline constexpr std::uintptr_t
     kBlockGraphicsGetBlockShapeRva =
         0x0A219718;
 
-// Vanilla block-shape classifier.
 inline constexpr std::uintptr_t
     kIsBlockShape3DRva =
         0x0A280E68;
@@ -178,13 +132,7 @@ inline constexpr std::size_t
         0x50;
 
 // ============================================================================
-// ItemRenderer private block helper
-//
-// Not hooked.
-// Kept only as RE reference.
-//
-// Skull is still:
-// BlockShape = 83 / 0x53.
+// ItemRenderer private helper
 // ============================================================================
 
 inline constexpr std::uintptr_t
@@ -200,11 +148,7 @@ inline constexpr std::uint32_t
         0xC29078A0u;
 
 // ============================================================================
-// ItemRenderer fingerprint
-//
-// RVA 0xA29F708
-//
-// 24 words instead of the old 16-word fingerprint.
+// ItemRenderer::render fingerprint
 // ============================================================================
 
 inline constexpr std::array<
@@ -263,7 +207,7 @@ inline constexpr std::array<
 };
 
 // ============================================================================
-// BlockGraphics(BlockType) fingerprint
+// BlockGraphics::getForBlock(BlockType)
 // ============================================================================
 
 inline constexpr std::array<
@@ -279,7 +223,7 @@ inline constexpr std::array<
 };
 
 // ============================================================================
-// getBlockShape fingerprint
+// BlockGraphics::getBlockShape
 // ============================================================================
 
 inline constexpr std::array<
