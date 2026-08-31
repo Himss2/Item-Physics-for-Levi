@@ -4,14 +4,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <string_view>
 
 namespace itemphysics {
 namespace {
-
-// ============================================================================
-// General constants
-// ============================================================================
 
 constexpr float kPi =
     3.14159265358979323846f;
@@ -22,23 +19,11 @@ constexpr float kDegToRad =
 constexpr auto kStateTtl =
     std::chrono::seconds(8);
 
-// ============================================================================
-// Atlas
-// ============================================================================
-
 constexpr float kAtlasFlatLocalY =
     0.25f;
 
-// ============================================================================
-// BlockShape
-// ============================================================================
-
 constexpr std::int32_t kSkullBlockShape =
     83;
-
-// ============================================================================
-// Thin horizontal detection
-// ============================================================================
 
 constexpr float kThinYRatio =
     0.70f;
@@ -46,25 +31,11 @@ constexpr float kThinYRatio =
 constexpr float kExtentEpsilon =
     0.0005f;
 
-// ============================================================================
-// Item identifiers
-// ============================================================================
-
 constexpr std::string_view kShieldId =
     "minecraft:shield";
 
 constexpr std::string_view kBannerId =
     "minecraft:banner";
-
-// ============================================================================
-// Ground-height renderer categories
-//
-// IMPORTANT:
-//
-// These functions affect ONLY Y selection.
-//
-// They DO NOT decide item rotation.
-// ============================================================================
 
 [[nodiscard]]
 bool isThinGroundShape(
@@ -73,57 +44,24 @@ bool isThinGroundShape(
   switch (shape) {
 
   case 9:
-    // Rail.
-
   case 14:
-    // Bed.
-
   case 15:
-    // Diode-like.
-
   case 23:
-    // Lily pad.
-
   case 67:
-    // Slab / block_half.
-
   case 68:
-    // Snow layer.
-
   case 69:
-    // Tripwire.
-
   case 72:
-    // Repeater.
-
   case 73:
-    // Comparator.
-
   case 80:
-    // End portal.
-
   case 96:
-    // Coral fan.
-
   case 99:
-    // Trapdoor.
-
   case 114:
-    // Campfire.
-
   case 126:
-    // Sculk sensor.
-
   case 135:
-    // Glow lichen.
-
   case 136:
-    // Redstone wire.
-
     return true;
 
   default:
-
     return false;
   }
 }
@@ -135,23 +73,13 @@ bool isTorchGroundShape(
   switch (shape) {
 
   case 1:
-    // Cross texture.
-
   case 2:
-    // Torch.
-
   case 90:
-    // Double-sided cross texture.
-
   case 101:
-    // Conduit / related scale path.
-
   case 155:
-
     return true;
 
   default:
-
     return false;
   }
 }
@@ -163,148 +91,55 @@ bool isShapedGroundShape(
   switch (shape) {
 
   case 7:
-    // Door.
-
   case 8:
-    // Ladder.
-
   case 10:
-    // Stairs.
-
   case 11:
-    // Fence.
-
   case 12:
-    // Lever.
-
   case 13:
-    // Cactus.
-
   case 18:
-    // Iron fence.
-
   case 19:
-    // Stem.
-
   case 20:
-    // Vine.
-
   case 21:
-    // Fence gate.
-
   case 22:
-    // Chest.
-
   case 25:
-    // Brewing stand.
-
   case 26:
-    // Portal frame.
-
   case 28:
-    // Cocoa.
-
   case 31:
-    // Tree shape.
-
   case 32:
-    // Wall.
-
   case 40:
-    // Double plant.
-
   case 42:
-    // Flower pot.
-
   case 43:
-    // Anvil.
-
   case 44:
-    // Dragon egg.
-
   case 70:
-    // Tripwire hook.
-
   case 71:
-    // Cauldron.
-
   case 74:
-    // Hopper.
-
   case 76:
-    // Piston.
-
   case 77:
-    // Beacon.
-
   case 78:
-    // Chorus plant.
-
   case 79:
-    // Chorus flower.
-
   case 81:
-    // End rod.
-
   case 84:
-    // Facing block.
-
   case 87:
-    // Double-side fence.
-
   case 89:
-    // Shulker box.
-
   case 100:
-    // Sea pickle.
-
   case 102:
-    // Turtle egg.
-
   case 107:
-    // Sign.
-
   case 108:
-    // Bamboo.
-
   case 110:
-    // Scaffolding.
-
   case 111:
-    // Grindstone.
-
   case 112:
-    // Bell.
-
   case 113:
-    // Lantern.
-
   case 115:
-    // Lectern.
-
   case 116:
-    // Berry bush.
-
   case 119:
-    // Stonecutter.
-
   case 123:
-    // Chain.
-
   case 133:
-    // Azalea-like.
-
     return true;
 
   default:
-
     return false;
   }
 }
-
-// ============================================================================
-// Matrix stack RAII
-// ============================================================================
 
 class MatrixPushScope {
 public:
@@ -373,17 +208,9 @@ private:
 
 } // namespace
 
-// ============================================================================
-// Static runtime
-// ============================================================================
-
 ItemPhysicsRuntime *
 ItemPhysicsRuntime::sInstance =
     nullptr;
-
-// ============================================================================
-// Config
-// ============================================================================
 
 void ItemPhysicsRuntime::applyConfig(
     const ItemPhysicsConfig &config) noexcept {
@@ -394,6 +221,10 @@ void ItemPhysicsRuntime::applyConfig(
 
   mSingleModel.store(
       config.singleModel,
+      std::memory_order_relaxed);
+
+  mHideItemShadow.store(
+      config.hideItemShadow,
       std::memory_order_relaxed);
 
   mRotationSpeed.store(
@@ -415,10 +246,6 @@ void ItemPhysicsRuntime::applyConfig(
       static_cast<float>(
           config.heightOffset),
       std::memory_order_relaxed);
-
-  // ==========================================================================
-  // Ground Height V4
-  // ==========================================================================
 
   mBlockGroundHeight.store(
       static_cast<float>(
@@ -455,10 +282,6 @@ void ItemPhysicsRuntime::applyConfig(
           config.bannerGroundHeight),
       std::memory_order_relaxed);
 }
-
-// ============================================================================
-// Profile verification
-// ============================================================================
 
 bool ItemPhysicsRuntime::verifyProfile(
     const ResolvedVirtual &resolved,
@@ -513,10 +336,7 @@ bool ItemPhysicsRuntime::verifyProfile(
 
   if (!verifyWords(
           resolved.target,
-
-          profile::
-              kRenderFingerprint,
-
+          profile::kRenderFingerprint,
           "ItemRenderer::render")) {
 
     return false;
@@ -561,6 +381,32 @@ bool ItemPhysicsRuntime::verifyProfile(
     return false;
   }
 
+  if (!verifyWords(
+          resolved.module.base +
+              profile::
+                  kRelativeShadowStorageRva,
+
+          profile::
+              kRelativeShadowStorageFingerprint,
+
+          "RelativeShadowOffsetComponent storage")) {
+
+    return false;
+  }
+
+  if (!verifyWords(
+          resolved.module.base +
+              profile::
+                  kRelativeShadowEmplaceRva,
+
+          profile::
+              kRelativeShadowEmplaceFingerprint,
+
+          "RelativeShadowOffsetComponent emplace")) {
+
+    return false;
+  }
+
   const auto executable =
       [&](std::uintptr_t rva) {
 
@@ -595,7 +441,15 @@ bool ItemPhysicsRuntime::verifyProfile(
 
       !executable(
           profile::
-              kBlockGraphicsGetBlockShapeRva)) {
+              kBlockGraphicsGetBlockShapeRva) ||
+
+      !executable(
+          profile::
+              kRelativeShadowStorageRva) ||
+
+      !executable(
+          profile::
+              kRelativeShadowEmplaceRva)) {
 
     mod.getLogger().warn(
         "Minecraft 1.26.45 renderer helper validation failed");
@@ -605,10 +459,6 @@ bool ItemPhysicsRuntime::verifyProfile(
 
   return true;
 }
-
-// ============================================================================
-// Install
-// ============================================================================
 
 bool ItemPhysicsRuntime::install(
     ll::mod::NativeMod &mod) {
@@ -652,10 +502,6 @@ bool ItemPhysicsRuntime::install(
   mRenderTarget =
       resolved->target;
 
-  // --------------------------------------------------------------------------
-  // Matrix
-  // --------------------------------------------------------------------------
-
   mGetWorldMatrix =
       reinterpret_cast<
           GetWorldMatrixFn>(
@@ -680,10 +526,6 @@ bool ItemPhysicsRuntime::install(
           profile::
               kMatrixStackRefDtorRva);
 
-  // --------------------------------------------------------------------------
-  // Vanilla renderer block path
-  // --------------------------------------------------------------------------
-
   mGetBlockTypeForRendering =
       reinterpret_cast<
           GetBlockTypeForRenderingFn>(
@@ -699,10 +541,6 @@ bool ItemPhysicsRuntime::install(
           mMinecraftBase +
           profile::
               kBlockGraphicsGetForBlockTypeRva);
-
-  // --------------------------------------------------------------------------
-  // Existing Block pointer path
-  // --------------------------------------------------------------------------
 
   mGetBlockGraphicsForBlock =
       reinterpret_cast<
@@ -720,17 +558,27 @@ bool ItemPhysicsRuntime::install(
           profile::
               kBlockGraphicsGetBlockShapeRva);
 
+  mGetRelativeShadowStorage =
+      reinterpret_cast<
+          RelativeShadowStorageFn>(
+
+          mMinecraftBase +
+          profile::
+              kRelativeShadowStorageRva);
+
+  mEmplaceRelativeShadow =
+      reinterpret_cast<
+          RelativeShadowEmplaceFn>(
+
+          mMinecraftBase +
+          profile::
+              kRelativeShadowEmplaceRva);
+
   sInstance =
       this;
 
   mOriginal =
       nullptr;
-
-  // ==========================================================================
-  // One hook only.
-  //
-  // Private ItemRenderer helper remains untouched.
-  // ==========================================================================
 
   mHook =
       std::make_unique<
@@ -769,14 +617,10 @@ bool ItemPhysicsRuntime::install(
 
   mod.getLogger().info(
       "Item Physics active: "
-      "Minecraft 1.26.45 + Slider Ground Height V4");
+      "Minecraft 1.26.45 + Ground Height V4 + Atlas Item Shadow");
 
   return true;
 }
-
-// ============================================================================
-// Uninstall
-// ============================================================================
 
 void ItemPhysicsRuntime::uninstall() {
 
@@ -822,6 +666,12 @@ void ItemPhysicsRuntime::uninstall() {
   mGetBlockGraphicsShape =
       nullptr;
 
+  mGetRelativeShadowStorage =
+      nullptr;
+
+  mEmplaceRelativeShadow =
+      nullptr;
+
   mRenderTarget =
       0;
 
@@ -830,10 +680,6 @@ void ItemPhysicsRuntime::uninstall() {
 
   clearStates();
 }
-
-// ============================================================================
-// Clear states
-// ============================================================================
 
 void ItemPhysicsRuntime::clearStates() {
 
@@ -845,10 +691,6 @@ void ItemPhysicsRuntime::clearStates() {
   mRenderCounter =
       0;
 }
-
-// ============================================================================
-// Detour
-// ============================================================================
 
 void ItemPhysicsRuntime::renderDetour(
     void *self,
@@ -863,10 +705,6 @@ void ItemPhysicsRuntime::renderDetour(
         renderData);
   }
 }
-
-// ============================================================================
-// Math
-// ============================================================================
 
 float ItemPhysicsRuntime::seededUnit(
     std::uint32_t seed) noexcept {
@@ -926,10 +764,6 @@ float ItemPhysicsRuntime::approachAngle(
               0.0f,
               1.0f));
 }
-
-// ============================================================================
-// libc++ std::string
-// ============================================================================
 
 bool ItemPhysicsRuntime::libcxxStringEquals(
     std::uintptr_t stringAddress,
@@ -996,10 +830,6 @@ bool ItemPhysicsRuntime::libcxxStringEquals(
              0;
 }
 
-// ============================================================================
-// Actual vanilla renderer BlockShape
-// ============================================================================
-
 bool ItemPhysicsRuntime::tryGetRenderBlockShape(
     std::uintptr_t actorAddress,
     std::int32_t &shape) const noexcept {
@@ -1032,7 +862,6 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
     return false;
   }
 
-  // WeakPtr<T>[0] -> SharedCounter<T>*
   const auto counter =
       *reinterpret_cast<
           const std::uintptr_t *>(
@@ -1043,7 +872,6 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
     return false;
   }
 
-  // SharedCounter<T>[0] -> BlockType*
   const auto blockType =
       *reinterpret_cast<
           const std::uintptr_t *>(
@@ -1073,10 +901,6 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
   return true;
 }
 
-// ============================================================================
-// Block information
-// ============================================================================
-
 bool ItemPhysicsRuntime::buildBlockRenderInfo(
     const void *block,
     BlockRenderInfo &info) const noexcept {
@@ -1088,10 +912,6 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
 
     return false;
   }
-
-  // ==========================================================================
-  // BlockShape
-  // ==========================================================================
 
   if (mGetBlockGraphicsForBlock &&
       mGetBlockGraphicsShape) {
@@ -1110,14 +930,6 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
 
   bool thinHorizontal =
       false;
-
-  // ==========================================================================
-  // VisualShape
-  //
-  // Still used ONLY for orientation compatibility.
-  //
-  // Ground height does NOT come from AABB anymore.
-  // ==========================================================================
 
   const auto blockAddress =
       reinterpret_cast<
@@ -1217,23 +1029,11 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
   return true;
 }
 
-// ============================================================================
-// Classification
-// ============================================================================
-
 ItemPhysicsRuntime::ItemRenderTraits
 ItemPhysicsRuntime::classifyItem(
     std::uintptr_t actorAddress) const noexcept {
 
   ItemRenderTraits traits{};
-
-  // ==========================================================================
-  // First:
-  //
-  // Record actual renderer shape.
-  //
-  // This does NOT automatically change physics orientation.
-  // ==========================================================================
 
   std::int32_t rendererShape =
       -1;
@@ -1248,14 +1048,6 @@ ItemPhysicsRuntime::classifyItem(
     traits.renderShape =
         rendererShape;
   }
-
-  // ==========================================================================
-  // Skull
-  //
-  // This remains the ONLY render-shape classification override.
-  //
-  // It is the fix that made heads use the correct orientation.
-  // ==========================================================================
 
   if (traits.hasRenderShape &&
       traits.renderShape ==
@@ -1284,12 +1076,6 @@ ItemPhysicsRuntime::classifyItem(
     return traits;
   }
 
-  // ==========================================================================
-  // Existing Block pointer path
-  //
-  // UNCHANGED.
-  // ==========================================================================
-
   const auto block =
       *reinterpret_cast<
           const void *const *>(
@@ -1317,10 +1103,6 @@ ItemPhysicsRuntime::classifyItem(
 
     return traits;
   }
-
-  // ==========================================================================
-  // Non-block item
-  // ==========================================================================
 
   const auto itemHandle =
       *reinterpret_cast<
@@ -1398,10 +1180,6 @@ ItemPhysicsRuntime::classifyItem(
 
   return traits;
 }
-
-// ============================================================================
-// Physics state
-// ============================================================================
 
 ItemPhysicsRuntime::PhysicsState &
 ItemPhysicsRuntime::stateFor(
@@ -1508,10 +1286,6 @@ ItemPhysicsRuntime::stateFor(
   return state;
 }
 
-// ============================================================================
-// Physics update
-// ============================================================================
-
 void ItemPhysicsRuntime::updateState(
     PhysicsState &state,
     const ItemRenderTraits &traits,
@@ -1540,10 +1314,6 @@ void ItemPhysicsRuntime::updateState(
           dt *
               5.0f,
           1.0f);
-
-  // ==========================================================================
-  // Airborne
-  // ==========================================================================
 
   if (!grounded) {
 
@@ -1593,20 +1363,10 @@ void ItemPhysicsRuntime::updateState(
     return;
   }
 
-  // ==========================================================================
-  // Grounded
-  // ==========================================================================
-
   const float settle =
       frameFactor *
       mSettleSpeed.load(
           std::memory_order_relaxed);
-
-  // --------------------------------------------------------------------------
-  // Existing horizontal compatibility.
-  //
-  // DO NOT change during ground-height tuning.
-  // --------------------------------------------------------------------------
 
   if (traits.modelClass ==
           ModelClass::
@@ -1634,10 +1394,6 @@ void ItemPhysicsRuntime::updateState(
             settle);
   }
 
-  // --------------------------------------------------------------------------
-  // Existing Atlas baseline.
-  // --------------------------------------------------------------------------
-
   else {
 
     const float target =
@@ -1653,17 +1409,11 @@ void ItemPhysicsRuntime::updateState(
 
     state.rotY =
         0.0f;
-
-    // Atlas keeps rotZ.
   }
 
   state.wasGrounded =
       true;
 }
-
-// ============================================================================
-// Cleanup
-// ============================================================================
 
 void ItemPhysicsRuntime::pruneStates(
     std::chrono::steady_clock::
@@ -1690,9 +1440,198 @@ void ItemPhysicsRuntime::pruneStates(
   }
 }
 
-// ============================================================================
-// OnGroundFlagComponent
-// ============================================================================
+void ItemPhysicsRuntime::updateItemShadowComponent(
+    void *actor,
+    bool grounded,
+    bool hideShadow) const noexcept {
+
+  if (!actor ||
+      !mGetRelativeShadowStorage ||
+      !mEmplaceRelativeShadow) {
+
+    return;
+  }
+
+  const auto actorAddress =
+      reinterpret_cast<
+          std::uintptr_t>(
+          actor);
+
+  auto *registry =
+      *reinterpret_cast<
+          void **>(
+
+          actorAddress +
+          profile::
+              kActorRegistryOffset);
+
+  const auto entityId =
+      *reinterpret_cast<
+          const std::uint32_t *>(
+
+          actorAddress +
+          profile::
+              kActorEntityIdOffset);
+
+  if (!registry) {
+
+    return;
+  }
+
+  void *storage =
+      mGetRelativeShadowStorage(
+          registry,
+          profile::
+              kRelativeShadowOffsetComponentHash);
+
+  if (!storage) {
+
+    return;
+  }
+
+  const float wanted =
+      hideShadow
+
+          ? std::numeric_limits<float>::max()
+
+          : (grounded
+                 ? 0.0f
+                 : -0.5f);
+
+  const auto storageAddress =
+      reinterpret_cast<
+          std::uintptr_t>(
+          storage);
+
+  const auto pagesBegin =
+      *reinterpret_cast<
+          const std::uintptr_t *>(
+          storageAddress +
+          0x08);
+
+  const auto pagesEnd =
+      *reinterpret_cast<
+          const std::uintptr_t *>(
+          storageAddress +
+          0x10);
+
+  bool present =
+      false;
+
+  std::uint32_t packedEntity =
+      0;
+
+  if (pagesBegin &&
+      pagesEnd >=
+          pagesBegin) {
+
+    const auto pageCount =
+        (pagesEnd -
+         pagesBegin) /
+        sizeof(
+            std::uintptr_t);
+
+    const auto pageIndex =
+        (entityId >>
+         11) &
+        0x7Fu;
+
+    if (pageIndex <
+        pageCount) {
+
+      const auto sparsePage =
+          *reinterpret_cast<
+              const std::uintptr_t *>(
+
+              pagesBegin +
+              pageIndex *
+                  sizeof(
+                      std::uintptr_t));
+
+      if (sparsePage) {
+
+        const auto sparseSlot =
+            entityId &
+            0x7FFu;
+
+        packedEntity =
+            *reinterpret_cast<
+                const std::uint32_t *>(
+
+                sparsePage +
+                sparseSlot *
+                    sizeof(
+                        std::uint32_t));
+
+        const auto generation =
+            entityId &
+            0xFFFC0000u;
+
+        present =
+            (packedEntity ^
+             generation) <=
+            0x3FFFEu;
+      }
+    }
+  }
+
+  if (!present) {
+
+    const std::uint32_t entityCopy =
+        entityId;
+
+    (void)mEmplaceRelativeShadow(
+        storage,
+        &entityCopy,
+        false,
+        &wanted);
+
+    return;
+  }
+
+  const auto denseIndex =
+      packedEntity &
+      0x3FFFFu;
+
+  const auto componentPages =
+      *reinterpret_cast<
+          const std::uintptr_t *>(
+          storageAddress +
+          0x50);
+
+  if (!componentPages) {
+
+    return;
+  }
+
+  const auto componentPageIndex =
+      denseIndex >>
+      7;
+
+  const auto componentPage =
+      *reinterpret_cast<
+          const std::uintptr_t *>(
+
+          componentPages +
+          componentPageIndex *
+              sizeof(
+                  std::uintptr_t));
+
+  if (!componentPage) {
+
+    return;
+  }
+
+  const auto componentSlot =
+      denseIndex &
+      0x7Fu;
+
+  *reinterpret_cast<float *>(
+      componentPage +
+      componentSlot *
+          sizeof(float)) =
+      wanted;
+}
 
 bool ItemPhysicsRuntime::
     hasOnGroundComponent(
@@ -1939,10 +1878,6 @@ bool ItemPhysicsRuntime::
          0x3FFFEu;
 }
 
-// ============================================================================
-// Render
-// ============================================================================
-
 void ItemPhysicsRuntime::onRender(
     void *self,
     void *renderContext,
@@ -1956,10 +1891,7 @@ void ItemPhysicsRuntime::onRender(
     return;
   }
 
-  if (!mEnabled.load(
-          std::memory_order_relaxed) ||
-
-      !renderContext ||
+  if (!renderContext ||
       !renderData ||
 
       !mProfileSupported.load(
@@ -2001,6 +1933,34 @@ void ItemPhysicsRuntime::onRender(
           std::uintptr_t>(
           actor);
 
+  const bool grounded =
+      hasOnGroundComponent(
+          actor);
+
+  const bool enabled =
+      mEnabled.load(
+          std::memory_order_relaxed);
+
+  const bool hideShadow =
+      enabled &&
+      mHideItemShadow.load(
+          std::memory_order_relaxed);
+
+  updateItemShadowComponent(
+      actor,
+      grounded,
+      hideShadow);
+
+  if (!enabled) {
+
+    original(
+        self,
+        renderContext,
+        renderData);
+
+    return;
+  }
+
   const auto traits =
       classifyItem(
           actorAddress);
@@ -2022,10 +1982,6 @@ void ItemPhysicsRuntime::onRender(
           actorAddress +
           profile::
               kActorEntityIdOffset);
-
-  const bool grounded =
-      hasOnGroundComponent(
-          actor);
 
   PhysicsState snapshot;
 
@@ -2060,10 +2016,6 @@ void ItemPhysicsRuntime::onRender(
     }
   }
 
-  // ==========================================================================
-  // Temporary actor state
-  // ==========================================================================
-
   auto &count =
       *reinterpret_cast<
           std::uint8_t *>(
@@ -2093,10 +2045,6 @@ void ItemPhysicsRuntime::onRender(
         1;
   }
 
-  // ==========================================================================
-  // Atlas renderer mode
-  // ==========================================================================
-
   inItemFrame =
       1;
 
@@ -2111,25 +2059,6 @@ void ItemPhysicsRuntime::onRender(
   const float oldY =
       position[1];
 
-  // ==========================================================================
-  // Original Atlas ordinary item
-  //
-  // IMPORTANT:
-  //
-  // Leave this unchanged.
-  //
-  // Flat Item Height remains the original slider used by:
-  //
-  // sword
-  // pickaxe
-  // tools
-  // ordinary flat items
-  //
-  // Some renderer-backed items may also have this base transform depending on
-  // their existing ModelClass. New category sliders are intentionally
-  // ADDITIONAL adjustments so they can be calibrated without touching physics.
-  // ==========================================================================
-
   const bool ordinaryItem =
       traits.modelClass ==
       ModelClass::
@@ -2143,19 +2072,7 @@ void ItemPhysicsRuntime::onRender(
             std::memory_order_relaxed);
   }
 
-  // ==========================================================================
-  // Ground Height V4
-  //
-  // Exactly ONE category slider is applied here.
-  //
-  // No hard-coded Y correction remains.
-  // ==========================================================================
-
   if (grounded) {
-
-    // ------------------------------------------------------------------------
-    // Shield / banner
-    // ------------------------------------------------------------------------
 
     if (traits.modelClass ==
         ModelClass::
@@ -2187,27 +2104,17 @@ void ItemPhysicsRuntime::onRender(
       }
     }
 
-    // ------------------------------------------------------------------------
-    // Block-rendered categories
-    // ------------------------------------------------------------------------
-
     else {
 
       std::int32_t groundShape =
           -1;
 
-      // Preferred source:
-      //
-      // actual ItemRenderer BlockShape.
       if (traits.hasRenderShape) {
 
         groundShape =
             traits.renderShape;
       }
 
-      // Fallback:
-      //
-      // Block-backed classification.
       else if (
           traits.modelClass ==
               ModelClass::
@@ -2220,10 +2127,6 @@ void ItemPhysicsRuntime::onRender(
       if (groundShape >=
           0) {
 
-        // --------------------------------------------------------------------
-        // Head / Skull
-        // --------------------------------------------------------------------
-
         if (groundShape ==
             kSkullBlockShape) {
 
@@ -2231,14 +2134,6 @@ void ItemPhysicsRuntime::onRender(
               mSkullGroundHeight.load(
                   std::memory_order_relaxed);
         }
-
-        // --------------------------------------------------------------------
-        // Thin block
-        //
-        // First use our existing VisualShape-based compatibility result.
-        //
-        // Then renderer-shape fallback.
-        // --------------------------------------------------------------------
 
         else if (
             (traits.modelClass ==
@@ -2256,10 +2151,6 @@ void ItemPhysicsRuntime::onRender(
                   std::memory_order_relaxed);
         }
 
-        // --------------------------------------------------------------------
-        // Torch / cross
-        // --------------------------------------------------------------------
-
         else if (
             isTorchGroundShape(
                 groundShape)) {
@@ -2268,10 +2159,6 @@ void ItemPhysicsRuntime::onRender(
               mTorchGroundHeight.load(
                   std::memory_order_relaxed);
         }
-
-        // --------------------------------------------------------------------
-        // Fence / lantern / lever / pot / shaped model
-        // --------------------------------------------------------------------
 
         else if (
             isShapedGroundShape(
@@ -2282,10 +2169,6 @@ void ItemPhysicsRuntime::onRender(
                   std::memory_order_relaxed);
         }
 
-        // --------------------------------------------------------------------
-        // Generic block-rendered fallback
-        // --------------------------------------------------------------------
-
         else {
 
           position[1] +=
@@ -2295,10 +2178,6 @@ void ItemPhysicsRuntime::onRender(
       }
     }
   }
-
-  // ==========================================================================
-  // MatrixStack
-  // ==========================================================================
 
   void *stack =
       mGetWorldMatrix
@@ -2345,12 +2224,6 @@ void ItemPhysicsRuntime::onRender(
     const float z =
         position[2];
 
-    // ========================================================================
-    // Existing Atlas matrix order
-    //
-    // DO NOT change during ground-height calibration.
-    // ========================================================================
-
     postTranslate(
         *matrix,
         x,
@@ -2389,10 +2262,6 @@ void ItemPhysicsRuntime::onRender(
         renderContext,
         renderData);
   }
-
-  // ==========================================================================
-  // Restore
-  // ==========================================================================
 
   position[1] =
       oldY;
