@@ -4,11 +4,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <limits>
 #include <string_view>
 
 namespace itemphysics {
 namespace {
+
+// ============================================================================
+// General
+// ============================================================================
 
 constexpr float kPi =
     3.14159265358979323846f;
@@ -19,11 +22,94 @@ constexpr float kDegToRad =
 constexpr auto kStateTtl =
     std::chrono::seconds(8);
 
+// ============================================================================
+// Timing
+// ============================================================================
+
+// Ignore absurdly small dt values when estimating velocity.
+constexpr float kMinVelocityDt =
+    0.0005f;
+
+// A long pause / frame stall should not generate an absurd velocity.
+constexpr float kMaxVelocityDt =
+    0.20f;
+
+// Animation integration itself is capped.
+//
+// Landing spring uses additional internal substeps.
+constexpr float kMaxPhysicsDt =
+    0.05f;
+
+// ============================================================================
+// Natural airborne physics
+// ============================================================================
+
+// How quickly estimated position velocity follows real render movement.
+constexpr float kVelocityTrackingResponse =
+    12.0f;
+
+// How quickly angular velocity changes toward the motion-based tumble axis.
+constexpr float kAirSpinResponse =
+    5.0f;
+
+// Mild inertia loss while airborne.
+//
+// Deliberately very low.
+// A thrown item should not stop spinning after several seconds like the
+// previous age-based implementation did.
+constexpr float kAirAngularDrag =
+    0.12f;
+
+// Maximum angular velocity allowed.
+//
+// Prevents broken position deltas / teleports from creating insane rotation.
+constexpr float kMaxAngularSpeed =
+    9.0f;
+
+// Maximum linear speed used when calculating tumble strength.
+constexpr float kMaxTrackedLinearSpeed =
+    12.0f;
+
+// ============================================================================
+// Landing spring
+// ============================================================================
+
+// < 1.0 = slightly underdamped.
+//
+// 0.82 gives a very small natural overshoot without making the item bounce
+// around for a long time.
+constexpr float kLandingDampingRatio =
+    0.82f;
+
+// Integration substep for spring stability across low/high FPS.
+constexpr float kSpringMaxStep =
+    1.0f / 120.0f;
+
+// Once this close to rest, remove tiny floating point vibration.
+constexpr float kRestAngleEpsilon =
+    0.0015f;
+
+constexpr float kRestVelocityEpsilon =
+    0.02f;
+
+// ============================================================================
+// Atlas
+// ============================================================================
+
 constexpr float kAtlasFlatLocalY =
     0.25f;
 
-constexpr std::int32_t kSkullBlockShape =
-    83;
+// ============================================================================
+// BlockShape
+// ============================================================================
+
+constexpr std::int32_t
+    kSkullBlockShape =
+        83;
+
+// ============================================================================
+// Thin block detection
+// ============================================================================
 
 constexpr float kThinYRatio =
     0.70f;
@@ -31,11 +117,23 @@ constexpr float kThinYRatio =
 constexpr float kExtentEpsilon =
     0.0005f;
 
-constexpr std::string_view kShieldId =
-    "minecraft:shield";
+// ============================================================================
+// Item identifiers
+// ============================================================================
 
-constexpr std::string_view kBannerId =
-    "minecraft:banner";
+constexpr std::string_view
+    kShieldId =
+        "minecraft:shield";
+
+constexpr std::string_view
+    kBannerId =
+        "minecraft:banner";
+
+// ============================================================================
+// Ground-height categories
+//
+// Ground classification remains independent from animation.
+// ============================================================================
 
 [[nodiscard]]
 bool isThinGroundShape(
@@ -47,21 +145,29 @@ bool isThinGroundShape(
   case 14:
   case 15:
   case 23:
+
   case 67:
   case 68:
   case 69:
+
   case 72:
   case 73:
+
   case 80:
+
   case 96:
   case 99:
+
   case 114:
   case 126:
+
   case 135:
   case 136:
+
     return true;
 
   default:
+
     return false;
   }
 }
@@ -77,9 +183,11 @@ bool isTorchGroundShape(
   case 90:
   case 101:
   case 155:
+
     return true;
 
   default:
+
     return false;
   }
 }
@@ -96,50 +204,68 @@ bool isShapedGroundShape(
   case 11:
   case 12:
   case 13:
+
   case 18:
   case 19:
   case 20:
   case 21:
   case 22:
+
   case 25:
   case 26:
   case 28:
+
   case 31:
   case 32:
+
   case 40:
   case 42:
   case 43:
   case 44:
+
   case 70:
   case 71:
   case 74:
+
   case 76:
   case 77:
   case 78:
   case 79:
   case 81:
   case 84:
+
   case 87:
   case 89:
+
   case 100:
   case 102:
+
   case 107:
   case 108:
+
   case 110:
   case 111:
   case 112:
   case 113:
+
   case 115:
   case 116:
   case 119:
+
   case 123:
   case 133:
+
     return true;
 
   default:
+
     return false;
   }
 }
+
+// ============================================================================
+// MatrixStack RAII
+// ============================================================================
 
 class MatrixPushScope {
 public:
@@ -208,9 +334,17 @@ private:
 
 } // namespace
 
+// ============================================================================
+// Static runtime
+// ============================================================================
+
 ItemPhysicsRuntime *
 ItemPhysicsRuntime::sInstance =
     nullptr;
+
+// ============================================================================
+// Config
+// ============================================================================
 
 void ItemPhysicsRuntime::applyConfig(
     const ItemPhysicsConfig &config) noexcept {
@@ -221,10 +355,6 @@ void ItemPhysicsRuntime::applyConfig(
 
   mSingleModel.store(
       config.singleModel,
-      std::memory_order_relaxed);
-
-  mHideItemShadow.store(
-      config.hideItemShadow,
       std::memory_order_relaxed);
 
   mRotationSpeed.store(
@@ -246,6 +376,10 @@ void ItemPhysicsRuntime::applyConfig(
       static_cast<float>(
           config.heightOffset),
       std::memory_order_relaxed);
+
+  // ==========================================================================
+  // Ground height
+  // ==========================================================================
 
   mBlockGroundHeight.store(
       static_cast<float>(
@@ -282,6 +416,10 @@ void ItemPhysicsRuntime::applyConfig(
           config.bannerGroundHeight),
       std::memory_order_relaxed);
 }
+
+// ============================================================================
+// Profile verification
+// ============================================================================
 
 bool ItemPhysicsRuntime::verifyProfile(
     const ResolvedVirtual &resolved,
@@ -336,7 +474,10 @@ bool ItemPhysicsRuntime::verifyProfile(
 
   if (!verifyWords(
           resolved.target,
-          profile::kRenderFingerprint,
+
+          profile::
+              kRenderFingerprint,
+
           "ItemRenderer::render")) {
 
     return false;
@@ -381,32 +522,6 @@ bool ItemPhysicsRuntime::verifyProfile(
     return false;
   }
 
-  if (!verifyWords(
-          resolved.module.base +
-              profile::
-                  kRelativeShadowStorageRva,
-
-          profile::
-              kRelativeShadowStorageFingerprint,
-
-          "RelativeShadowOffsetComponent storage")) {
-
-    return false;
-  }
-
-  if (!verifyWords(
-          resolved.module.base +
-              profile::
-                  kRelativeShadowEmplaceRva,
-
-          profile::
-              kRelativeShadowEmplaceFingerprint,
-
-          "RelativeShadowOffsetComponent emplace")) {
-
-    return false;
-  }
-
   const auto executable =
       [&](std::uintptr_t rva) {
 
@@ -441,15 +556,7 @@ bool ItemPhysicsRuntime::verifyProfile(
 
       !executable(
           profile::
-              kBlockGraphicsGetBlockShapeRva) ||
-
-      !executable(
-          profile::
-              kRelativeShadowStorageRva) ||
-
-      !executable(
-          profile::
-              kRelativeShadowEmplaceRva)) {
+              kBlockGraphicsGetBlockShapeRva)) {
 
     mod.getLogger().warn(
         "Minecraft 1.26.45 renderer helper validation failed");
@@ -459,6 +566,10 @@ bool ItemPhysicsRuntime::verifyProfile(
 
   return true;
 }
+
+// ============================================================================
+// Install
+// ============================================================================
 
 bool ItemPhysicsRuntime::install(
     ll::mod::NativeMod &mod) {
@@ -502,6 +613,10 @@ bool ItemPhysicsRuntime::install(
   mRenderTarget =
       resolved->target;
 
+  // --------------------------------------------------------------------------
+  // Matrix
+  // --------------------------------------------------------------------------
+
   mGetWorldMatrix =
       reinterpret_cast<
           GetWorldMatrixFn>(
@@ -526,6 +641,10 @@ bool ItemPhysicsRuntime::install(
           profile::
               kMatrixStackRefDtorRva);
 
+  // --------------------------------------------------------------------------
+  // Vanilla render block lookup
+  // --------------------------------------------------------------------------
+
   mGetBlockTypeForRendering =
       reinterpret_cast<
           GetBlockTypeForRenderingFn>(
@@ -541,6 +660,10 @@ bool ItemPhysicsRuntime::install(
           mMinecraftBase +
           profile::
               kBlockGraphicsGetForBlockTypeRva);
+
+  // --------------------------------------------------------------------------
+  // Block pointer path
+  // --------------------------------------------------------------------------
 
   mGetBlockGraphicsForBlock =
       reinterpret_cast<
@@ -558,27 +681,15 @@ bool ItemPhysicsRuntime::install(
           profile::
               kBlockGraphicsGetBlockShapeRva);
 
-  mGetRelativeShadowStorage =
-      reinterpret_cast<
-          RelativeShadowStorageFn>(
-
-          mMinecraftBase +
-          profile::
-              kRelativeShadowStorageRva);
-
-  mEmplaceRelativeShadow =
-      reinterpret_cast<
-          RelativeShadowEmplaceFn>(
-
-          mMinecraftBase +
-          profile::
-              kRelativeShadowEmplaceRva);
-
   sInstance =
       this;
 
   mOriginal =
       nullptr;
+
+  // ==========================================================================
+  // ItemRenderer::render only
+  // ==========================================================================
 
   mHook =
       std::make_unique<
@@ -617,10 +728,14 @@ bool ItemPhysicsRuntime::install(
 
   mod.getLogger().info(
       "Item Physics active: "
-      "Minecraft 1.26.45 + Ground Height V4 + Atlas Item Shadow");
+      "Minecraft 1.26.45 + Natural Throw Physics V5");
 
   return true;
 }
+
+// ============================================================================
+// Uninstall
+// ============================================================================
 
 void ItemPhysicsRuntime::uninstall() {
 
@@ -666,12 +781,6 @@ void ItemPhysicsRuntime::uninstall() {
   mGetBlockGraphicsShape =
       nullptr;
 
-  mGetRelativeShadowStorage =
-      nullptr;
-
-  mEmplaceRelativeShadow =
-      nullptr;
-
   mRenderTarget =
       0;
 
@@ -680,6 +789,10 @@ void ItemPhysicsRuntime::uninstall() {
 
   clearStates();
 }
+
+// ============================================================================
+// State
+// ============================================================================
 
 void ItemPhysicsRuntime::clearStates() {
 
@@ -691,6 +804,10 @@ void ItemPhysicsRuntime::clearStates() {
   mRenderCounter =
       0;
 }
+
+// ============================================================================
+// Detour
+// ============================================================================
 
 void ItemPhysicsRuntime::renderDetour(
     void *self,
@@ -705,6 +822,10 @@ void ItemPhysicsRuntime::renderDetour(
         renderData);
   }
 }
+
+// ============================================================================
+// Math
+// ============================================================================
 
 float ItemPhysicsRuntime::seededUnit(
     std::uint32_t seed) noexcept {
@@ -746,24 +867,120 @@ float ItemPhysicsRuntime::wrapPi(
   return value;
 }
 
-float ItemPhysicsRuntime::approachAngle(
-    float current,
+// ============================================================================
+// Damped angular spring
+//
+// x'' + 2*zeta*w*x' + w^2*x = 0
+//
+// We use semi-implicit Euler with small substeps.
+//
+// Advantages:
+//
+// - no snap
+// - natural inertia
+// - slight overshoot
+// - stable at varying FPS
+// ============================================================================
+
+void ItemPhysicsRuntime::springAngle(
+    float &current,
+    float &velocity,
     float target,
-    float alpha) noexcept {
+    float angularFrequency,
+    float dampingRatio,
+    float dt) noexcept {
 
-  const float delta =
-      wrapPi(
-          target -
-          current);
+  if (dt <=
+      0.0f) {
 
-  return wrapPi(
-      current +
-      delta *
-          std::clamp(
-              alpha,
-              0.0f,
-              1.0f));
+    return;
+  }
+
+  angularFrequency =
+      std::max(
+          angularFrequency,
+          0.01f);
+
+  dampingRatio =
+      std::max(
+          dampingRatio,
+          0.0f);
+
+  float remaining =
+      dt;
+
+  while (remaining >
+         0.0f) {
+
+    const float step =
+        std::min(
+            remaining,
+            kSpringMaxStep);
+
+    const float error =
+        wrapPi(
+            target -
+            current);
+
+    const float stiffness =
+        angularFrequency *
+        angularFrequency;
+
+    const float damping =
+        2.0f *
+        dampingRatio *
+        angularFrequency;
+
+    const float acceleration =
+        stiffness *
+            error -
+        damping *
+            velocity;
+
+    velocity +=
+        acceleration *
+        step;
+
+    velocity =
+        std::clamp(
+            velocity,
+            -kMaxAngularSpeed,
+            kMaxAngularSpeed);
+
+    current =
+        wrapPi(
+            current +
+            velocity *
+                step);
+
+    remaining -=
+        step;
+  }
+
+  const float finalError =
+      std::abs(
+          wrapPi(
+              target -
+              current));
+
+  if (finalError <
+          kRestAngleEpsilon &&
+      std::abs(
+          velocity) <
+          kRestVelocityEpsilon) {
+
+    current =
+        wrapPi(
+            target);
+
+    velocity =
+        0.0f;
+  }
 }
+
+// ============================================================================
+// libc++ std::string
+// ============================================================================
 
 bool ItemPhysicsRuntime::libcxxStringEquals(
     std::uintptr_t stringAddress,
@@ -829,6 +1046,10 @@ bool ItemPhysicsRuntime::libcxxStringEquals(
              length) ==
              0;
 }
+
+// ============================================================================
+// Vanilla renderer BlockShape
+// ============================================================================
 
 bool ItemPhysicsRuntime::tryGetRenderBlockShape(
     std::uintptr_t actorAddress,
@@ -901,6 +1122,10 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
   return true;
 }
 
+// ============================================================================
+// Block info
+// ============================================================================
+
 bool ItemPhysicsRuntime::buildBlockRenderInfo(
     const void *block,
     BlockRenderInfo &info) const noexcept {
@@ -912,6 +1137,10 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
 
     return false;
   }
+
+  // --------------------------------------------------------------------------
+  // BlockShape
+  // --------------------------------------------------------------------------
 
   if (mGetBlockGraphicsForBlock &&
       mGetBlockGraphicsShape) {
@@ -930,6 +1159,12 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
 
   bool thinHorizontal =
       false;
+
+  // --------------------------------------------------------------------------
+  // VisualShape
+  //
+  // ONLY orientation compatibility.
+  // --------------------------------------------------------------------------
 
   const auto blockAddress =
       reinterpret_cast<
@@ -1029,11 +1264,19 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
   return true;
 }
 
+// ============================================================================
+// Classification
+// ============================================================================
+
 ItemPhysicsRuntime::ItemRenderTraits
 ItemPhysicsRuntime::classifyItem(
     std::uintptr_t actorAddress) const noexcept {
 
   ItemRenderTraits traits{};
+
+  // ==========================================================================
+  // Actual ItemRenderer shape
+  // ==========================================================================
 
   std::int32_t rendererShape =
       -1;
@@ -1048,6 +1291,12 @@ ItemPhysicsRuntime::classifyItem(
     traits.renderShape =
         rendererShape;
   }
+
+  // ==========================================================================
+  // Skull override
+  //
+  // Keep the successful head orientation behavior.
+  // ==========================================================================
 
   if (traits.hasRenderShape &&
       traits.renderShape ==
@@ -1076,6 +1325,10 @@ ItemPhysicsRuntime::classifyItem(
     return traits;
   }
 
+  // ==========================================================================
+  // Existing Block pointer
+  // ==========================================================================
+
   const auto block =
       *reinterpret_cast<
           const void *const *>(
@@ -1103,6 +1356,10 @@ ItemPhysicsRuntime::classifyItem(
 
     return traits;
   }
+
+  // ==========================================================================
+  // Non-block item
+  // ==========================================================================
 
   const auto itemHandle =
       *reinterpret_cast<
@@ -1181,6 +1438,10 @@ ItemPhysicsRuntime::classifyItem(
   return traits;
 }
 
+// ============================================================================
+// State creation
+// ============================================================================
+
 ItemPhysicsRuntime::PhysicsState &
 ItemPhysicsRuntime::stateFor(
     std::uint32_t entityId,
@@ -1212,22 +1473,64 @@ ItemPhysicsRuntime::stateFor(
             entityId ^
             0xC2B2AE35u);
 
-    const float curve =
-        std::max(
-            0.0f,
+    // ------------------------------------------------------------------------
+    // Deterministic fallback axis.
+    //
+    // Used before enough position history exists to infer the real throw
+    // direction.
+    // ------------------------------------------------------------------------
 
-            4.0f *
-                    u *
-                    u -
+    float axisX =
+        v *
+            2.0f -
+        1.0f;
 
-                4.0f *
-                    u *
-                    u *
-                    u *
-                    u);
+    float axisZ =
+        w *
+            2.0f -
+        1.0f;
+
+    const float axisLength =
+        std::sqrt(
+            axisX *
+                axisX +
+            axisZ *
+                axisZ);
+
+    if (axisLength >
+        0.0001f) {
+
+      axisX /=
+          axisLength;
+
+      axisZ /=
+          axisLength;
+
+    } else {
+
+      axisX =
+          0.7071067f;
+
+      axisZ =
+          0.7071067f;
+    }
+
+    const float initialSpin =
+        1.2f +
+        u *
+            1.4f;
 
     state.initialized =
         true;
+
+    state.wasGrounded =
+        false;
+
+    state.hasPosition =
+        false;
+
+    state.hasLandingRest =
+        false;
 
     state.rotX =
         0.0f;
@@ -1239,29 +1542,35 @@ ItemPhysicsRuntime::stateFor(
         0.0f;
 
     state.angularX =
-        (v *
-             2.0f -
-         1.0f) *
-        curve *
-        kPi;
+        axisX *
+        initialSpin;
+
+    state.angularY =
+        (u -
+         0.5f) *
+        0.35f;
 
     state.angularZ =
-        (w *
-             2.0f -
-         1.0f) *
-        (1.0f -
-         curve) *
-        kPi;
+        axisZ *
+        initialSpin;
 
-    if (std::abs(
-            state.angularX) +
-            std::abs(
-                state.angularZ) <
-        0.20f) {
+    state.velocityX =
+        0.0f;
 
-      state.angularX +=
-          0.65f;
-    }
+    state.velocityY =
+        0.0f;
+
+    state.velocityZ =
+        0.0f;
+
+    state.lastX =
+        0.0f;
+
+    state.lastY =
+        0.0f;
+
+    state.lastZ =
+        0.0f;
 
     state.restYaw =
         seededUnit(
@@ -1270,8 +1579,8 @@ ItemPhysicsRuntime::stateFor(
         2.0f *
         kPi;
 
-    state.wasGrounded =
-        false;
+    state.landingRestZ =
+        0.0f;
 
     state.born =
         now;
@@ -1286,22 +1595,29 @@ ItemPhysicsRuntime::stateFor(
   return state;
 }
 
+// ============================================================================
+// Natural physics update V5
+// ============================================================================
+
 void ItemPhysicsRuntime::updateState(
     PhysicsState &state,
     const ItemRenderTraits &traits,
     bool grounded,
+    float positionX,
+    float positionY,
+    float positionZ,
     std::chrono::steady_clock::
         time_point now) const {
 
-  const float dt =
-      std::clamp(
-          std::chrono::duration<float>(
-              now -
-              state.lastUpdate)
-              .count(),
+  // ==========================================================================
+  // Time
+  // ==========================================================================
 
-          0.0f,
-          0.20f);
+  const float rawDt =
+      std::chrono::duration<float>(
+          now -
+          state.lastUpdate)
+          .count();
 
   state.lastUpdate =
       now;
@@ -1309,53 +1625,387 @@ void ItemPhysicsRuntime::updateState(
   state.lastSeen =
       now;
 
-  const float frameFactor =
-      std::min(
-          dt *
-              5.0f,
-          1.0f);
+  const float dt =
+      std::clamp(
+          rawDt,
+          0.0f,
+          kMaxPhysicsDt);
+
+  // ==========================================================================
+  // Estimate ItemActor movement
+  //
+  // We do not modify Minecraft's actual entity velocity.
+  //
+  // We only observe render position changes to choose a visually appropriate
+  // tumble axis.
+  // ==========================================================================
+
+  if (!state.hasPosition ||
+      rawDt >
+          kMaxVelocityDt) {
+
+    state.lastX =
+        positionX;
+
+    state.lastY =
+        positionY;
+
+    state.lastZ =
+        positionZ;
+
+    state.hasPosition =
+        true;
+
+  } else if (
+      rawDt >=
+      kMinVelocityDt) {
+
+    float rawVelocityX =
+        (positionX -
+         state.lastX) /
+        rawDt;
+
+    float rawVelocityY =
+        (positionY -
+         state.lastY) /
+        rawDt;
+
+    float rawVelocityZ =
+        (positionZ -
+         state.lastZ) /
+        rawDt;
+
+    state.lastX =
+        positionX;
+
+    state.lastY =
+        positionY;
+
+    state.lastZ =
+        positionZ;
+
+    // ------------------------------------------------------------------------
+    // Clamp bad/teleport deltas.
+    // ------------------------------------------------------------------------
+
+    const float rawSpeed =
+        std::sqrt(
+            rawVelocityX *
+                rawVelocityX +
+
+            rawVelocityY *
+                rawVelocityY +
+
+            rawVelocityZ *
+                rawVelocityZ);
+
+    if (rawSpeed >
+            kMaxTrackedLinearSpeed &&
+        rawSpeed >
+            0.0001f) {
+
+      const float scale =
+          kMaxTrackedLinearSpeed /
+          rawSpeed;
+
+      rawVelocityX *=
+          scale;
+
+      rawVelocityY *=
+          scale;
+
+      rawVelocityZ *=
+          scale;
+    }
+
+    // ------------------------------------------------------------------------
+    // Exponential low-pass.
+    //
+    // This avoids jitter from tiny renderer position differences.
+    // ------------------------------------------------------------------------
+
+    const float velocityAlpha =
+        1.0f -
+        std::exp(
+            -kVelocityTrackingResponse *
+            rawDt);
+
+    state.velocityX +=
+        (rawVelocityX -
+         state.velocityX) *
+        velocityAlpha;
+
+    state.velocityY +=
+        (rawVelocityY -
+         state.velocityY) *
+        velocityAlpha;
+
+    state.velocityZ +=
+        (rawVelocityZ -
+         state.velocityZ) *
+        velocityAlpha;
+  }
+
+  // No meaningful frame elapsed.
+  if (dt <=
+      0.0f) {
+
+    return;
+  }
+
+  // ==========================================================================
+  // AIRBORNE
+  // ==========================================================================
 
   if (!grounded) {
 
-    const float age =
-        std::chrono::duration<float>(
-            now -
-            state.born)
-            .count();
+    // We left the ground again.
+    state.hasLandingRest =
+        false;
 
-    const float ageFactor =
-        std::min(
-            age /
-                4.0f,
-            1.0f);
+    const float horizontalSpeed =
+        std::sqrt(
+            state.velocityX *
+                state.velocityX +
 
-    const float fade =
-        1.0f -
-        ageFactor;
+            state.velocityZ *
+                state.velocityZ);
 
-    const float speed =
+    const float verticalSpeed =
+        std::abs(
+            state.velocityY);
+
+    // ------------------------------------------------------------------------
+    // Tumble strength
+    //
+    // Slow dropped item:
+    //      still gently rotates.
+    //
+    // Thrown item:
+    //      rotates faster.
+    //
+    // Tumble Speed from Mod Menu remains the user multiplier.
+    // ------------------------------------------------------------------------
+
+    const float tumbleMultiplier =
         mRotationSpeed.load(
             std::memory_order_relaxed);
 
-    const float step =
-        fade *
-        frameFactor *
-        speed;
+    float desiredSpin =
+        1.25f +
+
+        std::min(
+            horizontalSpeed,
+            6.0f) *
+            0.34f +
+
+        std::min(
+            verticalSpeed,
+            4.0f) *
+            0.12f;
+
+    desiredSpin *=
+        tumbleMultiplier;
+
+    desiredSpin =
+        std::clamp(
+            desiredSpin,
+            0.25f,
+            kMaxAngularSpeed);
+
+    // ------------------------------------------------------------------------
+    // Tumble axis
+    //
+    // A real object travelling horizontally tends to roll around an axis
+    // perpendicular to its movement.
+    //
+    // Minecraft movement:
+    //
+    // velocity X/Z
+    //
+    // visual tumble:
+    //
+    // X axis <- Z motion
+    // Z axis <- -X motion
+    // ------------------------------------------------------------------------
+
+    float desiredX =
+        0.0f;
+
+    float desiredZ =
+        0.0f;
+
+    if (horizontalSpeed >
+        0.05f) {
+
+      desiredX =
+          state.velocityZ /
+          horizontalSpeed;
+
+      desiredZ =
+          -state.velocityX /
+          horizontalSpeed;
+
+    } else {
+
+      // No reliable throw direction yet.
+      //
+      // Use deterministic axis based on per-entity rest yaw.
+      desiredX =
+          std::cos(
+              state.restYaw);
+
+      desiredZ =
+          std::sin(
+              state.restYaw);
+    }
+
+    // A small seeded bias prevents every throw travelling in the same
+    // direction from looking mechanically identical.
+    const float biasX =
+        std::cos(
+            state.restYaw *
+            1.73f) *
+        0.18f;
+
+    const float biasZ =
+        std::sin(
+            state.restYaw *
+            1.37f) *
+        0.18f;
+
+    desiredX +=
+        biasX;
+
+    desiredZ +=
+        biasZ;
+
+    const float desiredAxisLength =
+        std::sqrt(
+            desiredX *
+                desiredX +
+            desiredZ *
+                desiredZ);
+
+    if (desiredAxisLength >
+        0.0001f) {
+
+      desiredX /=
+          desiredAxisLength;
+
+      desiredZ /=
+          desiredAxisLength;
+    }
+
+    const float targetAngularX =
+        desiredX *
+        desiredSpin;
+
+    const float targetAngularZ =
+        desiredZ *
+        desiredSpin;
+
+    // Keep Y rotation subtle.
+    //
+    // Full yaw spinning makes swords/tools look like a flat card rotating on a
+    // turntable, which is less natural than actual tumbling.
+    const float targetAngularY =
+        std::sin(
+            state.restYaw *
+            1.91f) *
+        desiredSpin *
+        0.12f;
+
+    // ------------------------------------------------------------------------
+    // Smoothly steer existing angular momentum toward movement-based spin.
+    //
+    // This prevents an abrupt axis switch when the item is first thrown.
+    // ------------------------------------------------------------------------
+
+    const float spinAlpha =
+        1.0f -
+        std::exp(
+            -kAirSpinResponse *
+            dt);
+
+    state.angularX +=
+        (targetAngularX -
+         state.angularX) *
+        spinAlpha;
+
+    state.angularY +=
+        (targetAngularY -
+         state.angularY) *
+        spinAlpha;
+
+    state.angularZ +=
+        (targetAngularZ -
+         state.angularZ) *
+        spinAlpha;
+
+    // ------------------------------------------------------------------------
+    // Mild angular drag
+    //
+    // Unlike the old implementation:
+    //
+    // NO age / 4 second fade-to-zero.
+    //
+    // If an item remains airborne, it keeps tumbling naturally.
+    // ------------------------------------------------------------------------
+
+    const float drag =
+        std::exp(
+            -kAirAngularDrag *
+            dt);
+
+    state.angularX *=
+        drag;
+
+    state.angularY *=
+        drag;
+
+    state.angularZ *=
+        drag;
+
+    state.angularX =
+        std::clamp(
+            state.angularX,
+            -kMaxAngularSpeed,
+            kMaxAngularSpeed);
+
+    state.angularY =
+        std::clamp(
+            state.angularY,
+            -kMaxAngularSpeed,
+            kMaxAngularSpeed);
+
+    state.angularZ =
+        std::clamp(
+            state.angularZ,
+            -kMaxAngularSpeed,
+            kMaxAngularSpeed);
+
+    // ------------------------------------------------------------------------
+    // Integrate orientation
+    // ------------------------------------------------------------------------
 
     state.rotX =
         wrapPi(
             state.rotX +
             state.angularX *
-                step);
+                dt);
+
+    state.rotY =
+        wrapPi(
+            state.rotY +
+            state.angularY *
+                dt);
 
     state.rotZ =
         wrapPi(
             state.rotZ +
             state.angularZ *
-                step);
-
-    state.rotY =
-        0.0f;
+                dt);
 
     state.wasGrounded =
         false;
@@ -1363,10 +2013,88 @@ void ItemPhysicsRuntime::updateState(
     return;
   }
 
-  const float settle =
-      frameFactor *
+  // ==========================================================================
+  // GROUNDED
+  // ==========================================================================
+
+  const bool justLanded =
+      !state.wasGrounded;
+
+  if (justLanded ||
+      !state.hasLandingRest) {
+
+    // ------------------------------------------------------------------------
+    // Preserve landing roll for ordinary Atlas-style models.
+    //
+    // This keeps the visual result compatible with the working build while
+    // replacing the abrupt settle behavior with a physical spring.
+    // ------------------------------------------------------------------------
+
+    state.landingRestZ =
+        state.rotZ;
+
+    state.hasLandingRest =
+        true;
+
+    // Do not kill air momentum instantly.
+    //
+    // Just clamp it to a sensible impact range and let damping remove it.
+    state.angularX =
+        std::clamp(
+            state.angularX,
+            -6.0f,
+            6.0f);
+
+    state.angularY =
+        std::clamp(
+            state.angularY,
+            -6.0f,
+            6.0f);
+
+    state.angularZ =
+        std::clamp(
+            state.angularZ,
+            -6.0f,
+            6.0f);
+  }
+
+  // ==========================================================================
+  // Settle strength
+  //
+  // Existing Settle Speed slider controls spring frequency.
+  //
+  // low:
+  //     soft / slow landing
+  //
+  // high:
+  //     quick settle
+  // ==========================================================================
+
+  const float settleSpeed =
       mSettleSpeed.load(
           std::memory_order_relaxed);
+
+  const float springFrequency =
+      2.0f +
+      settleSpeed *
+          2.25f;
+
+  // ==========================================================================
+  // Horizontal compatibility models
+  //
+  // head
+  // slab
+  // carpet
+  // etc.
+  //
+  // Final target remains EXACTLY the same:
+  //
+  // X -> 0
+  // Z -> 0
+  // Y -> random rest yaw
+  //
+  // Only the transition is now spring-based.
+  // ==========================================================================
 
   if (traits.modelClass ==
           ModelClass::
@@ -1375,45 +2103,100 @@ void ItemPhysicsRuntime::updateState(
       traits.block.
           keepHorizontal) {
 
-    state.rotX =
-        approachAngle(
-            state.rotX,
-            0.0f,
-            settle);
+    springAngle(
+        state.rotX,
+        state.angularX,
+        0.0f,
+        springFrequency,
+        kLandingDampingRatio,
+        dt);
 
-    state.rotZ =
-        approachAngle(
-            state.rotZ,
-            0.0f,
-            settle);
+    springAngle(
+        state.rotY,
+        state.angularY,
+        state.restYaw,
+        springFrequency,
+        kLandingDampingRatio,
+        dt);
 
-    state.rotY =
-        approachAngle(
-            state.rotY,
-            state.restYaw,
-            settle);
+    springAngle(
+        state.rotZ,
+        state.angularZ,
+        0.0f,
+        springFrequency,
+        kLandingDampingRatio,
+        dt);
   }
+
+  // ==========================================================================
+  // Existing Atlas grounded orientation
+  //
+  // Final target remains:
+  //
+  // X -> Ground Angle
+  // Y -> 0
+  // Z -> angle captured at impact
+  //
+  // So we're changing animation, NOT final item pose.
+  // ==========================================================================
 
   else {
 
-    const float target =
+    const float targetX =
         mGroundTiltDeg.load(
             std::memory_order_relaxed) *
         kDegToRad;
 
-    state.rotX =
-        approachAngle(
-            state.rotX,
-            target,
-            settle);
+    springAngle(
+        state.rotX,
+        state.angularX,
+        targetX,
+        springFrequency,
+        kLandingDampingRatio,
+        dt);
 
-    state.rotY =
-        0.0f;
+    springAngle(
+        state.rotY,
+        state.angularY,
+        0.0f,
+        springFrequency,
+        kLandingDampingRatio,
+        dt);
+
+    springAngle(
+        state.rotZ,
+        state.angularZ,
+        state.landingRestZ,
+        springFrequency,
+        kLandingDampingRatio,
+        dt);
   }
+
+  // Linear motion estimate is visual information only.
+  //
+  // Dampen it while grounded so an old throw velocity cannot affect a later
+  // airborne transition too strongly.
+  const float groundVelocityDrag =
+      std::exp(
+          -8.0f *
+          dt);
+
+  state.velocityX *=
+      groundVelocityDrag;
+
+  state.velocityY *=
+      groundVelocityDrag;
+
+  state.velocityZ *=
+      groundVelocityDrag;
 
   state.wasGrounded =
       true;
 }
+
+// ============================================================================
+// Cleanup
+// ============================================================================
 
 void ItemPhysicsRuntime::pruneStates(
     std::chrono::steady_clock::
@@ -1440,198 +2223,9 @@ void ItemPhysicsRuntime::pruneStates(
   }
 }
 
-void ItemPhysicsRuntime::updateItemShadowComponent(
-    void *actor,
-    bool grounded,
-    bool hideShadow) const noexcept {
-
-  if (!actor ||
-      !mGetRelativeShadowStorage ||
-      !mEmplaceRelativeShadow) {
-
-    return;
-  }
-
-  const auto actorAddress =
-      reinterpret_cast<
-          std::uintptr_t>(
-          actor);
-
-  auto *registry =
-      *reinterpret_cast<
-          void **>(
-
-          actorAddress +
-          profile::
-              kActorRegistryOffset);
-
-  const auto entityId =
-      *reinterpret_cast<
-          const std::uint32_t *>(
-
-          actorAddress +
-          profile::
-              kActorEntityIdOffset);
-
-  if (!registry) {
-
-    return;
-  }
-
-  void *storage =
-      mGetRelativeShadowStorage(
-          registry,
-          profile::
-              kRelativeShadowOffsetComponentHash);
-
-  if (!storage) {
-
-    return;
-  }
-
-  const float wanted =
-      hideShadow
-
-          ? std::numeric_limits<float>::max()
-
-          : (grounded
-                 ? 0.0f
-                 : -0.5f);
-
-  const auto storageAddress =
-      reinterpret_cast<
-          std::uintptr_t>(
-          storage);
-
-  const auto pagesBegin =
-      *reinterpret_cast<
-          const std::uintptr_t *>(
-          storageAddress +
-          0x08);
-
-  const auto pagesEnd =
-      *reinterpret_cast<
-          const std::uintptr_t *>(
-          storageAddress +
-          0x10);
-
-  bool present =
-      false;
-
-  std::uint32_t packedEntity =
-      0;
-
-  if (pagesBegin &&
-      pagesEnd >=
-          pagesBegin) {
-
-    const auto pageCount =
-        (pagesEnd -
-         pagesBegin) /
-        sizeof(
-            std::uintptr_t);
-
-    const auto pageIndex =
-        (entityId >>
-         11) &
-        0x7Fu;
-
-    if (pageIndex <
-        pageCount) {
-
-      const auto sparsePage =
-          *reinterpret_cast<
-              const std::uintptr_t *>(
-
-              pagesBegin +
-              pageIndex *
-                  sizeof(
-                      std::uintptr_t));
-
-      if (sparsePage) {
-
-        const auto sparseSlot =
-            entityId &
-            0x7FFu;
-
-        packedEntity =
-            *reinterpret_cast<
-                const std::uint32_t *>(
-
-                sparsePage +
-                sparseSlot *
-                    sizeof(
-                        std::uint32_t));
-
-        const auto generation =
-            entityId &
-            0xFFFC0000u;
-
-        present =
-            (packedEntity ^
-             generation) <=
-            0x3FFFEu;
-      }
-    }
-  }
-
-  if (!present) {
-
-    const std::uint32_t entityCopy =
-        entityId;
-
-    (void)mEmplaceRelativeShadow(
-        storage,
-        &entityCopy,
-        false,
-        &wanted);
-
-    return;
-  }
-
-  const auto denseIndex =
-      packedEntity &
-      0x3FFFFu;
-
-  const auto componentPages =
-      *reinterpret_cast<
-          const std::uintptr_t *>(
-          storageAddress +
-          0x50);
-
-  if (!componentPages) {
-
-    return;
-  }
-
-  const auto componentPageIndex =
-      denseIndex >>
-      7;
-
-  const auto componentPage =
-      *reinterpret_cast<
-          const std::uintptr_t *>(
-
-          componentPages +
-          componentPageIndex *
-              sizeof(
-                  std::uintptr_t));
-
-  if (!componentPage) {
-
-    return;
-  }
-
-  const auto componentSlot =
-      denseIndex &
-      0x7Fu;
-
-  *reinterpret_cast<float *>(
-      componentPage +
-      componentSlot *
-          sizeof(float)) =
-      wanted;
-}
+// ============================================================================
+// OnGroundFlagComponent
+// ============================================================================
 
 bool ItemPhysicsRuntime::
     hasOnGroundComponent(
@@ -1878,6 +2472,10 @@ bool ItemPhysicsRuntime::
          0x3FFFEu;
 }
 
+// ============================================================================
+// Render
+// ============================================================================
+
 void ItemPhysicsRuntime::onRender(
     void *self,
     void *renderContext,
@@ -1891,7 +2489,10 @@ void ItemPhysicsRuntime::onRender(
     return;
   }
 
-  if (!renderContext ||
+  if (!mEnabled.load(
+          std::memory_order_relaxed) ||
+
+      !renderContext ||
       !renderData ||
 
       !mProfileSupported.load(
@@ -1933,34 +2534,6 @@ void ItemPhysicsRuntime::onRender(
           std::uintptr_t>(
           actor);
 
-  const bool grounded =
-      hasOnGroundComponent(
-          actor);
-
-  const bool enabled =
-      mEnabled.load(
-          std::memory_order_relaxed);
-
-  const bool hideShadow =
-      enabled &&
-      mHideItemShadow.load(
-          std::memory_order_relaxed);
-
-  updateItemShadowComponent(
-      actor,
-      grounded,
-      hideShadow);
-
-  if (!enabled) {
-
-    original(
-        self,
-        renderContext,
-        renderData);
-
-    return;
-  }
-
   const auto traits =
       classifyItem(
           actorAddress);
@@ -1975,6 +2548,30 @@ void ItemPhysicsRuntime::onRender(
     return;
   }
 
+  // ==========================================================================
+  // Read position BEFORE applying any Item Physics vertical corrections.
+  //
+  // This is important because movement estimation must observe Minecraft's
+  // actual ItemActor motion, not our custom ground-height slider.
+  // ==========================================================================
+
+  auto *position =
+      reinterpret_cast<
+          float *>(
+
+          renderDataAddress +
+          profile::
+              kRenderDataPositionOffset);
+
+  const float actorX =
+      position[0];
+
+  const float actorY =
+      position[1];
+
+  const float actorZ =
+      position[2];
+
   const auto entityId =
       *reinterpret_cast<
           const std::uint32_t *>(
@@ -1982,6 +2579,10 @@ void ItemPhysicsRuntime::onRender(
           actorAddress +
           profile::
               kActorEntityIdOffset);
+
+  const bool grounded =
+      hasOnGroundComponent(
+          actor);
 
   PhysicsState snapshot;
 
@@ -2002,6 +2603,9 @@ void ItemPhysicsRuntime::onRender(
         state,
         traits,
         grounded,
+        actorX,
+        actorY,
+        actorZ,
         now);
 
     snapshot =
@@ -2015,6 +2619,10 @@ void ItemPhysicsRuntime::onRender(
           now);
     }
   }
+
+  // ==========================================================================
+  // Temporary ItemActor state
+  // ==========================================================================
 
   auto &count =
       *reinterpret_cast<
@@ -2045,19 +2653,19 @@ void ItemPhysicsRuntime::onRender(
         1;
   }
 
+  // ==========================================================================
+  // Atlas renderer context
+  // ==========================================================================
+
   inItemFrame =
       1;
 
-  auto *position =
-      reinterpret_cast<
-          float *>(
-
-          renderDataAddress +
-          profile::
-              kRenderDataPositionOffset);
-
   const float oldY =
       position[1];
+
+  // ==========================================================================
+  // Ordinary flat items
+  // ==========================================================================
 
   const bool ordinaryItem =
       traits.modelClass ==
@@ -2072,7 +2680,17 @@ void ItemPhysicsRuntime::onRender(
             std::memory_order_relaxed);
   }
 
+  // ==========================================================================
+  // Ground-height sliders
+  //
+  // UNCHANGED by Natural Throw Physics V5.
+  // ==========================================================================
+
   if (grounded) {
+
+    // ------------------------------------------------------------------------
+    // Shield / banner
+    // ------------------------------------------------------------------------
 
     if (traits.modelClass ==
         ModelClass::
@@ -2104,6 +2722,10 @@ void ItemPhysicsRuntime::onRender(
       }
     }
 
+    // ------------------------------------------------------------------------
+    // Block-rendered category
+    // ------------------------------------------------------------------------
+
     else {
 
       std::int32_t groundShape =
@@ -2127,6 +2749,10 @@ void ItemPhysicsRuntime::onRender(
       if (groundShape >=
           0) {
 
+        // --------------------------------------------------------------------
+        // Head / skull
+        // --------------------------------------------------------------------
+
         if (groundShape ==
             kSkullBlockShape) {
 
@@ -2134,6 +2760,10 @@ void ItemPhysicsRuntime::onRender(
               mSkullGroundHeight.load(
                   std::memory_order_relaxed);
         }
+
+        // --------------------------------------------------------------------
+        // Thin block
+        // --------------------------------------------------------------------
 
         else if (
             (traits.modelClass ==
@@ -2151,6 +2781,10 @@ void ItemPhysicsRuntime::onRender(
                   std::memory_order_relaxed);
         }
 
+        // --------------------------------------------------------------------
+        // Torch / cross
+        // --------------------------------------------------------------------
+
         else if (
             isTorchGroundShape(
                 groundShape)) {
@@ -2159,6 +2793,10 @@ void ItemPhysicsRuntime::onRender(
               mTorchGroundHeight.load(
                   std::memory_order_relaxed);
         }
+
+        // --------------------------------------------------------------------
+        // Fence / lantern / shaped block
+        // --------------------------------------------------------------------
 
         else if (
             isShapedGroundShape(
@@ -2169,6 +2807,10 @@ void ItemPhysicsRuntime::onRender(
                   std::memory_order_relaxed);
         }
 
+        // --------------------------------------------------------------------
+        // Generic block
+        // --------------------------------------------------------------------
+
         else {
 
           position[1] +=
@@ -2178,6 +2820,10 @@ void ItemPhysicsRuntime::onRender(
       }
     }
   }
+
+  // ==========================================================================
+  // MatrixStack
+  // ==========================================================================
 
   void *stack =
       mGetWorldMatrix
@@ -2224,6 +2870,10 @@ void ItemPhysicsRuntime::onRender(
     const float z =
         position[2];
 
+    // ========================================================================
+    // Matrix order remains unchanged.
+    // ========================================================================
+
     postTranslate(
         *matrix,
         x,
@@ -2262,6 +2912,10 @@ void ItemPhysicsRuntime::onRender(
         renderContext,
         renderData);
   }
+
+  // ==========================================================================
+  // Restore
+  // ==========================================================================
 
   position[1] =
       oldY;
