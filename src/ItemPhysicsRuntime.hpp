@@ -46,6 +46,9 @@ public:
   }
 
 public:
+  // ==========================================================================
+  // Hook ABI
+  // ==========================================================================
 
   using RenderFn =
       void (*)(
@@ -73,6 +76,9 @@ public:
           MatrixStackRefAbi *);
 
 private:
+  // ==========================================================================
+  // AABB
+  // ==========================================================================
 
   struct AabbAbi {
     float minX{};
@@ -87,6 +93,10 @@ private:
   static_assert(
       sizeof(AabbAbi) ==
       24);
+
+  // ==========================================================================
+  // Model classification
+  // ==========================================================================
 
   enum class ModelClass :
       std::uint8_t {
@@ -130,6 +140,10 @@ private:
     BlockRenderInfo
         block{};
 
+    // Actual BlockShape used by ItemRenderer.
+    //
+    // Ground-height selection uses this.
+    // It does NOT automatically control orientation.
     bool
         hasRenderShape{};
 
@@ -137,18 +151,78 @@ private:
         renderShape{-1};
   };
 
+  // ==========================================================================
+  // Physics state
+  //
+  // V5:
+  //
+  // State sekarang menyimpan:
+  //
+  // - actual angular velocity
+  // - estimated linear velocity
+  // - last render position
+  // - landing rest orientation
+  //
+  // Ini membuat animasi benar-benar temporal dan tidak hanya berdasarkan
+  // umur entity.
+  // ==========================================================================
+
   struct PhysicsState {
     bool initialized{};
+
     bool wasGrounded{};
+
+    bool hasPosition{};
+
+    bool hasLandingRest{};
+
+    // ------------------------------------------------------------------------
+    // Orientation
+    // ------------------------------------------------------------------------
 
     float rotX{};
     float rotY{};
     float rotZ{};
 
+    // ------------------------------------------------------------------------
+    // Angular velocity, radians / second
+    // ------------------------------------------------------------------------
+
     float angularX{};
+    float angularY{};
     float angularZ{};
 
+    // ------------------------------------------------------------------------
+    // Estimated world velocity
+    // ------------------------------------------------------------------------
+
+    float velocityX{};
+    float velocityY{};
+    float velocityZ{};
+
+    // ------------------------------------------------------------------------
+    // Previous render position
+    // ------------------------------------------------------------------------
+
+    float lastX{};
+    float lastY{};
+    float lastZ{};
+
+    // ------------------------------------------------------------------------
+    // Rest orientation
+    // ------------------------------------------------------------------------
+
     float restYaw{};
+
+    // Non-horizontal items keep the Z orientation they had when landing.
+    //
+    // This preserves the final orientation behavior of the already-working
+    // Atlas implementation while allowing it to settle naturally.
+    float landingRestZ{};
+
+    // ------------------------------------------------------------------------
+    // Time
+    // ------------------------------------------------------------------------
 
     std::chrono::steady_clock::time_point
         born{};
@@ -159,6 +233,10 @@ private:
     std::chrono::steady_clock::time_point
         lastSeen{};
   };
+
+  // ==========================================================================
+  // Minecraft ABI
+  // ==========================================================================
 
   using GetBlockTypeForRenderingFn =
       const void *(*)(
@@ -176,28 +254,15 @@ private:
       std::int32_t (*)(
           const void *graphics);
 
-  struct ShadowStorageEmplaceResultAbi {
-    std::uintptr_t first{};
-    std::uintptr_t second{};
-  };
-
-  using RelativeShadowStorageFn =
-      void *(*)(
-          void *registry,
-          std::uint32_t componentHash);
-
-  using RelativeShadowEmplaceFn =
-      ShadowStorageEmplaceResultAbi (*)(
-          void *storage,
-          const std::uint32_t *entityId,
-          bool forceBack,
-          const float *value);
-
   using GetVisualShapeFn =
       const AabbAbi *(*)(
           void *blockType,
           const void *block,
           AabbAbi *scratch);
+
+  // ==========================================================================
+  // Hook
+  // ==========================================================================
 
   static ItemPhysicsRuntime *
       sInstance;
@@ -216,6 +281,10 @@ private:
       const ResolvedVirtual &resolved,
       ll::mod::NativeMod &mod) const;
 
+  // ==========================================================================
+  // Classification
+  // ==========================================================================
+
   [[nodiscard]]
   ItemRenderTraits classifyItem(
       std::uintptr_t actorAddress) const noexcept;
@@ -230,14 +299,13 @@ private:
       std::uintptr_t actorAddress,
       std::int32_t &shape) const noexcept;
 
+  // ==========================================================================
+  // Physics / ECS
+  // ==========================================================================
+
   [[nodiscard]]
   bool hasOnGroundComponent(
       void *actor) const noexcept;
-
-  void updateItemShadowComponent(
-      void *actor,
-      bool grounded,
-      bool hideShadow) const noexcept;
 
   PhysicsState &stateFor(
       std::uint32_t entityId,
@@ -247,10 +315,17 @@ private:
       PhysicsState &state,
       const ItemRenderTraits &traits,
       bool grounded,
+      float positionX,
+      float positionY,
+      float positionZ,
       std::chrono::steady_clock::time_point now) const;
 
   void pruneStates(
       std::chrono::steady_clock::time_point now);
+
+  // ==========================================================================
+  // Math
+  // ==========================================================================
 
   static float seededUnit(
       std::uint32_t seed) noexcept;
@@ -258,23 +333,30 @@ private:
   static float wrapPi(
       float value) noexcept;
 
-  static float approachAngle(
-      float current,
+  // Damped angular spring.
+  //
+  // Used only during landing/grounded settle.
+  static void springAngle(
+      float &current,
+      float &velocity,
       float target,
-      float alpha) noexcept;
+      float angularFrequency,
+      float dampingRatio,
+      float dt) noexcept;
 
   static bool libcxxStringEquals(
       std::uintptr_t stringAddress,
       std::string_view wanted) noexcept;
+
+  // ==========================================================================
+  // Core config
+  // ==========================================================================
 
   std::atomic_bool
       mEnabled{true};
 
   std::atomic_bool
       mSingleModel{true};
-
-  std::atomic_bool
-      mHideItemShadow{true};
 
   std::atomic<float>
       mRotationSpeed{1.0f};
@@ -285,8 +367,13 @@ private:
   std::atomic<float>
       mGroundTiltDeg{90.0f};
 
+  // Original Atlas ordinary-item height.
   std::atomic<float>
       mHeightOffset{-0.38f};
+
+  // ==========================================================================
+  // Ground-height sliders
+  // ==========================================================================
 
   std::atomic<float>
       mBlockGroundHeight{-0.06f};
@@ -311,6 +398,10 @@ private:
 
   std::atomic_bool
       mProfileSupported{false};
+
+  // ==========================================================================
+  // Minecraft runtime
+  // ==========================================================================
 
   std::uintptr_t
       mMinecraftBase{};
@@ -342,11 +433,9 @@ private:
   BlockGraphicsGetBlockShapeFn
       mGetBlockGraphicsShape{};
 
-  RelativeShadowStorageFn
-      mGetRelativeShadowStorage{};
-
-  RelativeShadowEmplaceFn
-      mEmplaceRelativeShadow{};
+  // ==========================================================================
+  // Hook / states
+  // ==========================================================================
 
   std::unique_ptr<
       pl::memory::HookHandle>
