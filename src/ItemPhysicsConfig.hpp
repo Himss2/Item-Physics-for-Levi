@@ -9,71 +9,34 @@
 namespace itemphysics {
 
 struct ItemPhysicsConfig {
-  // ========================================================================
-  // Config schema
-  // ========================================================================
 
-  int version = 5;
+  int version = 6;
 
   bool enabled = true;
   bool singleModel = true;
-
-  // ========================================================================
-  // Physics
-  // ========================================================================
+  bool hideItemShadow = true;
 
   double rotationSpeed = 1.0;
   double settleSpeed = 3.0;
 
-  // Atlas grounded target.
   double groundTilt = 90.0;
 
-  // ========================================================================
-  // Ground / render height
-  //
-  // IMPORTANT:
-  //
-  // Negative = lower model.
-  // Positive = raise model.
-  //
-  // Flat Item Height remains the original Atlas ordinary-item offset.
-  //
-  // All other values are ADDITIONAL grounded corrections for their
-  // corresponding renderer category.
-  // ========================================================================
-
-  // Sword, pickaxe, tools, ingot, food and ordinary non-block item.
-  //
-  // Original Atlas:
-  // -0.38
   double heightOffset = -0.38;
 
-  // Generic block-rendered model which does not belong to another category.
   double blockGroundHeight = -0.06;
 
-  // Slab, carpet, trapdoor, rail, snow layer and other thin horizontal model.
   double thinBlockGroundHeight = -0.08;
 
-  // Torch / cross-texture style renderer.
   double torchGroundHeight = -0.08;
 
-  // Fence, lantern, lever, brewing stand, flower pot, chain and similar
-  // shaped block models.
   double shapedBlockGroundHeight = -0.16;
 
-  // Player head / mob head / dragon head / skull renderer.
   double skullGroundHeight = -0.22;
 
-  // Shield.
   double shieldGroundHeight = -0.08;
 
-  // Banner.
   double bannerGroundHeight = -0.075;
 };
-
-// ==========================================================================
-// Slider ranges
-// ==========================================================================
 
 inline constexpr double
     kMinRotationSpeed = 0.25;
@@ -93,35 +56,23 @@ inline constexpr double
 inline constexpr double
     kMaxGroundTilt = 180.0;
 
-// Existing ordinary-item slider.
 inline constexpr double
     kMinHeightOffset = -0.60;
 
 inline constexpr double
     kMaxHeightOffset = 0.20;
 
-// New per-renderer ground sliders.
-//
-// Give enough room for manual calibration without allowing absurd values.
 inline constexpr double
     kMinGroundHeight = -0.40;
 
 inline constexpr double
     kMaxGroundHeight = 0.30;
 
-// ==========================================================================
-// Normalize / migration
-// ==========================================================================
-
 inline void normalize(
     ItemPhysicsConfig &config) {
 
   const int oldVersion =
       config.version;
-
-  // ------------------------------------------------------------------------
-  // Older migration
-  // ------------------------------------------------------------------------
 
   if (oldVersion < 2) {
 
@@ -137,16 +88,6 @@ inline void normalize(
     config.heightOffset =
         -0.38;
   }
-
-  // ------------------------------------------------------------------------
-  // V5
-  //
-  // First configuration version with independent ground-height sliders.
-  //
-  // Reset only NEW fields.
-  //
-  // Existing user values such as Tumble Speed / Ground Angle remain intact.
-  // ------------------------------------------------------------------------
 
   if (oldVersion < 5) {
 
@@ -172,12 +113,14 @@ inline void normalize(
         -0.075;
   }
 
-  config.version =
-      5;
+  if (oldVersion < 6) {
 
-  // ------------------------------------------------------------------------
-  // Clamp
-  // ------------------------------------------------------------------------
+    config.hideItemShadow =
+        true;
+  }
+
+  config.version =
+      6;
 
   config.rotationSpeed =
       std::clamp(
@@ -248,10 +191,6 @@ inline void normalize(
 
 } // namespace itemphysics
 
-// ============================================================================
-// Levi / PL config schema
-// ============================================================================
-
 namespace pl::config {
 
 template <>
@@ -262,17 +201,13 @@ struct Schema<
       "Levi Item Physics";
 
   static constexpr std::string_view description =
-      "Atlas-style dropped item physics with independent ground-height "
-      "calibration for each renderer category.";
+      "Atlas-style dropped item physics with per-renderer ground height and "
+      "optional dropped-item shadow suppression.";
 
   static constexpr FieldSchema field(
       std::string_view name) {
 
     using namespace itemphysics;
-
-    // ------------------------------------------------------------------------
-    // Internal
-    // ------------------------------------------------------------------------
 
     if (name == "version") {
 
@@ -284,10 +219,6 @@ struct Schema<
           true
       };
     }
-
-    // ------------------------------------------------------------------------
-    // General
-    // ------------------------------------------------------------------------
 
     if (name == "enabled") {
 
@@ -311,9 +242,16 @@ struct Schema<
       };
     }
 
-    // ------------------------------------------------------------------------
-    // Physics
-    // ------------------------------------------------------------------------
+    if (name == "hideItemShadow") {
+
+      return {
+          "Hide Item Shadow",
+          "Hide only the vanilla shadow under dropped ItemActor entities.",
+          std::nullopt,
+          std::nullopt,
+          false
+      };
+    }
 
     if (name == "rotationSpeed") {
 
@@ -347,10 +285,6 @@ struct Schema<
           false
       };
     }
-
-    // ------------------------------------------------------------------------
-    // Height calibration
-    // ------------------------------------------------------------------------
 
     if (name == "heightOffset") {
 
