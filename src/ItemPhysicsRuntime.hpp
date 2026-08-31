@@ -46,9 +46,6 @@ public:
   }
 
 public:
-  // ==========================================================================
-  // Hook ABI
-  // ==========================================================================
 
   using RenderFn =
       void (*)(
@@ -76,9 +73,6 @@ public:
           MatrixStackRefAbi *);
 
 private:
-  // ==========================================================================
-  // AABB
-  // ==========================================================================
 
   struct AabbAbi {
     float minX{};
@@ -93,10 +87,6 @@ private:
   static_assert(
       sizeof(AabbAbi) ==
       24);
-
-  // ==========================================================================
-  // Model classification
-  // ==========================================================================
 
   enum class ModelClass :
       std::uint8_t {
@@ -140,27 +130,12 @@ private:
     BlockRenderInfo
         block{};
 
-    // ------------------------------------------------------------------------
-    // Actual BlockShape used by vanilla ItemRenderer.
-    //
-    // This is independent from ModelClass.
-    //
-    // Ground-height V4 uses this value to choose which slider controls the
-    // model.
-    //
-    // Physics orientation remains based on the already working classifier.
-    // ------------------------------------------------------------------------
-
     bool
         hasRenderShape{};
 
     std::int32_t
         renderShape{-1};
   };
-
-  // ==========================================================================
-  // Physics state
-  // ==========================================================================
 
   struct PhysicsState {
     bool initialized{};
@@ -185,10 +160,6 @@ private:
         lastSeen{};
   };
 
-  // ==========================================================================
-  // Minecraft ABI
-  // ==========================================================================
-
   using GetBlockTypeForRenderingFn =
       const void *(*)(
           const void *itemStackBase);
@@ -205,15 +176,28 @@ private:
       std::int32_t (*)(
           const void *graphics);
 
+  struct ShadowStorageEmplaceResultAbi {
+    std::uintptr_t first{};
+    std::uintptr_t second{};
+  };
+
+  using RelativeShadowStorageFn =
+      void *(*)(
+          void *registry,
+          std::uint32_t componentHash);
+
+  using RelativeShadowEmplaceFn =
+      ShadowStorageEmplaceResultAbi (*)(
+          void *storage,
+          const std::uint32_t *entityId,
+          bool forceBack,
+          const float *value);
+
   using GetVisualShapeFn =
       const AabbAbi *(*)(
           void *blockType,
           const void *block,
           AabbAbi *scratch);
-
-  // ==========================================================================
-  // Hook
-  // ==========================================================================
 
   static ItemPhysicsRuntime *
       sInstance;
@@ -232,10 +216,6 @@ private:
       const ResolvedVirtual &resolved,
       ll::mod::NativeMod &mod) const;
 
-  // ==========================================================================
-  // Classification
-  // ==========================================================================
-
   [[nodiscard]]
   ItemRenderTraits classifyItem(
       std::uintptr_t actorAddress) const noexcept;
@@ -250,13 +230,14 @@ private:
       std::uintptr_t actorAddress,
       std::int32_t &shape) const noexcept;
 
-  // ==========================================================================
-  // Physics / ECS
-  // ==========================================================================
-
   [[nodiscard]]
   bool hasOnGroundComponent(
       void *actor) const noexcept;
+
+  void updateItemShadowComponent(
+      void *actor,
+      bool grounded,
+      bool hideShadow) const noexcept;
 
   PhysicsState &stateFor(
       std::uint32_t entityId,
@@ -270,10 +251,6 @@ private:
 
   void pruneStates(
       std::chrono::steady_clock::time_point now);
-
-  // ==========================================================================
-  // Math / string helpers
-  // ==========================================================================
 
   static float seededUnit(
       std::uint32_t seed) noexcept;
@@ -290,15 +267,14 @@ private:
       std::uintptr_t stringAddress,
       std::string_view wanted) noexcept;
 
-  // ==========================================================================
-  // Core config
-  // ==========================================================================
-
   std::atomic_bool
       mEnabled{true};
 
   std::atomic_bool
       mSingleModel{true};
+
+  std::atomic_bool
+      mHideItemShadow{true};
 
   std::atomic<float>
       mRotationSpeed{1.0f};
@@ -309,13 +285,8 @@ private:
   std::atomic<float>
       mGroundTiltDeg{90.0f};
 
-  // Original Atlas ordinary-item height.
   std::atomic<float>
       mHeightOffset{-0.38f};
-
-  // ==========================================================================
-  // Ground Height V4 sliders
-  // ==========================================================================
 
   std::atomic<float>
       mBlockGroundHeight{-0.06f};
@@ -340,10 +311,6 @@ private:
 
   std::atomic_bool
       mProfileSupported{false};
-
-  // ==========================================================================
-  // Minecraft runtime
-  // ==========================================================================
 
   std::uintptr_t
       mMinecraftBase{};
@@ -375,9 +342,11 @@ private:
   BlockGraphicsGetBlockShapeFn
       mGetBlockGraphicsShape{};
 
-  // ==========================================================================
-  // Hook / state
-  // ==========================================================================
+  RelativeShadowStorageFn
+      mGetRelativeShadowStorage{};
+
+  RelativeShadowEmplaceFn
+      mEmplaceRelativeShadow{};
 
   std::unique_ptr<
       pl::memory::HookHandle>
