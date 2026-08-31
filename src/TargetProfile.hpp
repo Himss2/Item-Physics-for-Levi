@@ -7,16 +7,6 @@
 
 namespace itemphysics::profile {
 
-// ============================================================================
-// Minecraft Bedrock 1.26.45.1 ARM64
-//
-// SHA-256:
-// 444e77434bdd3789a0d90978d06336a99831e78e52955e528258cc375dfa0557
-//
-// Build ID:
-// 868e275cb295e9a275bb29d2258edc2f7dc48761
-// ============================================================================
-
 inline constexpr std::string_view kMinecraftModule =
     "libminecraftpe.so";
 
@@ -26,10 +16,6 @@ inline constexpr std::string_view kItemRendererRtti =
 inline constexpr std::size_t
     kItemRendererRenderVtableOffset =
         0x18;
-
-// ============================================================================
-// ItemActor / ItemStackBase
-// ============================================================================
 
 inline constexpr std::ptrdiff_t
     kActorRegistryOffset =
@@ -63,10 +49,6 @@ inline constexpr std::ptrdiff_t
     kItemIdentifierOffset =
         0xF0;
 
-// ============================================================================
-// ActorRenderData
-// ============================================================================
-
 inline constexpr std::ptrdiff_t
     kRenderDataActorOffset =
         0x00;
@@ -74,10 +56,6 @@ inline constexpr std::ptrdiff_t
 inline constexpr std::ptrdiff_t
     kRenderDataPositionOffset =
         0x10;
-
-// ============================================================================
-// MatrixStack
-// ============================================================================
 
 inline constexpr std::uintptr_t
     kGetWorldMatrixRva =
@@ -91,17 +69,9 @@ inline constexpr std::uintptr_t
     kMatrixStackRefDtorRva =
         0x107CC6C0;
 
-// ============================================================================
-// ItemStackBase::getBlockTypeForRendering
-// ============================================================================
-
 inline constexpr std::uintptr_t
     kGetBlockTypeForRenderingRva =
         0x0F642ADC;
-
-// ============================================================================
-// BlockGraphics
-// ============================================================================
 
 inline constexpr std::uintptr_t
     kBlockGraphicsGetForBlockTypeRva =
@@ -119,10 +89,6 @@ inline constexpr std::uintptr_t
     kIsBlockShape3DRva =
         0x0A280E68;
 
-// ============================================================================
-// Block / BlockType
-// ============================================================================
-
 inline constexpr std::ptrdiff_t
     kBlockTypeOffset =
         0x68;
@@ -131,25 +97,25 @@ inline constexpr std::size_t
     kBlockTypeGetVisualShapeVtableOffset =
         0x50;
 
-// ============================================================================
-// ItemRenderer private helper
-// ============================================================================
-
 inline constexpr std::uintptr_t
     kItemRendererRenderHelperRva =
         0x0A29EC90;
-
-// ============================================================================
-// ECS
-// ============================================================================
 
 inline constexpr std::uint32_t
     kOnGroundFlagComponentHash =
         0xC29078A0u;
 
-// ============================================================================
-// ItemRenderer::render fingerprint
-// ============================================================================
+inline constexpr std::uint32_t
+    kRelativeShadowOffsetComponentHash =
+        0x7FD7A655u;
+
+inline constexpr std::uintptr_t
+    kRelativeShadowStorageRva =
+        0x0E96A7E4;
+
+inline constexpr std::uintptr_t
+    kRelativeShadowEmplaceRva =
+        0x0E96B68C;
 
 inline constexpr std::array<
     std::uint32_t,
@@ -187,10 +153,6 @@ inline constexpr std::array<
         0x394ECE88u,
 };
 
-// ============================================================================
-// getBlockTypeForRendering fingerprint
-// ============================================================================
-
 inline constexpr std::array<
     std::uint32_t,
     7>
@@ -206,10 +168,6 @@ inline constexpr std::array<
         0xD61F0020u,
 };
 
-// ============================================================================
-// BlockGraphics::getForBlock(BlockType)
-// ============================================================================
-
 inline constexpr std::array<
     std::uint32_t,
     5>
@@ -222,10 +180,6 @@ inline constexpr std::array<
         0x17FFFFA1u,
 };
 
-// ============================================================================
-// BlockGraphics::getBlockShape
-// ============================================================================
-
 inline constexpr std::array<
     std::uint32_t,
     2>
@@ -233,6 +187,44 @@ inline constexpr std::array<
 
         0xB9401000u,
         0xD65F03C0u,
+};
+
+inline constexpr std::array<
+    std::uint32_t,
+    12>
+    kRelativeShadowStorageFingerprint = {
+
+        0xD10203FFu,
+        0xA9057BFDu,
+        0xF90033F5u,
+        0xA9074FF4u,
+        0x910143FDu,
+        0xD53BD055u,
+        0xAA0003F4u,
+        0x2A0103EAu,
+        0xF94016A8u,
+        0xAA0003F3u,
+        0xF81F83A8u,
+        0xA9C3A688u,
+};
+
+inline constexpr std::array<
+    std::uint32_t,
+    12>
+    kRelativeShadowEmplaceFingerprint = {
+
+        0xD10143FFu,
+        0xA9017BFDu,
+        0xA9025FF8u,
+        0xA90357F6u,
+        0xA9044FF4u,
+        0x910043FDu,
+        0xD53BD058u,
+        0xAA0303F6u,
+        0xAA1F03E3u,
+        0xF9401708u,
+        0xAA0003F3u,
+        0xF90007E8u,
 };
 
 } // namespace itemphysics::profile
