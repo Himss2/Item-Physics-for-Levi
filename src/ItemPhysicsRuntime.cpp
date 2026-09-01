@@ -27,58 +27,68 @@ constexpr float kFullBlockWakeThreshold = 0.015f;
 
 constexpr float kNonFullWakeThreshold = 0.030f;
 
-constexpr float kAirDampingFlat = 2.35f;
-constexpr float kAirDampingThin = 2.65f;
-constexpr float kAirDampingHead = 3.10f;
-constexpr float kAirDampingShaped = 2.50f;
-constexpr float kAirDampingSpecial = 2.45f;
+constexpr float kAirDampingFlat = 2.10f;
+constexpr float kAirDampingThin = 2.35f;
+constexpr float kAirDampingHead = 2.80f;
+constexpr float kAirDampingShaped = 2.20f;
+constexpr float kAirDampingSpecial = 2.20f;
 
-constexpr float kMaxAngularFlat = 2.25f;
-constexpr float kMaxAngularThin = 1.85f;
-constexpr float kMaxAngularHead = 1.55f;
-constexpr float kMaxAngularShaped = 1.95f;
-constexpr float kMaxAngularSpecial = 2.00f;
+constexpr float kMaxAngularFlat = 2.75f;
+constexpr float kMaxAngularThin = 2.30f;
+constexpr float kMaxAngularHead = 1.85f;
+constexpr float kMaxAngularShaped = 2.45f;
+constexpr float kMaxAngularSpecial = 2.50f;
 
 constexpr float kBaseNaturalSpin = 0.55f;
 constexpr float kHorizontalSpinGain = 0.38f;
 constexpr float kVerticalSpinGain = 0.09f;
 constexpr float kMaxNaturalSpin = 4.75f;
 
-constexpr float kPreSettleDelay = 0.08f;
-constexpr float kPreSettleRamp = 0.72f;
+/*
+ * Rebah dimulai hampir segera setelah throw.
+ *
+ * delay 0.02 + ramp 0.44:
+ * sekitar 0.46 detik setelah throw correction sudah maksimal.
+ */
+constexpr float kPreSettleDelay = 0.020f;
+constexpr float kPreSettleRamp = 0.440f;
 
-constexpr float kPreSettleSpringFlat = 11.0f;
-constexpr float kPreSettleSpringThin = 12.0f;
-constexpr float kPreSettleSpringHead = 12.5f;
-constexpr float kPreSettleSpringShaped = 11.5f;
-constexpr float kPreSettleSpringSpecial = 10.5f;
+constexpr float kPreSettleSpringFlat = 17.5f;
+constexpr float kPreSettleSpringThin = 18.5f;
+constexpr float kPreSettleSpringHead = 18.0f;
+constexpr float kPreSettleSpringShaped = 18.0f;
+constexpr float kPreSettleSpringSpecial = 17.0f;
 
-constexpr float kPreSettleDampingFlat = 4.1f;
-constexpr float kPreSettleDampingThin = 4.5f;
-constexpr float kPreSettleDampingHead = 4.8f;
-constexpr float kPreSettleDampingShaped = 4.2f;
-constexpr float kPreSettleDampingSpecial = 4.0f;
+constexpr float kPreSettleDampingFlat = 5.35f;
+constexpr float kPreSettleDampingThin = 5.75f;
+constexpr float kPreSettleDampingHead = 6.00f;
+constexpr float kPreSettleDampingShaped = 5.50f;
+constexpr float kPreSettleDampingSpecial = 5.30f;
 
-constexpr float kContactSpringFlat = 20.0f;
-constexpr float kContactSpringThin = 22.0f;
-constexpr float kContactSpringHead = 22.0f;
-constexpr float kContactSpringShaped = 21.0f;
-constexpr float kContactSpringSpecial = 19.0f;
+/*
+ * Contact hanya menyelesaikan error kecil yang tersisa.
+ * Damping tinggi mencegah overshoot / flip.
+ */
+constexpr float kContactSpringFlat = 27.0f;
+constexpr float kContactSpringThin = 29.0f;
+constexpr float kContactSpringHead = 28.0f;
+constexpr float kContactSpringShaped = 28.0f;
+constexpr float kContactSpringSpecial = 26.0f;
 
-constexpr float kContactDampingFlat = 7.8f;
-constexpr float kContactDampingThin = 8.4f;
-constexpr float kContactDampingHead = 8.6f;
-constexpr float kContactDampingShaped = 8.0f;
-constexpr float kContactDampingSpecial = 7.6f;
+constexpr float kContactDampingFlat = 10.5f;
+constexpr float kContactDampingThin = 11.2f;
+constexpr float kContactDampingHead = 11.4f;
+constexpr float kContactDampingShaped = 10.8f;
+constexpr float kContactDampingSpecial = 10.3f;
 
-constexpr float kMaxContactAngularFlat = 2.10f;
-constexpr float kMaxContactAngularThin = 1.80f;
-constexpr float kMaxContactAngularHead = 1.55f;
-constexpr float kMaxContactAngularShaped = 1.85f;
-constexpr float kMaxContactAngularSpecial = 1.95f;
+constexpr float kMaxContactAngularFlat = 2.55f;
+constexpr float kMaxContactAngularThin = 2.15f;
+constexpr float kMaxContactAngularHead = 1.75f;
+constexpr float kMaxContactAngularShaped = 2.30f;
+constexpr float kMaxContactAngularSpecial = 2.40f;
 
-constexpr float kContactStopAngular = 0.020f;
-constexpr float kContactStopError = 0.008f;
+constexpr float kContactStopAngular = 0.022f;
+constexpr float kContactStopError = 0.006f;
 
 constexpr float kGroundFlickerSpeedThreshold = 0.080f;
 constexpr float kGroundFlickerVerticalThreshold = 0.050f;
@@ -92,7 +102,7 @@ struct Vec3MotionAbi {
 static_assert(sizeof(Vec3MotionAbi) == 12);
 
 using GetPosDeltaFn =
-    const Vec3MotionAbi *(*)(const void *actor);
+    const Vec3MotionAbi *(*)(const void *);
 
 struct Vec3Local {
   float x{};
@@ -110,12 +120,10 @@ struct QuatLocal {
 thread_local bool gDroppedItemGroupActive = false;
 thread_local bool gDroppedItemGroupGrounded = false;
 
-[[nodiscard]]
 float dot3(Vec3Local a, Vec3Local b) noexcept {
   return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
-[[nodiscard]]
 Vec3Local cross3(Vec3Local a, Vec3Local b) noexcept {
   return {
       a.y * b.z - a.z * b.y,
@@ -123,12 +131,10 @@ Vec3Local cross3(Vec3Local a, Vec3Local b) noexcept {
       a.x * b.y - a.y * b.x};
 }
 
-[[nodiscard]]
 float length3(Vec3Local v) noexcept {
   return std::sqrt(dot3(v, v));
 }
 
-[[nodiscard]]
 Vec3Local normalize3(
     Vec3Local v,
     Vec3Local fallback = {1.0f, 0.0f, 0.0f}) noexcept {
@@ -147,7 +153,6 @@ Vec3Local normalize3(
       v.z * inv};
 }
 
-[[nodiscard]]
 QuatLocal normalizeQ(QuatLocal q) noexcept {
   const float len =
       std::sqrt(
@@ -169,7 +174,6 @@ QuatLocal normalizeQ(QuatLocal q) noexcept {
       q.z * inv};
 }
 
-[[nodiscard]]
 QuatLocal mulQ(QuatLocal a, QuatLocal b) noexcept {
   return {
       a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
@@ -178,14 +182,10 @@ QuatLocal mulQ(QuatLocal a, QuatLocal b) noexcept {
       a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w};
 }
 
-[[nodiscard]]
-QuatLocal axisAngleQ(
-    Vec3Local axis,
-    float angle) noexcept {
-
+QuatLocal axisAngleQ(Vec3Local axis, float angle) noexcept {
   axis = normalize3(axis);
 
-  const float half = 0.5f * angle;
+  const float half = angle * 0.5f;
   const float s = std::sin(half);
 
   return normalizeQ({
@@ -195,25 +195,14 @@ QuatLocal axisAngleQ(
       axis.z * s});
 }
 
-[[nodiscard]]
-Vec3Local rotateQ(
-    QuatLocal q,
-    Vec3Local v) noexcept {
-
+Vec3Local rotateQ(QuatLocal q, Vec3Local v) noexcept {
   q = normalizeQ(q);
 
-  const Vec3Local u{
-      q.x,
-      q.y,
-      q.z};
-
+  const Vec3Local u{q.x, q.y, q.z};
   const float s = q.w;
 
-  const Vec3Local uv =
-      cross3(u, v);
-
-  const Vec3Local uuv =
-      cross3(u, uv);
+  const Vec3Local uv = cross3(u, v);
+  const Vec3Local uuv = cross3(u, uv);
 
   return {
       v.x + 2.0f * (s * uv.x + uuv.x),
@@ -221,11 +210,7 @@ Vec3Local rotateQ(
       v.z + 2.0f * (s * uv.z + uuv.z)};
 }
 
-[[nodiscard]]
-QuatLocal fromToQ(
-    Vec3Local from,
-    Vec3Local to) noexcept {
-
+QuatLocal fromToQ(Vec3Local from, Vec3Local to) noexcept {
   from = normalize3(from);
   to = normalize3(to);
 
@@ -252,9 +237,7 @@ QuatLocal fromToQ(
               {0.0f, 0.0f, 1.0f});
     }
 
-    return axisAngleQ(
-        axis,
-        kPi);
+    return axisAngleQ(axis, kPi);
   }
 
   const Vec3Local c =
@@ -267,7 +250,6 @@ QuatLocal fromToQ(
       c.z});
 }
 
-[[nodiscard]]
 Vec3Local shortestAngularError(
     QuatLocal current,
     QuatLocal target) noexcept {
@@ -323,17 +305,14 @@ Vec3Local shortestAngularError(
       delta.z * scale};
 }
 
-[[nodiscard]]
 QuatLocal integrateWorldAngular(
     QuatLocal q,
     Vec3Local omega,
     float dt) noexcept {
 
-  const float speed =
-      length3(omega);
+  const float speed = length3(omega);
 
-  if (speed < 1.0e-5f ||
-      dt <= 0.0f) {
+  if (speed < 1.0e-5f || dt <= 0.0f) {
     return q;
   }
 
@@ -348,67 +327,40 @@ QuatLocal integrateWorldAngular(
           q));
 }
 
-void postRotateQuat(
-    Mat4 &matrix,
-    QuatLocal q) noexcept {
-
+void postRotateQuat(Mat4 &matrix, QuatLocal q) noexcept {
   q = normalizeQ(q);
 
   const float xx = q.x * q.x;
   const float yy = q.y * q.y;
   const float zz = q.z * q.z;
+
   const float xy = q.x * q.y;
   const float xz = q.x * q.z;
   const float yz = q.y * q.z;
+
   const float wx = q.w * q.x;
   const float wy = q.w * q.y;
   const float wz = q.w * q.z;
 
-  const float r00 =
-      1.0f - 2.0f * (yy + zz);
+  const float r00 = 1.0f - 2.0f * (yy + zz);
+  const float r01 = 2.0f * (xy - wz);
+  const float r02 = 2.0f * (xz + wy);
 
-  const float r01 =
-      2.0f * (xy - wz);
+  const float r10 = 2.0f * (xy + wz);
+  const float r11 = 1.0f - 2.0f * (xx + zz);
+  const float r12 = 2.0f * (yz - wx);
 
-  const float r02 =
-      2.0f * (xz + wy);
-
-  const float r10 =
-      2.0f * (xy + wz);
-
-  const float r11 =
-      1.0f - 2.0f * (xx + zz);
-
-  const float r12 =
-      2.0f * (yz - wx);
-
-  const float r20 =
-      2.0f * (xz - wy);
-
-  const float r21 =
-      2.0f * (yz + wx);
-
-  const float r22 =
-      1.0f - 2.0f * (xx + yy);
+  const float r20 = 2.0f * (xz - wy);
+  const float r21 = 2.0f * (yz + wx);
+  const float r22 = 1.0f - 2.0f * (xx + yy);
 
   float c0[4];
   float c1[4];
   float c2[4];
 
-  std::memcpy(
-      c0,
-      &matrix.m[0],
-      sizeof(c0));
-
-  std::memcpy(
-      c1,
-      &matrix.m[4],
-      sizeof(c1));
-
-  std::memcpy(
-      c2,
-      &matrix.m[8],
-      sizeof(c2));
+  std::memcpy(c0, &matrix.m[0], sizeof(c0));
+  std::memcpy(c1, &matrix.m[4], sizeof(c1));
+  std::memcpy(c2, &matrix.m[8], sizeof(c2));
 
   for (int row = 0; row < 4; ++row) {
     matrix.m[row] =
@@ -428,7 +380,6 @@ void postRotateQuat(
   }
 }
 
-[[nodiscard]]
 bool invert3x3FromMat4(
     const Mat4 &m,
     float inv[9]) noexcept {
@@ -445,41 +396,17 @@ bool invert3x3FromMat4(
   const float a21 = m.m[6];
   const float a22 = m.m[10];
 
-  const float c00 =
-      a11 * a22 -
-      a12 * a21;
+  const float c00 = a11 * a22 - a12 * a21;
+  const float c01 = a02 * a21 - a01 * a22;
+  const float c02 = a01 * a12 - a02 * a11;
 
-  const float c01 =
-      a02 * a21 -
-      a01 * a22;
+  const float c10 = a12 * a20 - a10 * a22;
+  const float c11 = a00 * a22 - a02 * a20;
+  const float c12 = a02 * a10 - a00 * a12;
 
-  const float c02 =
-      a01 * a12 -
-      a02 * a11;
-
-  const float c10 =
-      a12 * a20 -
-      a10 * a22;
-
-  const float c11 =
-      a00 * a22 -
-      a02 * a20;
-
-  const float c12 =
-      a02 * a10 -
-      a00 * a12;
-
-  const float c20 =
-      a10 * a21 -
-      a11 * a20;
-
-  const float c21 =
-      a01 * a20 -
-      a00 * a21;
-
-  const float c22 =
-      a00 * a11 -
-      a01 * a10;
+  const float c20 = a10 * a21 - a11 * a20;
+  const float c21 = a01 * a20 - a00 * a21;
+  const float c22 = a00 * a11 - a01 * a10;
 
   const float det =
       a00 * c00 +
@@ -508,7 +435,6 @@ bool invert3x3FromMat4(
   return true;
 }
 
-[[nodiscard]]
 Vec3Local transformVector3(
     const Mat4 &m,
     Vec3Local v) noexcept {
@@ -527,7 +453,6 @@ Vec3Local transformVector3(
           m.m[10] * v.z};
 }
 
-[[nodiscard]]
 Vec3Local transformByInverse3(
     const float inv[9],
     Vec3Local v) noexcept {
@@ -546,10 +471,7 @@ Vec3Local transformByInverse3(
           inv[8] * v.z};
 }
 
-[[nodiscard]]
-bool isThinGroundShape(
-    std::int32_t shape) noexcept {
-
+bool isThinGroundShape(std::int32_t shape) noexcept {
   switch (shape) {
   case 9:
   case 14:
@@ -573,10 +495,7 @@ bool isThinGroundShape(
   }
 }
 
-[[nodiscard]]
-bool isTorchGroundShape(
-    std::int32_t shape) noexcept {
-
+bool isTorchGroundShape(std::int32_t shape) noexcept {
   switch (shape) {
   case 1:
   case 2:
@@ -589,10 +508,7 @@ bool isTorchGroundShape(
   }
 }
 
-[[nodiscard]]
-bool isShapedGroundShape(
-    std::int32_t shape) noexcept {
-
+bool isShapedGroundShape(std::int32_t shape) noexcept {
   switch (shape) {
   case 7:
   case 8:
@@ -652,14 +568,8 @@ public:
       ItemPhysicsRuntime::MatrixRefDtorFn dtor)
       : mDtor(dtor) {
 
-    if (stack &&
-        push &&
-        dtor) {
-
-      mRef =
-          push(
-              stack,
-              false);
+    if (stack && push && dtor) {
+      mRef = push(stack, false);
 
       mActive =
           mRef.stack != nullptr &&
@@ -667,26 +577,18 @@ public:
     }
   }
 
-  MatrixPushScope(
-      const MatrixPushScope &) = delete;
-
-  MatrixPushScope &
-  operator=(
-      const MatrixPushScope &) = delete;
+  MatrixPushScope(const MatrixPushScope &) = delete;
+  MatrixPushScope &operator=(const MatrixPushScope &) = delete;
 
   ~MatrixPushScope() {
-    if (mActive &&
-        mDtor) {
-
-      mDtor(
-          &mRef);
+    if (mActive && mDtor) {
+      mDtor(&mRef);
 
       mRef.stack = nullptr;
       mRef.mat = nullptr;
     }
   }
 
-  [[nodiscard]]
   Mat4 *matrix() noexcept {
     return mActive
                ? mRef.mat
@@ -701,9 +603,7 @@ private:
 
 }
 
-ItemPhysicsRuntime *
-ItemPhysicsRuntime::sInstance =
-    nullptr;
+ItemPhysicsRuntime *ItemPhysicsRuntime::sInstance = nullptr;
 
 void ItemPhysicsRuntime::applyConfig(
     const ItemPhysicsConfig &config) noexcept {
@@ -721,58 +621,47 @@ void ItemPhysicsRuntime::applyConfig(
       std::memory_order_relaxed);
 
   mRotationSpeed.store(
-      static_cast<float>(
-          config.rotationSpeed),
+      static_cast<float>(config.rotationSpeed),
       std::memory_order_relaxed);
 
   mSettleSpeed.store(
-      static_cast<float>(
-          config.settleSpeed),
+      static_cast<float>(config.settleSpeed),
       std::memory_order_relaxed);
 
   mGroundTiltDeg.store(
-      static_cast<float>(
-          config.groundTilt),
+      static_cast<float>(config.groundTilt),
       std::memory_order_relaxed);
 
   mHeightOffset.store(
-      static_cast<float>(
-          config.heightOffset),
+      static_cast<float>(config.heightOffset),
       std::memory_order_relaxed);
 
   mBlockGroundHeight.store(
-      static_cast<float>(
-          config.blockGroundHeight),
+      static_cast<float>(config.blockGroundHeight),
       std::memory_order_relaxed);
 
   mThinBlockGroundHeight.store(
-      static_cast<float>(
-          config.thinBlockGroundHeight),
+      static_cast<float>(config.thinBlockGroundHeight),
       std::memory_order_relaxed);
 
   mTorchGroundHeight.store(
-      static_cast<float>(
-          config.torchGroundHeight),
+      static_cast<float>(config.torchGroundHeight),
       std::memory_order_relaxed);
 
   mShapedBlockGroundHeight.store(
-      static_cast<float>(
-          config.shapedBlockGroundHeight),
+      static_cast<float>(config.shapedBlockGroundHeight),
       std::memory_order_relaxed);
 
   mSkullGroundHeight.store(
-      static_cast<float>(
-          config.skullGroundHeight),
+      static_cast<float>(config.skullGroundHeight),
       std::memory_order_relaxed);
 
   mShieldGroundHeight.store(
-      static_cast<float>(
-          config.shieldGroundHeight),
+      static_cast<float>(config.shieldGroundHeight),
       std::memory_order_relaxed);
 
   mBannerGroundHeight.store(
-      static_cast<float>(
-          config.bannerGroundHeight),
+      static_cast<float>(config.bannerGroundHeight),
       std::memory_order_relaxed);
 }
 
@@ -790,14 +679,10 @@ bool ItemPhysicsRuntime::verifyProfile(
             fingerprint.size() *
             sizeof(std::uint32_t);
 
-        if (!resolved.module.readable(
-                address,
-                bytes)) {
-
+        if (!resolved.module.readable(address, bytes)) {
           mod.getLogger().warn(
               "{} is not readable",
               name);
-
           return false;
         }
 
@@ -810,15 +695,11 @@ bool ItemPhysicsRuntime::verifyProfile(
              i < fingerprint.size();
              ++i) {
 
-          if (words[i] !=
-              fingerprint[i]) {
-
+          if (words[i] != fingerprint[i]) {
             mod.getLogger().warn(
-                "Minecraft profile mismatch: "
-                "{} word {}",
+                "Minecraft profile mismatch: {} word {}",
                 name,
                 i);
-
             return false;
           }
         }
@@ -892,42 +773,20 @@ bool ItemPhysicsRuntime::verifyProfile(
   const auto executable =
       [&](std::uintptr_t rva) {
         return resolved.module.executable(
-            resolved.module.base +
-            rva);
+            resolved.module.base + rva);
       };
 
-  if (!executable(
-          profile::kGetWorldMatrixRva) ||
-
-      !executable(
-          profile::kMatrixStackPushRva) ||
-
-      !executable(
-          profile::kMatrixStackRefDtorRva) ||
-
-      !executable(
-          profile::kGetPosDeltaRva) ||
-
-      !executable(
-          profile::kRenderItemGroupLikeRva) ||
-
-      !executable(
-          profile::kGetBlockTypeForRenderingRva) ||
-
-      !executable(
-          profile::kBlockGraphicsGetForBlockTypeRva) ||
-
-      !executable(
-          profile::kBlockGraphicsGetForBlockRva) ||
-
-      !executable(
-          profile::kBlockGraphicsGetBlockShapeRva) ||
-
-      !executable(
-          profile::kRelativeShadowStorageRva) ||
-
-      !executable(
-          profile::kRelativeShadowEmplaceRva)) {
+  if (!executable(profile::kGetWorldMatrixRva) ||
+      !executable(profile::kMatrixStackPushRva) ||
+      !executable(profile::kMatrixStackRefDtorRva) ||
+      !executable(profile::kGetPosDeltaRva) ||
+      !executable(profile::kRenderItemGroupLikeRva) ||
+      !executable(profile::kGetBlockTypeForRenderingRva) ||
+      !executable(profile::kBlockGraphicsGetForBlockTypeRva) ||
+      !executable(profile::kBlockGraphicsGetForBlockRva) ||
+      !executable(profile::kBlockGraphicsGetBlockShapeRva) ||
+      !executable(profile::kRelativeShadowStorageRva) ||
+      !executable(profile::kRelativeShadowEmplaceRva)) {
 
     mod.getLogger().warn(
         "Minecraft 1.26.45 renderer helper validation failed");
@@ -951,84 +810,65 @@ bool ItemPhysicsRuntime::install(
 
   if (!resolved) {
     mod.getLogger().warn(
-        "Item Physics inactive: "
-        "failed to resolve ItemRenderer");
-
+        "Item Physics inactive: failed to resolve ItemRenderer");
     return false;
   }
 
-  if (!verifyProfile(
-          *resolved,
-          mod)) {
-
+  if (!verifyProfile(*resolved, mod)) {
     mod.getLogger().warn(
-        "Item Physics safe passthrough: "
-        "Minecraft profile unsupported");
-
+        "Item Physics safe passthrough: Minecraft profile unsupported");
     return false;
   }
 
-  mMinecraftBase =
-      resolved->module.base;
-
-  mRenderTarget =
-      resolved->target;
+  mMinecraftBase = resolved->module.base;
+  mRenderTarget = resolved->target;
 
   mRenderItemGroupTarget =
       mMinecraftBase +
       profile::kRenderItemGroupLikeRva;
 
   mGetWorldMatrix =
-      reinterpret_cast<
-          GetWorldMatrixFn>(
+      reinterpret_cast<GetWorldMatrixFn>(
           mMinecraftBase +
           profile::kGetWorldMatrixRva);
 
   mMatrixPush =
-      reinterpret_cast<
-          MatrixPushFn>(
+      reinterpret_cast<MatrixPushFn>(
           mMinecraftBase +
           profile::kMatrixStackPushRva);
 
   mMatrixRefDtor =
-      reinterpret_cast<
-          MatrixRefDtorFn>(
+      reinterpret_cast<MatrixRefDtorFn>(
           mMinecraftBase +
           profile::kMatrixStackRefDtorRva);
 
   mGetBlockTypeForRendering =
-      reinterpret_cast<
-          GetBlockTypeForRenderingFn>(
+      reinterpret_cast<GetBlockTypeForRenderingFn>(
           mMinecraftBase +
           profile::kGetBlockTypeForRenderingRva);
 
   mGetBlockGraphicsForBlockType =
-      reinterpret_cast<
-          BlockGraphicsGetForBlockTypeFn>(
+      reinterpret_cast<BlockGraphicsGetForBlockTypeFn>(
           mMinecraftBase +
           profile::kBlockGraphicsGetForBlockTypeRva);
 
   mGetBlockGraphicsForBlock =
-      reinterpret_cast<
-          BlockGraphicsGetForBlockFn>(
+      reinterpret_cast<BlockGraphicsGetForBlockFn>(
           mMinecraftBase +
           profile::kBlockGraphicsGetForBlockRva);
 
   mGetBlockGraphicsShape =
-      reinterpret_cast<
-          BlockGraphicsGetBlockShapeFn>(
+      reinterpret_cast<BlockGraphicsGetBlockShapeFn>(
           mMinecraftBase +
           profile::kBlockGraphicsGetBlockShapeRva);
 
   mGetRelativeShadowStorage =
-      reinterpret_cast<
-          RelativeShadowStorageFn>(
+      reinterpret_cast<RelativeShadowStorageFn>(
           mMinecraftBase +
           profile::kRelativeShadowStorageRva);
 
   mEmplaceRelativeShadow =
-      reinterpret_cast<
-          RelativeShadowEmplaceFn>(
+      reinterpret_cast<RelativeShadowEmplaceFn>(
           mMinecraftBase +
           profile::kRelativeShadowEmplaceRva);
 
@@ -1036,21 +876,14 @@ bool ItemPhysicsRuntime::install(
   mOriginal = nullptr;
 
   mHook =
-      std::make_unique<
-          pl::memory::HookHandle>(
+      std::make_unique<pl::memory::HookHandle>(
+          reinterpret_cast<void *>(mRenderTarget),
           reinterpret_cast<void *>(
-              mRenderTarget),
-          reinterpret_cast<void *>(
-              &ItemPhysicsRuntime::
-                  renderDetour),
-          reinterpret_cast<void **>(
-              &mOriginal),
-          pl::memory::
-              HookPriority::Normal);
+              &ItemPhysicsRuntime::renderDetour),
+          reinterpret_cast<void **>(&mOriginal),
+          pl::memory::HookPriority::Normal);
 
-  if (!mHook->installed() ||
-      !mOriginal) {
-
+  if (!mHook->installed() || !mOriginal) {
     mod.getLogger().error(
         "Failed to hook ItemRenderer::render");
 
@@ -1060,21 +893,17 @@ bool ItemPhysicsRuntime::install(
     return false;
   }
 
-  mRenderItemGroupOriginal =
-      nullptr;
+  mRenderItemGroupOriginal = nullptr;
 
   mRenderItemGroupHook =
-      std::make_unique<
-          pl::memory::HookHandle>(
+      std::make_unique<pl::memory::HookHandle>(
           reinterpret_cast<void *>(
               mRenderItemGroupTarget),
           reinterpret_cast<void *>(
-              &ItemPhysicsRuntime::
-                  renderItemGroupDetour),
+              &ItemPhysicsRuntime::renderItemGroupDetour),
           reinterpret_cast<void **>(
               &mRenderItemGroupOriginal),
-          pl::memory::
-              HookPriority::Normal);
+          pl::memory::HookPriority::Normal);
 
   if (!mRenderItemGroupHook->installed() ||
       !mRenderItemGroupOriginal) {
@@ -1098,8 +927,7 @@ bool ItemPhysicsRuntime::install(
       std::memory_order_relaxed);
 
   mod.getLogger().info(
-      "Item Physics active: "
-      "1.26.45 early settle + planar stacks");
+      "Item Physics active: early-air settle");
 
   return true;
 }
@@ -1143,9 +971,7 @@ void ItemPhysicsRuntime::uninstall() {
 }
 
 void ItemPhysicsRuntime::clearStates() {
-  std::lock_guard lock(
-      mStateMutex);
-
+  std::lock_guard lock(mStateMutex);
   mStates.clear();
   mRenderCounter = 0;
 }
@@ -1222,16 +1048,14 @@ void ItemPhysicsRuntime::onRenderItemGroup(
   }
 
   void *stack =
-      mGetWorldMatrix(
-          renderContext);
+      mGetWorldMatrix(renderContext);
 
   MatrixPushScope probe(
       stack,
       mMatrixPush,
       mMatrixRefDtor);
 
-  Mat4 *current =
-      probe.matrix();
+  Mat4 *current = probe.matrix();
 
   if (!current) {
     original(
@@ -1246,8 +1070,7 @@ void ItemPhysicsRuntime::onRenderItemGroup(
     return;
   }
 
-  const Mat4 matrixSnapshot =
-      *current;
+  const Mat4 matrixSnapshot = *current;
 
   float inverse[9]{};
 
@@ -1279,12 +1102,10 @@ void ItemPhysicsRuntime::onRenderItemGroup(
   std::lock_guard tableLock(
       mGroupOffsetMutex);
 
-  Vec3Local saved[
-      kMaxExtraCopies]{};
+  Vec3Local saved[kMaxExtraCopies]{};
 
   auto *base =
-      reinterpret_cast<
-          std::uint8_t *>(
+      reinterpret_cast<std::uint8_t *>(
           self);
 
   for (std::uint32_t i = 0;
@@ -1292,15 +1113,13 @@ void ItemPhysicsRuntime::onRenderItemGroup(
        ++i) {
 
     auto *offset =
-        reinterpret_cast<
-            Vec3Local *>(
+        reinterpret_cast<Vec3Local *>(
             base +
             kOffsetBase +
             static_cast<std::size_t>(i) *
                 kOffsetStride);
 
-    saved[i] =
-        *offset;
+    saved[i] = *offset;
 
     Vec3Local world =
         transformVector3(
@@ -1329,15 +1148,13 @@ void ItemPhysicsRuntime::onRenderItemGroup(
        ++i) {
 
     auto *offset =
-        reinterpret_cast<
-            Vec3Local *>(
+        reinterpret_cast<Vec3Local *>(
             base +
             kOffsetBase +
             static_cast<std::size_t>(i) *
                 kOffsetStride);
 
-    *offset =
-        saved[i];
+    *offset = saved[i];
   }
 }
 
@@ -1349,8 +1166,7 @@ float ItemPhysicsRuntime::seededUnit(
   seed ^= seed << 5;
 
   return static_cast<float>(
-             seed &
-             0x00FFFFFFu) /
+             seed & 0x00FFFFFFu) /
          16777215.0f;
 }
 
@@ -1374,9 +1190,7 @@ float ItemPhysicsRuntime::approachAngle(
     float alpha) noexcept {
 
   const float delta =
-      wrapPi(
-          target -
-          current);
+      wrapPi(target - current);
 
   return wrapPi(
       current +
@@ -1396,12 +1210,10 @@ bool ItemPhysicsRuntime::libcxxStringEquals(
   }
 
   const auto *raw =
-      reinterpret_cast<
-          const std::uint8_t *>(
+      reinterpret_cast<const std::uint8_t *>(
           stringAddress);
 
-  const std::uint8_t flag =
-      raw[0];
+  const std::uint8_t flag = raw[0];
 
   std::size_t length = 0;
   const char *data = nullptr;
@@ -1412,14 +1224,12 @@ bool ItemPhysicsRuntime::libcxxStringEquals(
             flag >> 1);
 
     data =
-        reinterpret_cast<
-            const char *>(
+        reinterpret_cast<const char *>(
             raw + 1);
 
   } else {
     length =
-        *reinterpret_cast<
-            const std::size_t *>(
+        *reinterpret_cast<const std::size_t *>(
             raw + 8);
 
     data =
@@ -1451,11 +1261,9 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
   }
 
   const void *itemStackBase =
-      reinterpret_cast<
-          const void *>(
+      reinterpret_cast<const void *>(
           actorAddress +
-          profile::
-              kItemStackBaseOffset);
+          profile::kItemStackBaseOffset);
 
   const void *weakPtrAddress =
       mGetBlockTypeForRendering(
@@ -1485,8 +1293,7 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
 
   const void *graphics =
       mGetBlockGraphicsForBlockType(
-          reinterpret_cast<
-              const void *>(
+          reinterpret_cast<const void *>(
               blockType));
 
   if (!graphics) {
@@ -1514,8 +1321,7 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
       mGetBlockGraphicsShape) {
 
     const void *graphics =
-        mGetBlockGraphicsForBlock(
-            block);
+        mGetBlockGraphicsForBlock(block);
 
     if (graphics) {
       info.blockShape =
@@ -1524,25 +1330,20 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
     }
   }
 
-  bool thinHorizontal =
-      false;
+  bool thinHorizontal = false;
 
   const auto blockAddress =
-      reinterpret_cast<
-          std::uintptr_t>(
+      reinterpret_cast<std::uintptr_t>(
           block);
 
   auto *blockType =
-      *reinterpret_cast<
-          void *const *>(
+      *reinterpret_cast<void *const *>(
           blockAddress +
-          profile::
-              kBlockTypeOffset);
+          profile::kBlockTypeOffset);
 
   if (blockType) {
     auto **vtable =
-        *reinterpret_cast<
-            void ***>(
+        *reinterpret_cast<void ***>(
             blockType);
 
     if (vtable) {
@@ -1552,8 +1353,7 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
           sizeof(void *);
 
       auto getVisualShape =
-          reinterpret_cast<
-              GetVisualShapeFn>(
+          reinterpret_cast<GetVisualShapeFn>(
               vtable[slot]);
 
       if (getVisualShape) {
@@ -1567,16 +1367,13 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
 
         if (bounds) {
           const float dx =
-              bounds->maxX -
-              bounds->minX;
+              bounds->maxX - bounds->minX;
 
           const float dy =
-              bounds->maxY -
-              bounds->minY;
+              bounds->maxY - bounds->minY;
 
           const float dz =
-              bounds->maxZ -
-              bounds->minZ;
+              bounds->maxZ - bounds->minZ;
 
           if (std::isfinite(dx) &&
               std::isfinite(dy) &&
@@ -1617,8 +1414,7 @@ ItemPhysicsRuntime::classifyItem(
 
   ItemRenderTraits traits{};
 
-  std::int32_t rendererShape =
-      -1;
+  std::int32_t rendererShape = -1;
 
   if (tryGetRenderBlockShape(
           actorAddress,
@@ -1633,10 +1429,14 @@ ItemPhysicsRuntime::classifyItem(
           kSkullBlockShape) {
 
     traits.valid = true;
-    traits.modelClass = ModelClass::BlockItem;
-    traits.specialKind = SpecialKind::None;
+    traits.modelClass =
+        ModelClass::BlockItem;
+
+    traits.specialKind =
+        SpecialKind::None;
 
     traits.block.valid = true;
+
     traits.block.blockShape =
         kSkullBlockShape;
 
@@ -1649,13 +1449,16 @@ ItemPhysicsRuntime::classifyItem(
       *reinterpret_cast<
           const void *const *>(
           actorAddress +
-          profile::
-              kBlockPtrOffset);
+          profile::kBlockPtrOffset);
 
   if (block) {
     traits.valid = true;
-    traits.modelClass = ModelClass::BlockItem;
-    traits.specialKind = SpecialKind::None;
+
+    traits.modelClass =
+        ModelClass::BlockItem;
+
+    traits.specialKind =
+        SpecialKind::None;
 
     (void)buildBlockRenderInfo(
         block,
@@ -1668,8 +1471,7 @@ ItemPhysicsRuntime::classifyItem(
       *reinterpret_cast<
           const std::uintptr_t *>(
           actorAddress +
-          profile::
-              kItemHandleOffset);
+          profile::kItemHandleOffset);
 
   if (!itemHandle) {
     return traits;
@@ -1686,8 +1488,7 @@ ItemPhysicsRuntime::classifyItem(
 
   const auto identifier =
       item +
-      profile::
-          kItemIdentifierOffset;
+      profile::kItemIdentifierOffset;
 
   const bool shield =
       libcxxStringEquals(
@@ -1702,16 +1503,25 @@ ItemPhysicsRuntime::classifyItem(
   traits.valid = true;
 
   if (shield) {
-    traits.modelClass = ModelClass::SpecialItem;
-    traits.specialKind = SpecialKind::Shield;
+    traits.modelClass =
+        ModelClass::SpecialItem;
+
+    traits.specialKind =
+        SpecialKind::Shield;
 
   } else if (banner) {
-    traits.modelClass = ModelClass::SpecialItem;
-    traits.specialKind = SpecialKind::Banner;
+    traits.modelClass =
+        ModelClass::SpecialItem;
+
+    traits.specialKind =
+        SpecialKind::Banner;
 
   } else {
-    traits.modelClass = ModelClass::FlatItem;
-    traits.specialKind = SpecialKind::None;
+    traits.modelClass =
+        ModelClass::FlatItem;
+
+    traits.specialKind =
+        SpecialKind::None;
   }
 
   return traits;
@@ -1723,11 +1533,9 @@ ItemPhysicsRuntime::stateFor(
     std::chrono::steady_clock::time_point now) {
 
   auto [it, inserted] =
-      mStates.try_emplace(
-          entityId);
+      mStates.try_emplace(entityId);
 
-  auto &state =
-      it->second;
+  auto &state = it->second;
 
   if (inserted ||
       !state.initialized) {
@@ -1835,14 +1643,12 @@ void ItemPhysicsRuntime::updateState(
         state.fullRotX =
             wrapPi(
                 state.fullRotX +
-                state.angularX *
-                    dt);
+                state.angularX * dt);
 
         state.fullRotZ =
             wrapPi(
                 state.fullRotZ +
-                state.angularZ *
-                    dt);
+                state.angularZ * dt);
 
         const float damping =
             std::exp(
@@ -1897,7 +1703,6 @@ void ItemPhysicsRuntime::updateState(
 
   auto currentQ =
       [&]() {
-
         return normalizeQ({
             state.orientation.w,
             state.orientation.x,
@@ -1907,7 +1712,6 @@ void ItemPhysicsRuntime::updateState(
 
   auto storeQ =
       [&](QuatLocal q) {
-
         q = normalizeQ(q);
 
         state.orientation = {
@@ -2004,11 +1808,9 @@ void ItemPhysicsRuntime::updateState(
                 0.08f) {
 
               horizontal = {
-                  std::cos(
-                      state.restYaw),
+                  std::cos(state.restYaw),
                   0.0f,
-                  std::sin(
-                      state.restYaw)};
+                  std::sin(state.restYaw)};
             }
           }
 
@@ -2016,17 +1818,11 @@ void ItemPhysicsRuntime::updateState(
               normalize3(
                   horizontal,
                   {
-                      std::cos(
-                          state.restYaw),
+                      std::cos(state.restYaw),
                       0.0f,
-                      std::sin(
-                          state.restYaw)});
+                      std::sin(state.restYaw)});
 
-          if (dot3(
-                  axis,
-                  horizontal) <
-              0.0f) {
-
+          if (dot3(axis, horizontal) < 0.0f) {
             horizontal.x =
                 -horizontal.x;
 
@@ -2064,8 +1860,7 @@ void ItemPhysicsRuntime::updateState(
         if (freeDamping > 0.0f) {
           const float d =
               std::exp(
-                  -freeDamping *
-                  dt);
+                  -freeDamping * dt);
 
           omega.x *= d;
           omega.y *= d;
@@ -2174,40 +1969,92 @@ void ItemPhysicsRuntime::updateState(
       kMaxContactAngularFlat;
 
   if (head) {
-    airDamping = kAirDampingHead;
-    preSpring = kPreSettleSpringHead;
-    preDamping = kPreSettleDampingHead;
-    contactSpring = kContactSpringHead;
-    contactDamping = kContactDampingHead;
-    maxAir = kMaxAngularHead;
-    maxContact = kMaxContactAngularHead;
+    airDamping =
+        kAirDampingHead;
+
+    preSpring =
+        kPreSettleSpringHead;
+
+    preDamping =
+        kPreSettleDampingHead;
+
+    contactSpring =
+        kContactSpringHead;
+
+    contactDamping =
+        kContactDampingHead;
+
+    maxAir =
+        kMaxAngularHead;
+
+    maxContact =
+        kMaxContactAngularHead;
 
   } else if (thin) {
-    airDamping = kAirDampingThin;
-    preSpring = kPreSettleSpringThin;
-    preDamping = kPreSettleDampingThin;
-    contactSpring = kContactSpringThin;
-    contactDamping = kContactDampingThin;
-    maxAir = kMaxAngularThin;
-    maxContact = kMaxContactAngularThin;
+    airDamping =
+        kAirDampingThin;
+
+    preSpring =
+        kPreSettleSpringThin;
+
+    preDamping =
+        kPreSettleDampingThin;
+
+    contactSpring =
+        kContactSpringThin;
+
+    contactDamping =
+        kContactDampingThin;
+
+    maxAir =
+        kMaxAngularThin;
+
+    maxContact =
+        kMaxContactAngularThin;
 
   } else if (shaped) {
-    airDamping = kAirDampingShaped;
-    preSpring = kPreSettleSpringShaped;
-    preDamping = kPreSettleDampingShaped;
-    contactSpring = kContactSpringShaped;
-    contactDamping = kContactDampingShaped;
-    maxAir = kMaxAngularShaped;
-    maxContact = kMaxContactAngularShaped;
+    airDamping =
+        kAirDampingShaped;
+
+    preSpring =
+        kPreSettleSpringShaped;
+
+    preDamping =
+        kPreSettleDampingShaped;
+
+    contactSpring =
+        kContactSpringShaped;
+
+    contactDamping =
+        kContactDampingShaped;
+
+    maxAir =
+        kMaxAngularShaped;
+
+    maxContact =
+        kMaxContactAngularShaped;
 
   } else if (special) {
-    airDamping = kAirDampingSpecial;
-    preSpring = kPreSettleSpringSpecial;
-    preDamping = kPreSettleDampingSpecial;
-    contactSpring = kContactSpringSpecial;
-    contactDamping = kContactDampingSpecial;
-    maxAir = kMaxAngularSpecial;
-    maxContact = kMaxContactAngularSpecial;
+    airDamping =
+        kAirDampingSpecial;
+
+    preSpring =
+        kPreSettleSpringSpecial;
+
+    preDamping =
+        kPreSettleDampingSpecial;
+
+    contactSpring =
+        kContactSpringSpecial;
+
+    contactDamping =
+        kContactDampingSpecial;
+
+    maxAir =
+        kMaxAngularSpecial;
+
+    maxContact =
+        kMaxContactAngularSpecial;
   }
 
   if (!grounded) {
@@ -2231,22 +2078,28 @@ void ItemPhysicsRuntime::updateState(
         ageT *
         ageT *
         (3.0f -
-         2.0f *
-             ageT);
+         2.0f * ageT);
 
     const float descent =
         std::clamp(
-            (0.045f -
+            (0.055f -
              verticalVelocity) /
-                0.18f,
+                0.19f,
             0.0f,
             1.0f);
 
+    /*
+     * Perbedaan utama dari build sebelumnya:
+     *
+     * sebelumnya saat item masih naik hanya 30% correction.
+     * sekarang minimum 55%.
+     *
+     * Jadi pose rebah sudah berkembang dari awal flight.
+     */
     const float strength =
         ageT *
-        (0.30f +
-         0.70f *
-             descent);
+        (0.55f +
+         0.45f * descent);
 
     const QuatLocal target =
         supportTarget(
@@ -2266,21 +2119,15 @@ void ItemPhysicsRuntime::updateState(
         strength,
         airDamping);
 
-    if (std::abs(
-            state.angularX) <
-        0.006f) {
+    if (std::abs(state.angularX) < 0.006f) {
       state.angularX = 0.0f;
     }
 
-    if (std::abs(
-            state.angularY) <
-        0.006f) {
+    if (std::abs(state.angularY) < 0.006f) {
       state.angularY = 0.0f;
     }
 
-    if (std::abs(
-            state.angularZ) <
-        0.006f) {
+    if (std::abs(state.angularZ) < 0.006f) {
       state.angularZ = 0.0f;
     }
 
@@ -2321,7 +2168,7 @@ void ItemPhysicsRuntime::updateState(
           mSettleSpeed.load(
               std::memory_order_relaxed) /
               3.0f,
-          0.45f,
+          0.65f,
           2.0f);
 
   integrateSpring(
@@ -2336,17 +2183,14 @@ void ItemPhysicsRuntime::updateState(
 void ItemPhysicsRuntime::pruneStates(
     std::chrono::steady_clock::time_point now) {
 
-  for (auto it =
-           mStates.begin();
-       it !=
-       mStates.end();) {
+  for (auto it = mStates.begin();
+       it != mStates.end();) {
 
     if (now -
             it->second.lastSeen >
         kStateTtl) {
 
-      it =
-          mStates.erase(it);
+      it = mStates.erase(it);
 
     } else {
       ++it;
@@ -2366,23 +2210,19 @@ void ItemPhysicsRuntime::updateItemShadowComponent(
   }
 
   const auto actorAddress =
-      reinterpret_cast<
-          std::uintptr_t>(
+      reinterpret_cast<std::uintptr_t>(
           actor);
 
   auto *registry =
-      *reinterpret_cast<
-          void **>(
+      *reinterpret_cast<void **>(
           actorAddress +
-          profile::
-              kActorRegistryOffset);
+          profile::kActorRegistryOffset);
 
   const auto entityId =
       *reinterpret_cast<
           const std::uint32_t *>(
           actorAddress +
-          profile::
-              kActorEntityIdOffset);
+          profile::kActorEntityIdOffset);
 
   if (!registry) {
     return;
@@ -2406,50 +2246,41 @@ void ItemPhysicsRuntime::updateItemShadowComponent(
                  : -0.5f);
 
   const auto storageAddress =
-      reinterpret_cast<
-          std::uintptr_t>(
+      reinterpret_cast<std::uintptr_t>(
           storage);
 
   const auto pagesBegin =
       *reinterpret_cast<
           const std::uintptr_t *>(
-          storageAddress +
-          0x08);
+          storageAddress + 0x08);
 
   const auto pagesEnd =
       *reinterpret_cast<
           const std::uintptr_t *>(
-          storageAddress +
-          0x10);
+          storageAddress + 0x10);
 
   bool present = false;
   std::uint32_t packedEntity = 0;
 
   if (pagesBegin &&
-      pagesEnd >=
-          pagesBegin) {
+      pagesEnd >= pagesBegin) {
 
     const auto pageCount =
         (pagesEnd -
          pagesBegin) /
-        sizeof(
-            std::uintptr_t);
+        sizeof(std::uintptr_t);
 
     const auto pageIndex =
-        (entityId >>
-         11) &
+        (entityId >> 11) &
         0x7Fu;
 
-    if (pageIndex <
-        pageCount) {
-
+    if (pageIndex < pageCount) {
       const auto sparsePage =
           *reinterpret_cast<
               const std::uintptr_t *>(
               pagesBegin +
               pageIndex *
-                  sizeof(
-                      std::uintptr_t));
+                  sizeof(std::uintptr_t));
 
       if (sparsePage) {
         const auto sparseSlot =
@@ -2461,8 +2292,7 @@ void ItemPhysicsRuntime::updateItemShadowComponent(
                 const std::uint32_t *>(
                 sparsePage +
                 sparseSlot *
-                    sizeof(
-                        std::uint32_t));
+                    sizeof(std::uint32_t));
 
         const auto generation =
             entityId &
@@ -2496,8 +2326,7 @@ void ItemPhysicsRuntime::updateItemShadowComponent(
   const auto componentPages =
       *reinterpret_cast<
           const std::uintptr_t *>(
-          storageAddress +
-          0x50);
+          storageAddress + 0x50);
 
   if (!componentPages) {
     return;
@@ -2512,8 +2341,7 @@ void ItemPhysicsRuntime::updateItemShadowComponent(
           const std::uintptr_t *>(
           componentPages +
           componentPageIndex *
-              sizeof(
-                  std::uintptr_t));
+              sizeof(std::uintptr_t));
 
   if (!componentPage) {
     return;
@@ -2538,23 +2366,20 @@ bool ItemPhysicsRuntime::hasOnGroundComponent(
   }
 
   const auto actorAddress =
-      reinterpret_cast<
-          std::uintptr_t>(
+      reinterpret_cast<std::uintptr_t>(
           actor);
 
   const auto registry =
       *reinterpret_cast<
           const std::uintptr_t *>(
           actorAddress +
-          profile::
-              kActorRegistryOffset);
+          profile::kActorRegistryOffset);
 
   const auto entityId =
       *reinterpret_cast<
           const std::uint32_t *>(
           actorAddress +
-          profile::
-              kActorEntityIdOffset);
+          profile::kActorEntityIdOffset);
 
   if (!registry) {
     return false;
@@ -2563,31 +2388,26 @@ bool ItemPhysicsRuntime::hasOnGroundComponent(
   const auto bucketsBegin =
       *reinterpret_cast<
           const std::uintptr_t *>(
-          registry +
-          0x38);
+          registry + 0x38);
 
   const auto bucketsEnd =
       *reinterpret_cast<
           const std::uintptr_t *>(
-          registry +
-          0x40);
+          registry + 0x40);
 
   const auto nodesBase =
       *reinterpret_cast<
           const std::uintptr_t *>(
-          registry +
-          0x50);
+          registry + 0x50);
 
   const auto sentinel =
       *reinterpret_cast<
           const std::uintptr_t *>(
-          registry +
-          0x58);
+          registry + 0x58);
 
   if (!bucketsBegin ||
       !bucketsEnd ||
-      bucketsEnd <=
-          bucketsBegin ||
+      bucketsEnd <= bucketsBegin ||
       !nodesBase) {
     return false;
   }
@@ -2597,28 +2417,23 @@ bool ItemPhysicsRuntime::hasOnGroundComponent(
       bucketsBegin;
 
   if ((bucketBytes %
-       sizeof(std::uintptr_t)) !=
-          0 ||
-
+       sizeof(std::uintptr_t)) != 0 ||
       bucketBytes /
-              sizeof(
-                  std::uintptr_t) >
+              sizeof(std::uintptr_t) >
           (1u << 20)) {
     return false;
   }
 
   const auto bucketCount =
       bucketBytes /
-      sizeof(
-          std::uintptr_t);
+      sizeof(std::uintptr_t);
 
   if (bucketCount == 0) {
     return false;
   }
 
   const auto index =
-      (bucketCount -
-       1) &
+      (bucketCount - 1) &
       profile::
           kOnGroundFlagComponentHash;
 
@@ -2627,8 +2442,7 @@ bool ItemPhysicsRuntime::hasOnGroundComponent(
           const std::int64_t *>(
           bucketsBegin +
           index *
-              sizeof(
-                  std::uintptr_t));
+              sizeof(std::uintptr_t));
 
   std::uintptr_t node = 0;
 
@@ -2660,16 +2474,14 @@ bool ItemPhysicsRuntime::hasOnGroundComponent(
   }
 
   if (!node ||
-      node ==
-          sentinel) {
+      node == sentinel) {
     return false;
   }
 
   const auto storage =
       *reinterpret_cast<
           const std::uintptr_t *>(
-          node +
-          0x10);
+          node + 0x10);
 
   if (!storage) {
     return false;
@@ -2678,35 +2490,29 @@ bool ItemPhysicsRuntime::hasOnGroundComponent(
   const auto pagesBegin =
       *reinterpret_cast<
           const std::uintptr_t *>(
-          storage +
-          0x8);
+          storage + 0x8);
 
   const auto pagesEnd =
       *reinterpret_cast<
           const std::uintptr_t *>(
-          storage +
-          0x10);
+          storage + 0x10);
 
   if (!pagesBegin ||
       !pagesEnd ||
-      pagesEnd <
-          pagesBegin) {
+      pagesEnd < pagesBegin) {
     return false;
   }
 
   const auto pageCount =
       (pagesEnd -
        pagesBegin) /
-      sizeof(
-          std::uintptr_t);
+      sizeof(std::uintptr_t);
 
   const auto pageIndex =
-      (entityId >>
-       11) &
+      (entityId >> 11) &
       0x7Fu;
 
-  if (pageIndex >=
-      pageCount) {
+  if (pageIndex >= pageCount) {
     return false;
   }
 
@@ -2715,8 +2521,7 @@ bool ItemPhysicsRuntime::hasOnGroundComponent(
           const std::uintptr_t *>(
           pagesBegin +
           pageIndex *
-              sizeof(
-                  std::uintptr_t));
+              sizeof(std::uintptr_t));
 
   if (!page) {
     return false;
@@ -2735,8 +2540,7 @@ bool ItemPhysicsRuntime::hasOnGroundComponent(
           const std::uint32_t *>(
           page +
           slot *
-              sizeof(
-                  std::uint32_t));
+              sizeof(std::uint32_t));
 
   return
       (slotValue ^
@@ -2749,8 +2553,7 @@ void ItemPhysicsRuntime::onRender(
     void *renderContext,
     void *renderData) {
 
-  const auto original =
-      mOriginal;
+  const auto original = mOriginal;
 
   if (!original) {
     return;
@@ -2765,18 +2568,15 @@ void ItemPhysicsRuntime::onRender(
         self,
         renderContext,
         renderData);
-
     return;
   }
 
   const auto renderDataAddress =
-      reinterpret_cast<
-          std::uintptr_t>(
+      reinterpret_cast<std::uintptr_t>(
           renderData);
 
   auto *actor =
-      *reinterpret_cast<
-          void **>(
+      *reinterpret_cast<void **>(
           renderDataAddress +
           profile::
               kRenderDataActorOffset);
@@ -2786,18 +2586,15 @@ void ItemPhysicsRuntime::onRender(
         self,
         renderContext,
         renderData);
-
     return;
   }
 
   const auto actorAddress =
-      reinterpret_cast<
-          std::uintptr_t>(
+      reinterpret_cast<std::uintptr_t>(
           actor);
 
   const bool grounded =
-      hasOnGroundComponent(
-          actor);
+      hasOnGroundComponent(actor);
 
   const bool enabled =
       mEnabled.load(
@@ -2818,20 +2615,17 @@ void ItemPhysicsRuntime::onRender(
         self,
         renderContext,
         renderData);
-
     return;
   }
 
   const auto traits =
-      classifyItem(
-          actorAddress);
+      classifyItem(actorAddress);
 
   if (!traits.valid) {
     original(
         self,
         renderContext,
         renderData);
-
     return;
   }
 
@@ -2863,8 +2657,7 @@ void ItemPhysicsRuntime::onRender(
             entityId,
             now);
 
-    std::int32_t motionShape =
-        -1;
+    std::int32_t motionShape = -1;
 
     if (traits.hasRenderShape) {
       motionShape =
@@ -2918,28 +2711,20 @@ void ItemPhysicsRuntime::onRender(
     bool hasMotion = false;
 
     const auto getPosDelta =
-        reinterpret_cast<
-            GetPosDeltaFn>(
+        reinterpret_cast<GetPosDeltaFn>(
             mMinecraftBase +
-            profile::
-                kGetPosDeltaRva);
+            profile::kGetPosDeltaRva);
 
     if (getPosDelta) {
       const auto *nativeMotion =
-          getPosDelta(
-              actor);
+          getPosDelta(actor);
 
       if (nativeMotion &&
-          std::isfinite(
-              nativeMotion->x) &&
-          std::isfinite(
-              nativeMotion->y) &&
-          std::isfinite(
-              nativeMotion->z)) {
+          std::isfinite(nativeMotion->x) &&
+          std::isfinite(nativeMotion->y) &&
+          std::isfinite(nativeMotion->z)) {
 
-        motion =
-            *nativeMotion;
-
+        motion = *nativeMotion;
         hasMotion = true;
       }
     }
@@ -2947,10 +2732,8 @@ void ItemPhysicsRuntime::onRender(
     const float horizontalTickSpeed =
         hasMotion
             ? std::sqrt(
-                  motion.x *
-                      motion.x +
-                  motion.z *
-                      motion.z)
+                  motion.x * motion.x +
+                  motion.z * motion.z)
             : 0.0f;
 
     const float totalTickSpeed =
@@ -2958,8 +2741,7 @@ void ItemPhysicsRuntime::onRender(
             ? std::sqrt(
                   horizontalTickSpeed *
                       horizontalTickSpeed +
-                  motion.y *
-                      motion.y)
+                  motion.y * motion.y)
             : 0.0f;
 
     if (!physicsGrounded &&
@@ -2967,8 +2749,7 @@ void ItemPhysicsRuntime::onRender(
         hasMotion &&
         totalTickSpeed <
             kGroundFlickerSpeedThreshold &&
-        std::abs(
-            motion.y) <
+        std::abs(motion.y) <
             kGroundFlickerVerticalThreshold) {
 
       physicsGrounded = true;
@@ -2983,16 +2764,13 @@ void ItemPhysicsRuntime::onRender(
               ? kFullBlockWakeThreshold
               : kNonFullWakeThreshold;
 
-      if (totalTickSpeed >=
-          wake) {
-
+      if (totalTickSpeed >= wake) {
         const float horizontalSpeed =
             horizontalTickSpeed *
             kMinecraftTicksPerSecond;
 
         const float verticalSpeed =
-            std::abs(
-                motion.y) *
+            std::abs(motion.y) *
             kMinecraftTicksPerSecond;
 
         const float control =
@@ -3030,11 +2808,9 @@ void ItemPhysicsRuntime::onRender(
 
         } else {
           axis = {
-              std::cos(
-                  state.restYaw),
+              std::cos(state.restYaw),
               0.0f,
-              std::sin(
-                  state.restYaw)};
+              std::sin(state.restYaw)};
         }
 
         const float variation =
@@ -3043,17 +2819,14 @@ void ItemPhysicsRuntime::onRender(
                 : 0.07f;
 
         axis.x +=
-            std::cos(
-                state.restYaw) *
+            std::cos(state.restYaw) *
             variation;
 
         axis.z +=
-            std::sin(
-                state.restYaw) *
+            std::sin(state.restYaw) *
             variation;
 
-        axis =
-            normalize3(axis);
+        axis = normalize3(axis);
 
         float modelScale = 0.82f;
         float cap = kMaxNaturalSpin;
@@ -3091,8 +2864,7 @@ void ItemPhysicsRuntime::onRender(
         const float omegaLength =
             length3(omega);
 
-        if (omegaLength >
-                cap &&
+        if (omegaLength > cap &&
             omegaLength >
                 1.0e-5f) {
 
@@ -3127,6 +2899,7 @@ void ItemPhysicsRuntime::onRender(
 
     if ((++mRenderCounter &
          0xFFu) == 0) {
+
       pruneStates(now);
     }
   }
@@ -3135,8 +2908,7 @@ void ItemPhysicsRuntime::onRender(
       *reinterpret_cast<
           std::uint8_t *>(
           actorAddress +
-          profile::
-              kItemCountOffset);
+          profile::kItemCountOffset);
 
   auto &inItemFrame =
       *reinterpret_cast<
@@ -3145,9 +2917,7 @@ void ItemPhysicsRuntime::onRender(
           profile::
               kIsInItemFrameOffset);
 
-  const auto oldCount =
-      count;
-
+  const auto oldCount = count;
   const auto oldInItemFrame =
       inItemFrame;
 
@@ -3159,14 +2929,12 @@ void ItemPhysicsRuntime::onRender(
   inItemFrame = 1;
 
   auto *position =
-      reinterpret_cast<
-          float *>(
+      reinterpret_cast<float *>(
           renderDataAddress +
           profile::
               kRenderDataPositionOffset);
 
-  const float oldY =
-      position[1];
+  const float oldY = position[1];
 
   const bool ordinaryItem =
       traits.modelClass ==
@@ -3183,9 +2951,7 @@ void ItemPhysicsRuntime::onRender(
     if (traits.modelClass ==
         ModelClass::SpecialItem) {
 
-      switch (
-          traits.specialKind) {
-
+      switch (traits.specialKind) {
       case SpecialKind::Shield:
         position[1] +=
             mShieldGroundHeight.load(
@@ -3204,8 +2970,7 @@ void ItemPhysicsRuntime::onRender(
       }
 
     } else {
-      std::int32_t groundShape =
-          -1;
+      std::int32_t groundShape = -1;
 
       if (traits.hasRenderShape) {
         groundShape =
