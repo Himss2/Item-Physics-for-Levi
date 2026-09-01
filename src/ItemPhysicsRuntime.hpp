@@ -20,161 +20,122 @@ namespace itemphysics {
 class ItemPhysicsRuntime {
 public:
   ItemPhysicsRuntime() = default;
+  ItemPhysicsRuntime(const ItemPhysicsRuntime &) = delete;
+  ItemPhysicsRuntime &operator=(const ItemPhysicsRuntime &) = delete;
 
-  ItemPhysicsRuntime(
-      const ItemPhysicsRuntime &) = delete;
-
-  ItemPhysicsRuntime &
-  operator=(
-      const ItemPhysicsRuntime &) = delete;
-
-  void applyConfig(
-      const ItemPhysicsConfig &config) noexcept;
-
-  bool install(
-      ll::mod::NativeMod &mod);
-
+  void applyConfig(const ItemPhysicsConfig &config) noexcept;
+  bool install(ll::mod::NativeMod &mod);
   void uninstall();
-
   void clearStates();
 
-  [[nodiscard]]
-  bool profileSupported() const noexcept {
-
-    return mProfileSupported.load(
-        std::memory_order_relaxed);
+  [[nodiscard]] bool profileSupported() const noexcept {
+    return mProfileSupported.load(std::memory_order_relaxed);
   }
 
 public:
+  using RenderFn = void (*)(void *, void *, void *);
 
-  using RenderFn =
-      void (*)(
-          void *,
-          void *,
-          void *);
+  using RenderItemGroupFn =
+      void (*)(void *,
+               void *,
+               void *,
+               std::uint32_t,
+               std::uint32_t,
+               float,
+               float);
 
-  using GetWorldMatrixFn =
-      void *(*)(void *);
+  using GetWorldMatrixFn = void *(*)(void *);
 
   struct MatrixStackRefAbi {
     void *stack{};
     Mat4 *mat{};
-
     ~MatrixStackRefAbi() {}
   };
 
-  using MatrixPushFn =
-      MatrixStackRefAbi (*)(
-          void *,
-          bool);
-
-  using MatrixRefDtorFn =
-      void (*)(
-          MatrixStackRefAbi *);
+  using MatrixPushFn = MatrixStackRefAbi (*)(void *, bool);
+  using MatrixRefDtorFn = void (*)(MatrixStackRefAbi *);
 
 private:
-
   struct AabbAbi {
     float minX{};
     float minY{};
     float minZ{};
-
     float maxX{};
     float maxY{};
     float maxZ{};
   };
 
-  static_assert(
-      sizeof(AabbAbi) ==
-      24);
+  static_assert(sizeof(AabbAbi) == 24);
 
-  enum class ModelClass :
-      std::uint8_t {
+  struct QuatAbi {
+    float w{1.0f};
+    float x{};
+    float y{};
+    float z{};
+  };
 
+  enum class ModelClass : std::uint8_t {
     FlatItem,
-
     BlockItem,
-
     SpecialItem,
   };
 
-  enum class SpecialKind :
-      std::uint8_t {
-
+  enum class SpecialKind : std::uint8_t {
     None,
-
     Shield,
-
     Banner,
   };
 
   struct BlockRenderInfo {
     bool valid{};
-
-    std::int32_t
-        blockShape{-1};
-
-    bool
-        keepHorizontal{};
+    std::int32_t blockShape{-1};
+    bool keepHorizontal{};
   };
 
   struct ItemRenderTraits {
     bool valid{};
-
-    ModelClass modelClass{
-        ModelClass::FlatItem};
-
-    SpecialKind specialKind{
-        SpecialKind::None};
-
-    BlockRenderInfo
-        block{};
-
-    bool
-        hasRenderShape{};
-
-    std::int32_t
-        renderShape{-1};
+    ModelClass modelClass{ModelClass::FlatItem};
+    SpecialKind specialKind{SpecialKind::None};
+    BlockRenderInfo block{};
+    bool hasRenderShape{};
+    std::int32_t renderShape{-1};
   };
 
   struct PhysicsState {
     bool initialized{};
     bool wasGrounded{};
+    bool launchImpulseApplied{};
+    bool contactCaptured{};
 
-    float rotX{};
-    float rotY{};
-    float rotZ{};
+    float fullRotX{};
+    float fullRotY{};
+    float fullRotZ{};
+
+    QuatAbi orientation{};
+    QuatAbi restOrientation{};
 
     float angularX{};
+    float angularY{};
     float angularZ{};
-
     float restYaw{};
 
-    std::chrono::steady_clock::time_point
-        born{};
-
-    std::chrono::steady_clock::time_point
-        lastUpdate{};
-
-    std::chrono::steady_clock::time_point
-        lastSeen{};
+    std::chrono::steady_clock::time_point born{};
+    std::chrono::steady_clock::time_point contactTime{};
+    std::chrono::steady_clock::time_point lastUpdate{};
+    std::chrono::steady_clock::time_point lastSeen{};
   };
 
   using GetBlockTypeForRenderingFn =
-      const void *(*)(
-          const void *itemStackBase);
+      const void *(*)(const void *itemStackBase);
 
   using BlockGraphicsGetForBlockTypeFn =
-      void *(*)(
-          const void *blockType);
+      void *(*)(const void *blockType);
 
   using BlockGraphicsGetForBlockFn =
-      void *(*)(
-          const void *block);
+      void *(*)(const void *block);
 
   using BlockGraphicsGetBlockShapeFn =
-      std::int32_t (*)(
-          const void *graphics);
+      std::int32_t (*)(const void *graphics);
 
   struct ShadowStorageEmplaceResultAbi {
     std::uintptr_t first{};
@@ -182,9 +143,7 @@ private:
   };
 
   using RelativeShadowStorageFn =
-      void *(*)(
-          void *registry,
-          std::uint32_t componentHash);
+      void *(*)(void *registry, std::uint32_t componentHash);
 
   using RelativeShadowEmplaceFn =
       ShadowStorageEmplaceResultAbi (*)(
@@ -194,23 +153,39 @@ private:
           const float *value);
 
   using GetVisualShapeFn =
-      const AabbAbi *(*)(
-          void *blockType,
-          const void *block,
-          AabbAbi *scratch);
+      const AabbAbi *(*)(void *blockType,
+                         const void *block,
+                         AabbAbi *scratch);
 
-  static ItemPhysicsRuntime *
-      sInstance;
+  static ItemPhysicsRuntime *sInstance;
 
   static void renderDetour(
       void *self,
       void *renderContext,
       void *renderData);
 
+  static void renderItemGroupDetour(
+      void *self,
+      void *renderContext,
+      void *itemData,
+      std::uint32_t copyCount,
+      std::uint32_t flags,
+      float scale,
+      float animation);
+
   void onRender(
       void *self,
       void *renderContext,
       void *renderData);
+
+  void onRenderItemGroup(
+      void *self,
+      void *renderContext,
+      void *itemData,
+      std::uint32_t copyCount,
+      std::uint32_t flags,
+      float scale,
+      float animation);
 
   bool verifyProfile(
       const ResolvedVirtual &resolved,
@@ -247,6 +222,7 @@ private:
       PhysicsState &state,
       const ItemRenderTraits &traits,
       bool grounded,
+      float verticalVelocity,
       std::chrono::steady_clock::time_point now) const;
 
   void pruneStates(
@@ -267,101 +243,53 @@ private:
       std::uintptr_t stringAddress,
       std::string_view wanted) noexcept;
 
-  std::atomic_bool
-      mEnabled{true};
+  std::atomic_bool mEnabled{true};
+  std::atomic_bool mSingleModel{true};
+  std::atomic_bool mHideItemShadow{true};
 
-  std::atomic_bool
-      mSingleModel{true};
+  std::atomic<float> mRotationSpeed{1.0f};
+  std::atomic<float> mSettleSpeed{3.0f};
+  std::atomic<float> mGroundTiltDeg{90.0f};
 
-  std::atomic_bool
-      mHideItemShadow{true};
+  std::atomic<float> mHeightOffset{-0.38f};
+  std::atomic<float> mBlockGroundHeight{-0.06f};
+  std::atomic<float> mThinBlockGroundHeight{-0.08f};
+  std::atomic<float> mTorchGroundHeight{-0.08f};
+  std::atomic<float> mShapedBlockGroundHeight{-0.16f};
+  std::atomic<float> mSkullGroundHeight{-0.22f};
+  std::atomic<float> mShieldGroundHeight{-0.08f};
+  std::atomic<float> mBannerGroundHeight{-0.075f};
 
-  std::atomic<float>
-      mRotationSpeed{1.0f};
+  std::atomic_bool mProfileSupported{false};
 
-  std::atomic<float>
-      mSettleSpeed{3.0f};
+  std::uintptr_t mMinecraftBase{};
+  std::uintptr_t mRenderTarget{};
+  std::uintptr_t mRenderItemGroupTarget{};
 
-  std::atomic<float>
-      mGroundTiltDeg{90.0f};
+  RenderFn mOriginal{};
+  RenderItemGroupFn mRenderItemGroupOriginal{};
 
-  std::atomic<float>
-      mHeightOffset{-0.38f};
+  GetWorldMatrixFn mGetWorldMatrix{};
+  MatrixPushFn mMatrixPush{};
+  MatrixRefDtorFn mMatrixRefDtor{};
 
-  std::atomic<float>
-      mBlockGroundHeight{-0.06f};
+  GetBlockTypeForRenderingFn mGetBlockTypeForRendering{};
+  BlockGraphicsGetForBlockTypeFn mGetBlockGraphicsForBlockType{};
+  BlockGraphicsGetForBlockFn mGetBlockGraphicsForBlock{};
+  BlockGraphicsGetBlockShapeFn mGetBlockGraphicsShape{};
 
-  std::atomic<float>
-      mThinBlockGroundHeight{-0.08f};
+  RelativeShadowStorageFn mGetRelativeShadowStorage{};
+  RelativeShadowEmplaceFn mEmplaceRelativeShadow{};
 
-  std::atomic<float>
-      mTorchGroundHeight{-0.08f};
+  std::unique_ptr<pl::memory::HookHandle> mHook;
+  std::unique_ptr<pl::memory::HookHandle> mRenderItemGroupHook;
 
-  std::atomic<float>
-      mShapedBlockGroundHeight{-0.16f};
+  mutable std::mutex mStateMutex;
+  mutable std::mutex mGroupOffsetMutex;
 
-  std::atomic<float>
-      mSkullGroundHeight{-0.22f};
+  std::unordered_map<std::uint32_t, PhysicsState> mStates;
 
-  std::atomic<float>
-      mShieldGroundHeight{-0.08f};
-
-  std::atomic<float>
-      mBannerGroundHeight{-0.075f};
-
-  std::atomic_bool
-      mProfileSupported{false};
-
-  std::uintptr_t
-      mMinecraftBase{};
-
-  std::uintptr_t
-      mRenderTarget{};
-
-  RenderFn
-      mOriginal{};
-
-  GetWorldMatrixFn
-      mGetWorldMatrix{};
-
-  MatrixPushFn
-      mMatrixPush{};
-
-  MatrixRefDtorFn
-      mMatrixRefDtor{};
-
-  GetBlockTypeForRenderingFn
-      mGetBlockTypeForRendering{};
-
-  BlockGraphicsGetForBlockTypeFn
-      mGetBlockGraphicsForBlockType{};
-
-  BlockGraphicsGetForBlockFn
-      mGetBlockGraphicsForBlock{};
-
-  BlockGraphicsGetBlockShapeFn
-      mGetBlockGraphicsShape{};
-
-  RelativeShadowStorageFn
-      mGetRelativeShadowStorage{};
-
-  RelativeShadowEmplaceFn
-      mEmplaceRelativeShadow{};
-
-  std::unique_ptr<
-      pl::memory::HookHandle>
-      mHook;
-
-  mutable std::mutex
-      mStateMutex;
-
-  std::unordered_map<
-      std::uint32_t,
-      PhysicsState>
-      mStates;
-
-  std::uint32_t
-      mRenderCounter{};
+  std::uint32_t mRenderCounter{};
 };
 
-} // namespace itemphysics
+}
