@@ -1,9 +1,7 @@
 #pragma once
-
 #include "ItemPhysicsConfig.hpp"
 #include "MatrixMath.hpp"
 #include "RttiResolver.hpp"
-
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -11,7 +9,6 @@
 #include <mutex>
 #include <string_view>
 #include <unordered_map>
-
 #include <pl/Mod.hpp>
 #include <pl/memory/Hook.hpp>
 
@@ -34,8 +31,7 @@ public:
   }
 
 public:
-  using RenderFn =
-      void (*)(void *, void *, void *);
+  using RenderFn = void (*)(void *, void *, void *);
 
   using RenderItemGroupFn =
       void (*)(
@@ -47,13 +43,11 @@ public:
           float,
           float);
 
-  using GetWorldMatrixFn =
-      void *(*)(void *);
+  using GetWorldMatrixFn = void *(*)(void *);
 
   struct MatrixStackRefAbi {
     void *stack{};
     Mat4 *mat{};
-
     ~MatrixStackRefAbi() {}
   };
 
@@ -98,6 +92,7 @@ private:
     bool valid{};
     std::int32_t blockShape{-1};
     bool keepHorizontal{};
+    bool verticalThin{};
   };
 
   struct ItemRenderTraits {
@@ -114,6 +109,7 @@ private:
     bool wasGrounded{};
     bool launchImpulseApplied{};
     bool contactCaptured{};
+    bool airTargetCaptured{};
 
     float fullRotX{};
     float fullRotY{};
@@ -134,16 +130,16 @@ private:
   };
 
   using GetBlockTypeForRenderingFn =
-      const void *(*)(const void *);
+      const void *(*)(const void *itemStackBase);
 
   using BlockGraphicsGetForBlockTypeFn =
-      void *(*)(const void *);
+      void *(*)(const void *blockType);
 
   using BlockGraphicsGetForBlockFn =
-      void *(*)(const void *);
+      void *(*)(const void *block);
 
   using BlockGraphicsGetBlockShapeFn =
-      std::int32_t (*)(const void *);
+      std::int32_t (*)(const void *graphics);
 
   struct ShadowStorageEmplaceResultAbi {
     std::uintptr_t first{};
@@ -151,106 +147,106 @@ private:
   };
 
   using RelativeShadowStorageFn =
-      void *(*)(void *, std::uint32_t);
+      void *(*)(void *registry, std::uint32_t componentHash);
 
   using RelativeShadowEmplaceFn =
       ShadowStorageEmplaceResultAbi (*)(
-          void *,
-          const std::uint32_t *,
-          bool,
-          const float *);
+          void *storage,
+          const std::uint32_t *entityId,
+          bool forceBack,
+          const float *value);
 
   using GetVisualShapeFn =
       const AabbAbi *(*)(
-          void *,
-          const void *,
-          AabbAbi *);
+          void *blockType,
+          const void *block,
+          AabbAbi *scratch);
 
   static ItemPhysicsRuntime *sInstance;
 
   static void renderDetour(
-      void *,
-      void *,
-      void *);
+      void *self,
+      void *renderContext,
+      void *renderData);
 
   static void renderItemGroupDetour(
-      void *,
-      void *,
-      void *,
-      std::uint32_t,
-      std::uint32_t,
-      float,
-      float);
+      void *self,
+      void *renderContext,
+      void *itemData,
+      std::uint32_t copyCount,
+      std::uint32_t flags,
+      float scale,
+      float animation);
 
   void onRender(
-      void *,
-      void *,
-      void *);
+      void *self,
+      void *renderContext,
+      void *renderData);
 
   void onRenderItemGroup(
-      void *,
-      void *,
-      void *,
-      std::uint32_t,
-      std::uint32_t,
-      float,
-      float);
+      void *self,
+      void *renderContext,
+      void *itemData,
+      std::uint32_t copyCount,
+      std::uint32_t flags,
+      float scale,
+      float animation);
 
   bool verifyProfile(
-      const ResolvedVirtual &,
-      ll::mod::NativeMod &) const;
+      const ResolvedVirtual &resolved,
+      ll::mod::NativeMod &mod) const;
 
   [[nodiscard]]
   ItemRenderTraits classifyItem(
-      std::uintptr_t) const noexcept;
+      std::uintptr_t actorAddress) const noexcept;
 
   [[nodiscard]]
   bool buildBlockRenderInfo(
-      const void *,
-      BlockRenderInfo &) const noexcept;
+      const void *block,
+      BlockRenderInfo &info) const noexcept;
 
   [[nodiscard]]
   bool tryGetRenderBlockShape(
-      std::uintptr_t,
-      std::int32_t &) const noexcept;
+      std::uintptr_t actorAddress,
+      std::int32_t &shape) const noexcept;
 
   [[nodiscard]]
   bool hasOnGroundComponent(
-      void *) const noexcept;
+      void *actor) const noexcept;
 
   void updateItemShadowComponent(
-      void *,
-      bool,
-      bool) const noexcept;
+      void *actor,
+      bool grounded,
+      bool hideShadow) const noexcept;
 
   PhysicsState &stateFor(
-      std::uint32_t,
-      std::chrono::steady_clock::time_point);
+      std::uint32_t entityId,
+      std::chrono::steady_clock::time_point now);
 
   void updateState(
-      PhysicsState &,
-      const ItemRenderTraits &,
-      bool,
-      float,
-      std::chrono::steady_clock::time_point) const;
+      PhysicsState &state,
+      const ItemRenderTraits &traits,
+      bool grounded,
+      float verticalVelocity,
+      std::chrono::steady_clock::time_point now) const;
 
   void pruneStates(
-      std::chrono::steady_clock::time_point);
+      std::chrono::steady_clock::time_point now);
 
   static float seededUnit(
-      std::uint32_t) noexcept;
+      std::uint32_t seed) noexcept;
 
   static float wrapPi(
-      float) noexcept;
+      float value) noexcept;
 
   static float approachAngle(
-      float,
-      float,
-      float) noexcept;
+      float current,
+      float target,
+      float alpha) noexcept;
 
   static bool libcxxStringEquals(
-      std::uintptr_t,
-      std::string_view) noexcept;
+      std::uintptr_t stringAddress,
+      std::string_view wanted) noexcept;
 
   std::atomic_bool mEnabled{true};
   std::atomic_bool mSingleModel{true};
@@ -296,10 +292,7 @@ private:
   mutable std::mutex mStateMutex;
   mutable std::mutex mGroupOffsetMutex;
 
-  std::unordered_map<
-      std::uint32_t,
-      PhysicsState>
-      mStates;
+  std::unordered_map<std::uint32_t, PhysicsState> mStates;
 
   std::uint32_t mRenderCounter{};
 };
