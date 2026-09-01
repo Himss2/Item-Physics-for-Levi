@@ -70,6 +70,14 @@ inline constexpr std::uintptr_t
         0x107CC6C0;
 
 inline constexpr std::uintptr_t
+    kGetPosDeltaRva =
+        0x0EC82A68;
+
+inline constexpr std::uintptr_t
+    kRenderItemGroupLikeRva =
+        0x0A29F338;
+
+inline constexpr std::uintptr_t
     kGetBlockTypeForRenderingRva =
         0x0F642ADC;
 
@@ -155,6 +163,32 @@ inline constexpr std::array<
 
 inline constexpr std::array<
     std::uint32_t,
+    3>
+    kGetPosDeltaFingerprint = {
+
+        0xF9410408u,
+        0x91006100u,
+        0xD65F03C0u,
+};
+
+inline constexpr std::array<
+    std::uint32_t,
+    8>
+    kRenderItemGroupLikeFingerprint = {
+
+        0xD102C3FFu,
+        0xFD0013ECu,
+        0x6D032BEBu,
+        0x6D0423E9u,
+
+        0xA9057BFDu,
+        0xA9066FFCu,
+        0xA90767FAu,
+        0xA9085FF8u,
+};
+
+inline constexpr std::array<
+    std::uint32_t,
     7>
     kGetBlockTypeForRenderingFingerprint = {
 
@@ -198,10 +232,12 @@ inline constexpr std::array<
         0xA9057BFDu,
         0xF90033F5u,
         0xA9074FF4u,
+
         0x910143FDu,
         0xD53BD055u,
         0xAA0003F4u,
         0x2A0103EAu,
+
         0xF94016A8u,
         0xAA0003F3u,
         0xF81F83A8u,
@@ -217,14 +253,16 @@ inline constexpr std::array<
         0xA9017BFDu,
         0xA9025FF8u,
         0xA90357F6u,
+
         0xA9044FF4u,
         0x910043FDu,
         0xD53BD058u,
         0xAA0303F6u,
+
         0xAA1F03E3u,
         0xF9401708u,
         0xAA0003F3u,
         0xF90007E8u,
 };
 
-} // namespace itemphysics::profile
+}
