@@ -1,9 +1,8 @@
 {
-  "version": 1,
+  "version": 7,
   "enabled": true,
   "singleModel": true,
+  "hideItemShadow": true,
   "rotationSpeed": 1.0,
-  "settleSpeed": 3.0,
-  "groundTilt": 1.0,
-  "heightOffset": -0.38
+  "settleSpeed": 3.0
 }
