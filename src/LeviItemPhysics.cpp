@@ -13,146 +13,79 @@
 
 namespace itemphysics {
 
-constexpr std::string_view kModuleId =
-    "item_physics.main";
+constexpr std::string_view kModuleId = "item_physics.main";
+constexpr std::string_view kEnabledKey = "enabled";
+constexpr std::string_view kSingleModelKey = "singleModel";
+constexpr std::string_view kHideItemShadowKey = "hideItemShadow";
+constexpr std::string_view kRotationSpeedKey = "rotationSpeed";
+constexpr std::string_view kOldRotationKey = "oldRotation";
 
-constexpr std::string_view kEnabledKey =
-    "enabled";
-
-constexpr std::string_view kSingleModelKey =
-    "singleModel";
-
-constexpr std::string_view kHideItemShadowKey =
-    "hideItemShadow";
-
-constexpr std::string_view kRotationSpeedKey =
-    "rotationSpeed";
-
-constexpr std::string_view kSettleSpeedKey =
-    "settleSpeed";
-
-bool parseBool(
-    std::string_view value,
-    bool fallback) {
-
-  if (value == "true" ||
-      value == "1" ||
-      value == "on" ||
-      value == "enabled") {
-
+bool parseBool(std::string_view value,bool fallback) {
+  if (value=="true"||value=="1"||value=="on"||value=="enabled")
     return true;
-  }
 
-  if (value == "false" ||
-      value == "0" ||
-      value == "off" ||
-      value == "disabled") {
-
+  if (value=="false"||value=="0"||value=="off"||value=="disabled")
     return false;
-  }
 
   return fallback;
 }
 
-double parseDouble(
-    std::string_view value,
-    double fallback) {
+double parseDouble(std::string_view value,double fallback) {
+  std::string text(value);
+  char *end=nullptr;
+  errno=0;
 
-  std::string text(
-      value);
+  const double parsed=std::strtod(text.c_str(),&end);
 
-  char *end =
-      nullptr;
-
-  errno =
-      0;
-
-  const double parsed =
-      std::strtod(
-          text.c_str(),
-          &end);
-
-  if (end ==
-          text.c_str() ||
-
-      *end != '\0' ||
-
-      errno ==
-          ERANGE ||
-
-      !std::isfinite(
-          parsed)) {
-
+  if (end==text.c_str()||
+      *end!='\0'||
+      errno==ERANGE||
+      !std::isfinite(parsed))
     return fallback;
-  }
 
   return parsed;
 }
 
-std::string boolText(
-    bool value) {
-
-  return value
-             ? "true"
-             : "false";
+std::string boolText(bool value) {
+  return value?"true":"false";
 }
 
-std::string numberText(
-    double value) {
-
+std::string numberText(double value) {
   std::ostringstream stream;
-
-  stream <<
-      value;
-
+  stream<<value;
   return stream.str();
 }
 
 class LeviItemPhysicsMod {
 public:
-  static LeviItemPhysicsMod &
-  instance() {
-
-    static LeviItemPhysicsMod
-        value;
-
-    return
-        value;
+  static LeviItemPhysicsMod &instance() {
+    static LeviItemPhysicsMod value;
+    return value;
   }
 
   LeviItemPhysicsMod()
-      : mSelf(
-            *ll::mod::
-                NativeMod::current()) {}
+      :mSelf(*ll::mod::NativeMod::current()) {}
 
   bool load() {
-
-    std::lock_guard lock(
-        mConfigMutex);
-
+    std::lock_guard lock(mConfigMutex);
     mConfig.emplace();
 
     if (!mConfig->load()) {
-
       mSelf.getLogger().error(
           "Failed to load Item Physics config");
 
       mConfig.reset();
-
       return false;
     }
 
-    normalize(
-        mConfig->value());
+    normalize(mConfig->value());
 
     if (!mConfig->save()) {
-
       mSelf.getLogger().warn(
           "Loaded config but failed to persist normalization");
     }
 
-    mRuntime.applyConfig(
-        mConfig->value());
+    mRuntime.applyConfig(mConfig->value());
 
     mSelf.getLogger().info(
         "Loaded Item Physics config from {}",
@@ -162,140 +95,80 @@ public:
   }
 
   bool enable() {
+    const auto snapshot=snapshotConfig();
 
-    const auto snapshot =
-        snapshotConfig();
+    mRuntime.applyConfig(snapshot);
 
-    mRuntime.applyConfig(
-        snapshot);
+    const bool hookActive=
+        mRuntime.install(mSelf);
 
-    const bool hookActive =
-        mRuntime.install(
-            mSelf);
+    const bool registered=
+        pl::modmenu::ModuleBuilder(
+            std::string(kModuleId),
+            "Item Physics")
 
-    const bool registered =
-        pl::modmenu::
-            ModuleBuilder(
-                std::string(
-                    kModuleId),
+        .modId(mSelf.getId())
 
-                "Item Physics")
+        .description(
+            "Java ItemPhysic-style dropped item physics with Bedrock renderer adaptation.")
 
-            .modId(
-                mSelf.getId())
+        .defaultEnabled(snapshot.enabled)
 
-            .description(
-                "Atlas/Java-style dropped item physics. "
-                "Client-side renderer only.")
+        .onToggle(onToggle)
 
-            .defaultEnabled(
-                snapshot.enabled)
+        .config(
+            std::string(kSingleModelKey),
+            "Single Model",
+            pl::modmenu::ConfigType::Toggle,
+            boolText(snapshot.singleModel))
 
-            .onToggle(
-                onToggle)
+        .config(
+            std::string(kHideItemShadowKey),
+            "Hide Item Shadow",
+            pl::modmenu::ConfigType::Toggle,
+            boolText(snapshot.hideItemShadow))
 
-            .config(
-                std::string(
-                    kSingleModelKey),
+        .config(
+            std::string(kRotationSpeedKey),
+            "Tumble Speed",
+            pl::modmenu::ConfigType::SliderFloat,
+            numberText(snapshot.rotationSpeed),
+            numberText(kMinRotationSpeed),
+            numberText(kMaxRotationSpeed))
 
-                "Single Model",
+        .config(
+            std::string(kOldRotationKey),
+            "Old Rotation",
+            pl::modmenu::ConfigType::Toggle,
+            boolText(snapshot.oldRotation))
 
-                pl::modmenu::
-                    ConfigType::
-                        Toggle,
+        .onConfigChanged(onConfigChanged)
 
-                boolText(
-                    snapshot.singleModel))
-
-            .config(
-                std::string(
-                    kHideItemShadowKey),
-
-                "Hide Item Shadow",
-
-                pl::modmenu::
-                    ConfigType::
-                        Toggle,
-
-                boolText(
-                    snapshot.hideItemShadow))
-
-            .config(
-                std::string(
-                    kRotationSpeedKey),
-
-                "Tumble Speed",
-
-                pl::modmenu::
-                    ConfigType::
-                        SliderFloat,
-
-                numberText(
-                    snapshot.rotationSpeed),
-
-                numberText(
-                    kMinRotationSpeed),
-
-                numberText(
-                    kMaxRotationSpeed))
-
-            .config(
-                std::string(
-                    kSettleSpeedKey),
-
-                "Settle Speed",
-
-                pl::modmenu::
-                    ConfigType::
-                        SliderFloat,
-
-                numberText(
-                    snapshot.settleSpeed),
-
-                numberText(
-                    kMinSettleSpeed),
-
-                numberText(
-                    kMaxSettleSpeed))
-
-            .onConfigChanged(
-                onConfigChanged)
-
-            .registerModule();
+        .registerModule();
 
     if (!registered) {
-
       mSelf.getLogger().error(
           "Failed to register Item Physics in Mod Menu");
 
       mRuntime.uninstall();
-
       return false;
     }
 
-    mModuleRegistered =
-        true;
+    mModuleRegistered=true;
 
     if (hookActive) {
-
       mSelf.getLogger().info(
-          "Item Physics enabled and registered in Mod Menu "
-          "with fixed ground pose + Item Shadow toggle");
-
+          "Item Physics enabled: Java physics + native yaw + model pivot");
     } else {
-
       mSelf.getLogger().warn(
-          "Item Physics registered in Mod Menu, "
-          "but runtime hook is inactive for this Minecraft binary");
+          "Item Physics registered in Mod Menu, but runtime hook is inactive for this Minecraft binary");
     }
 
     return true;
   }
 
   bool disable() {
-
     unregisterMenu();
-
     mRuntime.uninstall();
 
     mSelf.getLogger().info(
@@ -305,81 +178,55 @@ public:
   }
 
   bool unload() {
-
     unregisterMenu();
-
     mRuntime.uninstall();
 
-    std::lock_guard lock(
-        mConfigMutex);
-
+    std::lock_guard lock(mConfigMutex);
     mConfig.reset();
 
     return true;
   }
 
 private:
-  ll::mod::NativeMod &
-      mSelf;
-
-  ItemPhysicsRuntime
-      mRuntime;
-
-  std::mutex
-      mConfigMutex;
+  ll::mod::NativeMod &mSelf;
+  ItemPhysicsRuntime mRuntime;
+  std::mutex mConfigMutex;
 
   std::optional<
-      pl::config::
-          ConfigFile<
-              ItemPhysicsConfig>>
+      pl::config::ConfigFile<ItemPhysicsConfig>>
       mConfig;
 
-  bool
-      mModuleRegistered{};
+  bool mModuleRegistered{};
 
-  ItemPhysicsConfig
-  snapshotConfig() {
+  ItemPhysicsConfig snapshotConfig() {
+    std::lock_guard lock(mConfigMutex);
 
-    std::lock_guard lock(
-        mConfigMutex);
-
-    if (!mConfig) {
-
+    if (!mConfig)
       return {};
-    }
 
-    auto value =
-        mConfig->value();
+    auto value=mConfig->value();
 
-    normalize(
-        value);
+    normalize(value);
 
-    return
-        value;
+    return value;
   }
 
   void persistAndApplyLocked(
       std::string_view reason) {
 
-    if (!mConfig) {
-
+    if (!mConfig)
       return;
-    }
 
-    normalize(
-        mConfig->value());
+    normalize(mConfig->value());
 
     mRuntime.applyConfig(
         mConfig->value());
 
     if (mConfig->save()) {
-
       mSelf.getLogger().info(
           "Persisted Item Physics config after {}",
           reason);
-
     } else {
-
       mSelf.getLogger().warn(
           "Failed to persist Item Physics config after {}",
           reason);
@@ -390,10 +237,9 @@ private:
       std::string_view moduleId,
       bool enabled) {
 
-    instance().
-        handleToggle(
-            moduleId,
-            enabled);
+    instance().handleToggle(
+        moduleId,
+        enabled);
   }
 
   static void onConfigChanged(
@@ -401,33 +247,25 @@ private:
       std::string_view key,
       std::string_view value) {
 
-    instance().
-        handleConfigChanged(
-            moduleId,
-            key,
-            value);
+    instance().handleConfigChanged(
+        moduleId,
+        key,
+        value);
   }
 
   void handleToggle(
       std::string_view moduleId,
       bool enabled) {
 
-    if (moduleId !=
-        kModuleId) {
-
+    if (moduleId!=kModuleId)
       return;
-    }
 
-    std::lock_guard lock(
-        mConfigMutex);
+    std::lock_guard lock(mConfigMutex);
 
-    if (!mConfig) {
-
+    if (!mConfig)
       return;
-    }
 
-    mConfig->value().enabled =
-        enabled;
+    mConfig->value().enabled=enabled;
 
     persistAndApplyLocked(
         "module toggle");
@@ -438,99 +276,70 @@ private:
       std::string_view key,
       std::string_view value) {
 
-    if (moduleId !=
-        kModuleId) {
-
+    if (moduleId!=kModuleId)
       return;
-    }
 
-    std::lock_guard lock(
-        mConfigMutex);
+    std::lock_guard lock(mConfigMutex);
 
-    if (!mConfig) {
-
+    if (!mConfig)
       return;
-    }
 
-    auto &config =
-        mConfig->value();
+    auto &config=mConfig->value();
 
-    if (key ==
-        kSingleModelKey) {
-
-      config.singleModel =
+    if (key==kSingleModelKey) {
+      config.singleModel=
           parseBool(
               value,
               config.singleModel);
     }
 
-    else if (
-        key ==
-        kHideItemShadowKey) {
-
-      config.hideItemShadow =
+    else if (key==kHideItemShadowKey) {
+      config.hideItemShadow=
           parseBool(
               value,
               config.hideItemShadow);
     }
 
-    else if (
-        key ==
-        kRotationSpeedKey) {
-
-      config.rotationSpeed =
+    else if (key==kRotationSpeedKey) {
+      config.rotationSpeed=
           parseDouble(
               value,
               config.rotationSpeed);
     }
 
-    else if (
-        key ==
-        kSettleSpeedKey) {
-
-      config.settleSpeed =
-          parseDouble(
+    else if (key==kOldRotationKey) {
+      config.oldRotation=
+          parseBool(
               value,
-              config.settleSpeed);
+              config.oldRotation);
     }
 
-    else if (
-        key ==
-        kEnabledKey) {
-
-      config.enabled =
+    else if (key==kEnabledKey) {
+      config.enabled=
           parseBool(
               value,
               config.enabled);
     }
 
     else {
-
       return;
     }
 
-    persistAndApplyLocked(
-        key);
+    persistAndApplyLocked(key);
   }
 
   void unregisterMenu() {
-
-    if (!mModuleRegistered) {
-
+    if (!mModuleRegistered)
       return;
-    }
 
-    pl::modmenu::
-        unregisterModule(
-            kModuleId);
+    pl::modmenu::unregisterModule(
+        kModuleId);
 
-    mModuleRegistered =
-        false;
+    mModuleRegistered=false;
   }
 };
 
-using RegisteredMod =
-    LeviItemPhysicsMod;
+using RegisteredMod=LeviItemPhysicsMod;
 
 }
 
