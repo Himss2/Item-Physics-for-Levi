@@ -1,15 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Levi Item Physics",
-  "description": "Java-style dropped item physics rendered client-side.",
+  "description": "Java-style dropped item physics rendered client-side with a fixed ground pose.",
   "type": "object",
   "properties": {
-    "version": {"type": "integer", "default": 1, "readOnly": true},
+    "version": {"type": "integer", "default": 7, "readOnly": true},
     "enabled": {"type": "boolean", "title": "Enabled", "default": true},
     "singleModel": {"type": "boolean", "title": "Single Model", "default": true},
+    "hideItemShadow": {"type": "boolean", "title": "Hide Item Shadow", "default": true},
     "rotationSpeed": {"type": "number", "title": "Tumble Speed", "minimum": 0.25, "maximum": 3.0, "default": 1.0},
-    "settleSpeed": {"type": "number", "title": "Settle Speed", "minimum": 0.5, "maximum": 8.0, "default": 3.0},
-    "groundTilt": {"type": "number", "title": "Ground Tilt", "minimum": 0.0, "maximum": 15.0, "default": 1.0},
-    "heightOffset": {"type": "number", "title": "Height Offset", "minimum": -0.60, "maximum": 0.20, "default": -0.38}
+    "settleSpeed": {"type": "number", "title": "Settle Speed", "minimum": 0.5, "maximum": 8.0, "default": 3.0}
   }
 }
