@@ -147,6 +147,7 @@ Vec3Local normalize3(
 
 [[nodiscard]]
 QuatLocal normalizeQ(QuatLocal q) noexcept {
+
   const float len =
       std::sqrt(
           q.w * q.w +
@@ -154,7 +155,9 @@ QuatLocal normalizeQ(QuatLocal q) noexcept {
           q.y * q.y +
           q.z * q.z);
 
-  if (!std::isfinite(len) || len < 1.0e-7f) {
+  if (!std::isfinite(len) ||
+      len < 1.0e-7f) {
+
     return {};
   }
 
@@ -168,7 +171,10 @@ QuatLocal normalizeQ(QuatLocal q) noexcept {
 }
 
 [[nodiscard]]
-QuatLocal mulQ(QuatLocal a, QuatLocal b) noexcept {
+QuatLocal mulQ(
+    QuatLocal a,
+    QuatLocal b) noexcept {
+
   return {
       a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
       a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
@@ -238,19 +244,23 @@ QuatLocal fromToQ(
   }
 
   if (d < -0.999999f) {
+
     Vec3Local axis =
         cross3(
             from,
             {1.0f, 0.0f, 0.0f});
 
     if (length3(axis) < 1.0e-4f) {
+
       axis =
           cross3(
               from,
               {0.0f, 0.0f, 1.0f});
     }
 
-    return axisAngleQ(axis, kPi);
+    return axisAngleQ(
+        axis,
+        kPi);
   }
 
   const Vec3Local c =
@@ -284,6 +294,7 @@ Vec3Local shortestAngularError(
               inverseCurrent));
 
   if (delta.w < 0.0f) {
+
     delta.w = -delta.w;
     delta.x = -delta.x;
     delta.y = -delta.y;
@@ -325,7 +336,8 @@ QuatLocal integrateWorldAngular(
     Vec3Local omega,
     float dt) noexcept {
 
-  const float speed = length3(omega);
+  const float speed =
+      length3(omega);
 
   if (speed < 1.0e-5f ||
       dt <= 0.0f) {
@@ -501,14 +513,18 @@ bool invert3x3FromMat4(
     return false;
   }
 
-  const float id = 1.0f / det;
+  const float id =
+      1.0f /
+      det;
 
   inv[0] = c00 * id;
   inv[1] = c01 * id;
   inv[2] = c02 * id;
+
   inv[3] = c10 * id;
   inv[4] = c11 * id;
   inv[5] = c12 * id;
+
   inv[6] = c20 * id;
   inv[7] = c21 * id;
   inv[8] = c22 * id;
@@ -559,6 +575,7 @@ bool isThinGroundShape(
     std::int32_t shape) noexcept {
 
   switch (shape) {
+
   case 9:
   case 14:
   case 15:
@@ -576,6 +593,7 @@ bool isThinGroundShape(
   case 135:
   case 136:
     return true;
+
   default:
     return false;
   }
@@ -586,12 +604,14 @@ bool isTorchGroundShape(
     std::int32_t shape) noexcept {
 
   switch (shape) {
+
   case 1:
   case 2:
   case 90:
   case 101:
   case 155:
     return true;
+
   default:
     return false;
   }
@@ -602,6 +622,7 @@ bool isShapedGroundShape(
     std::int32_t shape) noexcept {
 
   switch (shape) {
+
   case 7:
   case 8:
   case 10:
@@ -647,6 +668,7 @@ bool isShapedGroundShape(
   case 123:
   case 133:
     return true;
+
   default:
     return false;
   }
@@ -840,6 +862,7 @@ bool ItemPhysicsRuntime::verifyProfile(
           resolved.target,
           profile::kRenderFingerprint,
           "ItemRenderer::render")) {
+
     return false;
   }
 
@@ -848,6 +871,7 @@ bool ItemPhysicsRuntime::verifyProfile(
               profile::kGetPosDeltaRva,
           profile::kGetPosDeltaFingerprint,
           "Actor::getPosDelta")) {
+
     return false;
   }
 
@@ -856,6 +880,7 @@ bool ItemPhysicsRuntime::verifyProfile(
               profile::kRenderItemGroupLikeRva,
           profile::kRenderItemGroupLikeFingerprint,
           "ItemRenderer render-group helper")) {
+
     return false;
   }
 
@@ -864,6 +889,7 @@ bool ItemPhysicsRuntime::verifyProfile(
               profile::kGetBlockTypeForRenderingRva,
           profile::kGetBlockTypeForRenderingFingerprint,
           "ItemStackBase::getBlockTypeForRendering")) {
+
     return false;
   }
 
@@ -872,6 +898,7 @@ bool ItemPhysicsRuntime::verifyProfile(
               profile::kBlockGraphicsGetForBlockTypeRva,
           profile::kBlockGraphicsGetForBlockTypeFingerprint,
           "BlockGraphics::getForBlock(BlockType)")) {
+
     return false;
   }
 
@@ -880,6 +907,7 @@ bool ItemPhysicsRuntime::verifyProfile(
               profile::kBlockGraphicsGetBlockShapeRva,
           profile::kBlockGraphicsGetBlockShapeFingerprint,
           "BlockGraphics::getBlockShape")) {
+
     return false;
   }
 
@@ -888,6 +916,7 @@ bool ItemPhysicsRuntime::verifyProfile(
               profile::kRelativeShadowStorageRva,
           profile::kRelativeShadowStorageFingerprint,
           "RelativeShadowOffsetComponent storage")) {
+
     return false;
   }
 
@@ -896,6 +925,7 @@ bool ItemPhysicsRuntime::verifyProfile(
               profile::kRelativeShadowEmplaceRva,
           profile::kRelativeShadowEmplaceFingerprint,
           "RelativeShadowOffsetComponent emplace")) {
+
     return false;
   }
 
@@ -1128,16 +1158,19 @@ void ItemPhysicsRuntime::uninstall() {
       std::memory_order_relaxed);
 
   if (mRenderItemGroupHook) {
+
     mRenderItemGroupHook->reset();
     mRenderItemGroupHook.reset();
   }
 
   if (mHook) {
+
     mHook->reset();
     mHook.reset();
   }
 
   if (sInstance == this) {
+
     sInstance = nullptr;
   }
 
@@ -1218,6 +1251,7 @@ void ItemPhysicsRuntime::onRenderItemGroup(
       mRenderItemGroupOriginal;
 
   if (!original) {
+
     return;
   }
 
@@ -1295,7 +1329,8 @@ void ItemPhysicsRuntime::onRenderItemGroup(
 
   const std::uint32_t extra =
       std::min<std::uint32_t>(
-          copyCount - 1,
+          copyCount -
+              1,
           kMaxExtraCopies);
 
   std::lock_guard tableLock(
@@ -1318,7 +1353,8 @@ void ItemPhysicsRuntime::onRenderItemGroup(
             Vec3Local *>(
             base +
             kOffsetBase +
-            static_cast<std::size_t>(i) *
+            static_cast<std::size_t>(
+                i) *
                 kOffsetStride);
 
     saved[i] =
@@ -1329,7 +1365,8 @@ void ItemPhysicsRuntime::onRenderItemGroup(
             matrixSnapshot,
             saved[i]);
 
-    world.y = 0.0f;
+    world.y =
+        0.0f;
 
     *offset =
         transformByInverse3(
@@ -1355,7 +1392,8 @@ void ItemPhysicsRuntime::onRenderItemGroup(
             Vec3Local *>(
             base +
             kOffsetBase +
-            static_cast<std::size_t>(i) *
+            static_cast<std::size_t>(
+                i) *
                 kOffsetStride);
 
     *offset =
@@ -1366,9 +1404,14 @@ void ItemPhysicsRuntime::onRenderItemGroup(
 float ItemPhysicsRuntime::seededUnit(
     std::uint32_t seed) noexcept {
 
-  seed ^= seed << 13;
-  seed ^= seed >> 17;
-  seed ^= seed << 5;
+  seed ^=
+      seed << 13;
+
+  seed ^=
+      seed >> 17;
+
+  seed ^=
+      seed << 5;
 
   return static_cast<float>(
              seed &
@@ -1380,11 +1423,17 @@ float ItemPhysicsRuntime::wrapPi(
     float value) noexcept {
 
   while (value > kPi) {
-    value -= 2.0f * kPi;
+
+    value -=
+        2.0f *
+        kPi;
   }
 
   while (value < -kPi) {
-    value += 2.0f * kPi;
+
+    value +=
+        2.0f *
+        kPi;
   }
 
   return value;
@@ -1414,6 +1463,7 @@ bool ItemPhysicsRuntime::libcxxStringEquals(
     std::string_view wanted) noexcept {
 
   if (!stringAddress) {
+
     return false;
   }
 
@@ -1425,49 +1475,61 @@ bool ItemPhysicsRuntime::libcxxStringEquals(
   const std::uint8_t flag =
       raw[0];
 
-  std::size_t length = 0;
-  const char *data = nullptr;
+  std::size_t length =
+      0;
 
-  if ((flag & 1u) == 0) {
+  const char *data =
+      nullptr;
+
+  if ((flag &
+       1u) ==
+      0) {
 
     length =
         static_cast<
             std::size_t>(
-            flag >> 1);
+            flag >>
+            1);
 
     data =
         reinterpret_cast<
             const char *>(
-            raw + 1);
+            raw +
+            1);
 
   } else {
 
     length =
         *reinterpret_cast<
             const std::size_t *>(
-            raw + 8);
+            raw +
+            8);
 
     data =
         *reinterpret_cast<
             const char *const *>(
-            raw + 16);
+            raw +
+            16);
   }
 
   return
       data &&
       length ==
           wanted.size() &&
+
       std::memcmp(
           data,
           wanted.data(),
-          length) == 0;
+          length) ==
+          0;
 }
 
 bool ItemPhysicsRuntime::tryGetRenderBlockShape(
     std::uintptr_t actorAddress,
     std::int32_t &shape) const noexcept {
 
-  shape = -1;
+  shape =
+      -1;
 
   if (!actorAddress ||
       !mGetBlockTypeForRendering ||
@@ -1489,6 +1551,7 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
           itemStackBase);
 
   if (!weakPtrAddress) {
+
     return false;
   }
 
@@ -1498,6 +1561,7 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
           weakPtrAddress);
 
   if (!counter) {
+
     return false;
   }
 
@@ -1507,6 +1571,7 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
           counter);
 
   if (!blockType) {
+
     return false;
   }
 
@@ -1517,6 +1582,7 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
               blockType));
 
   if (!graphics) {
+
     return false;
   }
 
@@ -1531,9 +1597,11 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
     const void *block,
     BlockRenderInfo &info) const noexcept {
 
-  info = {};
+  info =
+      {};
 
   if (!block) {
+
     return false;
   }
 
@@ -1550,8 +1618,11 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
     }
   }
 
-  bool thinHorizontal = false;
-  bool verticalThin = false;
+  bool thinHorizontal =
+      false;
+
+  bool verticalThin =
+      false;
 
   const auto blockAddress =
       reinterpret_cast<
@@ -1629,12 +1700,10 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
                     kThinYRatio;
 
             verticalThin =
-                dy >
-                    hMin *
-                        1.60f &&
-                hMin <=
-                    hMax *
-                        0.48f;
+                (dy > hMin * 1.60f &&
+                 hMin <= hMax * 0.48f) ||
+                (dy > hMax * 1.60f &&
+                 hMax <= 0.55f);
           }
         }
       }
@@ -1652,7 +1721,8 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
   info.verticalThin =
       verticalThin;
 
-  info.valid = true;
+  info.valid =
+      true;
 
   return true;
 }
@@ -1663,21 +1733,26 @@ ItemPhysicsRuntime::classifyItem(
 
   ItemRenderTraits traits{};
 
-  std::int32_t rendererShape = -1;
+  std::int32_t rendererShape =
+      -1;
 
   if (tryGetRenderBlockShape(
           actorAddress,
           rendererShape)) {
 
-    traits.hasRenderShape = true;
-    traits.renderShape = rendererShape;
+    traits.hasRenderShape =
+        true;
+
+    traits.renderShape =
+        rendererShape;
   }
 
   if (traits.hasRenderShape &&
       traits.renderShape ==
           kSkullBlockShape) {
 
-    traits.valid = true;
+    traits.valid =
+        true;
 
     traits.modelClass =
         ModelClass::BlockItem;
@@ -1685,12 +1760,14 @@ ItemPhysicsRuntime::classifyItem(
     traits.specialKind =
         SpecialKind::None;
 
-    traits.block.valid = true;
+    traits.block.valid =
+        true;
 
     traits.block.blockShape =
         kSkullBlockShape;
 
-    traits.block.keepHorizontal = true;
+    traits.block.keepHorizontal =
+        true;
 
     return traits;
   }
@@ -1704,7 +1781,8 @@ ItemPhysicsRuntime::classifyItem(
 
   if (block) {
 
-    traits.valid = true;
+    traits.valid =
+        true;
 
     traits.modelClass =
         ModelClass::BlockItem;
@@ -1727,6 +1805,7 @@ ItemPhysicsRuntime::classifyItem(
               kItemHandleOffset);
 
   if (!itemHandle) {
+
     return traits;
   }
 
@@ -1736,6 +1815,7 @@ ItemPhysicsRuntime::classifyItem(
           itemHandle);
 
   if (!item) {
+
     return traits;
   }
 
@@ -1754,7 +1834,8 @@ ItemPhysicsRuntime::classifyItem(
           identifier,
           kBannerId);
 
-  traits.valid = true;
+  traits.valid =
+      true;
 
   if (shield) {
 
@@ -1799,22 +1880,44 @@ ItemPhysicsRuntime::stateFor(
   if (inserted ||
       !state.initialized) {
 
-    state.initialized = true;
-    state.wasGrounded = true;
-    state.launchImpulseApplied = false;
-    state.contactCaptured = false;
-    state.airTargetCaptured = false;
+    state.initialized =
+        true;
 
-    state.fullRotX = 0.0f;
-    state.fullRotY = 0.0f;
-    state.fullRotZ = 0.0f;
+    state.wasGrounded =
+        true;
 
-    state.orientation = {};
-    state.restOrientation = {};
+    state.launchImpulseApplied =
+        false;
 
-    state.angularX = 0.0f;
-    state.angularY = 0.0f;
-    state.angularZ = 0.0f;
+    state.contactCaptured =
+        false;
+
+    state.airTargetCaptured =
+        false;
+
+    state.fullRotX =
+        0.0f;
+
+    state.fullRotY =
+        0.0f;
+
+    state.fullRotZ =
+        0.0f;
+
+    state.orientation =
+        {};
+
+    state.restOrientation =
+        {};
+
+    state.angularX =
+        0.0f;
+
+    state.angularY =
+        0.0f;
+
+    state.angularZ =
+        0.0f;
 
     state.restYaw =
         seededUnit(
@@ -1823,10 +1926,17 @@ ItemPhysicsRuntime::stateFor(
         2.0f *
         kPi;
 
-    state.born = now;
-    state.contactTime = now;
-    state.lastUpdate = now;
-    state.lastSeen = now;
+    state.born =
+        now;
+
+    state.contactTime =
+        now;
+
+    state.lastUpdate =
+        now;
+
+    state.lastSeen =
+        now;
   }
 
   return state;
@@ -1845,13 +1955,18 @@ void ItemPhysicsRuntime::updateState(
               now -
               state.lastUpdate)
               .count(),
+
           0.0f,
           0.10f);
 
-  state.lastUpdate = now;
-  state.lastSeen = now;
+  state.lastUpdate =
+      now;
 
-  std::int32_t shape = -1;
+  state.lastSeen =
+      now;
+
+  std::int32_t shape =
+      -1;
 
   if (traits.hasRenderShape) {
 
@@ -1872,6 +1987,9 @@ void ItemPhysicsRuntime::updateState(
 
   const bool thin =
       !head &&
+      !(traits.modelClass ==
+            ModelClass::BlockItem &&
+        traits.block.verticalThin) &&
       ((traits.modelClass ==
             ModelClass::BlockItem &&
         traits.block.keepHorizontal) ||
@@ -1930,13 +2048,21 @@ void ItemPhysicsRuntime::updateState(
                 -kFullBlockAirDamping *
                 dt);
 
-        state.angularX *= d;
-        state.angularZ *= d;
+        state.angularX *=
+            d;
+
+        state.angularZ *=
+            d;
       }
 
-      state.fullRotY = 0.0f;
-      state.wasGrounded = false;
-      state.contactCaptured = false;
+      state.fullRotY =
+          0.0f;
+
+      state.wasGrounded =
+          false;
+
+      state.contactCaptured =
+          false;
 
       return;
     }
@@ -1985,11 +2111,20 @@ void ItemPhysicsRuntime::updateState(
             target,
             alpha);
 
-    state.fullRotY = 0.0f;
-    state.angularX = 0.0f;
-    state.angularY = 0.0f;
-    state.angularZ = 0.0f;
-    state.wasGrounded = true;
+    state.fullRotY =
+        0.0f;
+
+    state.angularX =
+        0.0f;
+
+    state.angularY =
+        0.0f;
+
+    state.angularZ =
+        0.0f;
+
+    state.wasGrounded =
+        true;
 
     return;
   }
@@ -2007,7 +2142,9 @@ void ItemPhysicsRuntime::updateState(
   auto putQ =
       [&](QuatLocal q) {
 
-        q = normalizeQ(q);
+        q =
+            normalizeQ(
+                q);
 
         state.orientation = {
             q.w,
@@ -2020,7 +2157,9 @@ void ItemPhysicsRuntime::updateState(
       [&](QuatLocal q)
           -> QuatLocal {
 
-        q = normalizeQ(q);
+        q =
+            normalizeQ(
+                q);
 
         if (flat ||
             special) {
@@ -2088,7 +2227,9 @@ void ItemPhysicsRuntime::updateState(
           Vec3Local target{
               std::cos(
                   state.restYaw),
+
               0.0f,
+
               std::sin(
                   state.restYaw)};
 
@@ -2143,9 +2284,14 @@ void ItemPhysicsRuntime::updateState(
                   -freeDamping *
                   dt);
 
-          omega.x *= d;
-          omega.y *= d;
-          omega.z *= d;
+          omega.x *=
+              d;
+
+          omega.y *=
+              d;
+
+          omega.z *=
+              d;
         }
 
         if (strength > 0.0f) {
@@ -2195,9 +2341,14 @@ void ItemPhysicsRuntime::updateState(
               maxAngular /
               speed;
 
-          omega.x *= s;
-          omega.y *= s;
-          omega.z *= s;
+          omega.x *=
+              s;
+
+          omega.y *=
+              s;
+
+          omega.z *=
+              s;
         }
 
         q =
@@ -2220,16 +2371,25 @@ void ItemPhysicsRuntime::updateState(
                   omega) <
                   kContactStopAngular) {
 
-            q = target;
-            omega = {};
+            q =
+                target;
+
+            omega =
+                {};
           }
         }
 
-        putQ(q);
+        putQ(
+            q);
 
-        state.angularX = omega.x;
-        state.angularY = omega.y;
-        state.angularZ = omega.z;
+        state.angularX =
+            omega.x;
+
+        state.angularY =
+            omega.y;
+
+        state.angularZ =
+            omega.z;
       };
 
   float airDamping =
@@ -2370,13 +2530,15 @@ void ItemPhysicsRuntime::updateState(
           target.y,
           target.z};
 
-      state.airTargetCaptured = true;
+      state.airTargetCaptured =
+          true;
     }
 
     QuatLocal target =
         getQ();
 
-    float strength = 0.0f;
+    float strength =
+        0.0f;
 
     if (state.airTargetCaptured) {
 
@@ -2428,25 +2590,31 @@ void ItemPhysicsRuntime::updateState(
             state.angularX) <
         0.006f) {
 
-      state.angularX = 0.0f;
+      state.angularX =
+          0.0f;
     }
 
     if (std::abs(
             state.angularY) <
         0.006f) {
 
-      state.angularY = 0.0f;
+      state.angularY =
+          0.0f;
     }
 
     if (std::abs(
             state.angularZ) <
         0.006f) {
 
-      state.angularZ = 0.0f;
+      state.angularZ =
+          0.0f;
     }
 
-    state.wasGrounded = false;
-    state.contactCaptured = false;
+    state.wasGrounded =
+        false;
+
+    state.contactCaptured =
+        false;
 
     return;
   }
@@ -2463,17 +2631,22 @@ void ItemPhysicsRuntime::updateState(
         target.y,
         target.z};
 
-    state.airTargetCaptured = true;
+    state.airTargetCaptured =
+        true;
   }
 
   if (!state.contactCaptured ||
       !state.wasGrounded) {
 
-    state.contactCaptured = true;
-    state.contactTime = now;
+    state.contactCaptured =
+        true;
+
+    state.contactTime =
+        now;
   }
 
-  state.wasGrounded = true;
+  state.wasGrounded =
+      true;
 
   const QuatLocal target =
       normalizeQ({
@@ -2504,6 +2677,7 @@ void ItemPhysicsRuntime::pruneStates(
 
   for (auto it =
            mStates.begin();
+
        it !=
        mStates.end();) {
 
@@ -2554,6 +2728,7 @@ void ItemPhysicsRuntime::updateItemShadowComponent(
               kActorEntityIdOffset);
 
   if (!registry) {
+
     return;
   }
 
@@ -2564,6 +2739,7 @@ void ItemPhysicsRuntime::updateItemShadowComponent(
               kRelativeShadowOffsetComponentHash);
 
   if (!storage) {
+
     return;
   }
 
@@ -2591,8 +2767,11 @@ void ItemPhysicsRuntime::updateItemShadowComponent(
           storageAddress +
           0x10);
 
-  bool present = false;
-  std::uint32_t packedEntity = 0;
+  bool present =
+      false;
+
+  std::uint32_t packedEntity =
+      0;
 
   if (pagesBegin &&
       pagesEnd >=
@@ -2671,6 +2850,7 @@ void ItemPhysicsRuntime::updateItemShadowComponent(
           0x50);
 
   if (!componentPages) {
+
     return;
   }
 
@@ -2687,6 +2867,7 @@ void ItemPhysicsRuntime::updateItemShadowComponent(
                   std::uintptr_t));
 
   if (!componentPage) {
+
     return;
   }
 
@@ -2706,6 +2887,7 @@ bool ItemPhysicsRuntime::
         void *actor) const noexcept {
 
   if (!actor) {
+
     return false;
   }
 
@@ -2729,6 +2911,7 @@ bool ItemPhysicsRuntime::
               kActorEntityIdOffset);
 
   if (!registry) {
+
     return false;
   }
 
@@ -2807,11 +2990,14 @@ bool ItemPhysicsRuntime::
               sizeof(
                   std::uintptr_t));
 
-  std::uintptr_t node = 0;
+  std::uintptr_t node =
+      0;
 
   for (int guard = 0;
+
        nodeIndex != -1 &&
        guard < 4096;
+
        ++guard) {
 
     node =
@@ -2836,7 +3022,8 @@ bool ItemPhysicsRuntime::
             const std::int64_t *>(
             node);
 
-    node = 0;
+    node =
+        0;
   }
 
   if (!node ||
@@ -2853,6 +3040,7 @@ bool ItemPhysicsRuntime::
           0x10);
 
   if (!storage) {
+
     return false;
   }
 
@@ -2902,6 +3090,7 @@ bool ItemPhysicsRuntime::
                   std::uintptr_t));
 
   if (!page) {
+
     return false;
   }
 
@@ -2936,6 +3125,7 @@ void ItemPhysicsRuntime::onRender(
       mOriginal;
 
   if (!original) {
+
     return;
   }
 
@@ -3049,7 +3239,8 @@ void ItemPhysicsRuntime::onRender(
             entityId,
             now);
 
-    std::int32_t motionShape = -1;
+    std::int32_t motionShape =
+        -1;
 
     if (traits.hasRenderShape) {
 
@@ -3070,6 +3261,9 @@ void ItemPhysicsRuntime::onRender(
 
     const bool thin =
         !head &&
+        !(traits.modelClass ==
+              ModelClass::BlockItem &&
+          traits.block.verticalThin) &&
         ((traits.modelClass ==
               ModelClass::BlockItem &&
           traits.block.keepHorizontal) ||
@@ -3106,7 +3300,9 @@ void ItemPhysicsRuntime::onRender(
         !shaped;
 
     Vec3MotionAbi motion{};
-    bool hasMotion = false;
+
+    bool hasMotion =
+        false;
 
     const auto getPosDelta =
         reinterpret_cast<
@@ -3132,7 +3328,8 @@ void ItemPhysicsRuntime::onRender(
         motion =
             *nativeMotion;
 
-        hasMotion = true;
+        hasMotion =
+            true;
       }
     }
 
@@ -3163,7 +3360,8 @@ void ItemPhysicsRuntime::onRender(
             motion.y) <
             kGroundFlickerVerticalThreshold) {
 
-      physicsGrounded = true;
+      physicsGrounded =
+          true;
     }
 
     if (!physicsGrounded &&
@@ -3253,33 +3451,55 @@ void ItemPhysicsRuntime::onRender(
             normalize3(
                 axis);
 
-        float modelScale = 0.82f;
-        float cap = kMaxNaturalSpin;
+        float modelScale =
+            0.82f;
+
+        float cap =
+            kMaxNaturalSpin;
 
         if (head) {
 
-          modelScale = 0.36f;
-          cap = kMaxAngularHead;
+          modelScale =
+              0.36f;
 
-        } else if (thin) {
+          cap =
+              kMaxAngularHead;
 
-          modelScale = 0.48f;
-          cap = kMaxAngularThin;
+        } else if (
+            thin) {
 
-        } else if (shaped) {
+          modelScale =
+              0.48f;
 
-          modelScale = 0.50f;
-          cap = kMaxAngularShaped;
+          cap =
+              kMaxAngularThin;
 
-        } else if (special) {
+        } else if (
+            shaped) {
 
-          modelScale = 0.54f;
-          cap = kMaxAngularSpecial;
+          modelScale =
+              0.50f;
 
-        } else if (flat) {
+          cap =
+              kMaxAngularShaped;
 
-          modelScale = 0.56f;
-          cap = kMaxAngularFlat;
+        } else if (
+            special) {
+
+          modelScale =
+              0.54f;
+
+          cap =
+              kMaxAngularSpecial;
+
+        } else if (
+            flat) {
+
+          modelScale =
+              0.56f;
+
+          cap =
+              kMaxAngularFlat;
         }
 
         Vec3Local omega{
@@ -3306,9 +3526,14 @@ void ItemPhysicsRuntime::onRender(
               cap /
               omegaLen;
 
-          omega.x *= factor;
-          omega.y *= factor;
-          omega.z *= factor;
+          omega.x *=
+              factor;
+
+          omega.y *=
+              factor;
+
+          omega.z *=
+              factor;
         }
 
         if (horizontalTickSpeed >
@@ -3320,12 +3545,20 @@ void ItemPhysicsRuntime::onRender(
                   motion.x);
         }
 
-        state.angularX = omega.x;
-        state.angularY = omega.y;
-        state.angularZ = omega.z;
+        state.angularX =
+            omega.x;
 
-        state.launchImpulseApplied = true;
-        state.born = now;
+        state.angularY =
+            omega.y;
+
+        state.angularZ =
+            omega.z;
+
+        state.launchImpulseApplied =
+            true;
+
+        state.born =
+            now;
       }
     }
 
@@ -3338,10 +3571,12 @@ void ItemPhysicsRuntime::onRender(
             : 0.0f,
         now);
 
-    snapshot = state;
+    snapshot =
+        state;
 
     if ((++mRenderCounter &
-         0xFFu) == 0) {
+         0xFFu) ==
+        0) {
 
       pruneStates(
           now);
@@ -3362,17 +3597,21 @@ void ItemPhysicsRuntime::onRender(
           profile::
               kIsInItemFrameOffset);
 
-  const auto oldCount = count;
+  const auto oldCount =
+      count;
+
   const auto oldInItemFrame =
       inItemFrame;
 
   if (mSingleModel.load(
           std::memory_order_relaxed)) {
 
-    count = 1;
+    count =
+        1;
   }
 
-  inItemFrame = 1;
+  inItemFrame =
+      1;
 
   auto *position =
       reinterpret_cast<
@@ -3428,7 +3667,8 @@ void ItemPhysicsRuntime::onRender(
 
     } else {
 
-      std::int32_t groundShape = -1;
+      std::int32_t groundShape =
+          -1;
 
       if (traits.hasRenderShape) {
 
@@ -3443,13 +3683,23 @@ void ItemPhysicsRuntime::onRender(
             traits.block.blockShape;
       }
 
-      if (groundShape >= 0) {
+      if (groundShape >=
+          0) {
 
         if (groundShape ==
             kSkullBlockShape) {
 
           position[1] +=
               mSkullGroundHeight.load(
+                  std::memory_order_relaxed);
+
+        } else if (
+            traits.modelClass ==
+                ModelClass::BlockItem &&
+            traits.block.verticalThin) {
+
+          position[1] +=
+              mShapedBlockGroundHeight.load(
                   std::memory_order_relaxed);
 
         } else if (
@@ -3506,9 +3756,14 @@ void ItemPhysicsRuntime::onRender(
 
     if (!matrix) {
 
-      position[1] = oldY;
-      count = oldCount;
-      inItemFrame = oldInItemFrame;
+      position[1] =
+          oldY;
+
+      count =
+          oldCount;
+
+      inItemFrame =
+          oldInItemFrame;
 
       original(
           self,
@@ -3518,9 +3773,14 @@ void ItemPhysicsRuntime::onRender(
       return;
     }
 
-    const float x = position[0];
-    const float y = position[1];
-    const float z = position[2];
+    const float x =
+        position[0];
+
+    const float y =
+        position[1];
+
+    const float z =
+        position[2];
 
     postTranslate(
         *matrix,
@@ -3595,9 +3855,14 @@ void ItemPhysicsRuntime::onRender(
         previousGrounded;
   }
 
-  position[1] = oldY;
-  count = oldCount;
-  inItemFrame = oldInItemFrame;
+  position[1] =
+      oldY;
+
+  count =
+      oldCount;
+
+  inItemFrame =
+      oldInItemFrame;
 }
 
 }
