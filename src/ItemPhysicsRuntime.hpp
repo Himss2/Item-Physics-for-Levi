@@ -4,6 +4,7 @@
 #include "RttiResolver.hpp"
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -29,9 +30,12 @@ public:
     return mProfileSupported.load(std::memory_order_relaxed);
   }
 
-  using RenderFn = void (*)(void *, void *, void *);
+  using RenderFn = void (*)(void *,void *,void *);
+
   using RenderItemGroupFn =
-      void (*)(void *, void *, void *, std::uint32_t, std::uint32_t, float, float);
+      void (*)(void *,void *,void *,
+               std::uint32_t,std::uint32_t,float,float);
+
   using GetWorldMatrixFn = void *(*)(void *);
 
   struct MatrixStackRefAbi {
@@ -40,10 +44,25 @@ public:
     ~MatrixStackRefAbi() {}
   };
 
-  using MatrixPushFn = MatrixStackRefAbi (*)(void *, bool);
-  using MatrixRefDtorFn = void (*)(MatrixStackRefAbi *);
+  using MatrixPushFn =
+      MatrixStackRefAbi (*)(void *,bool);
+
+  using MatrixRefDtorFn =
+      void (*)(MatrixStackRefAbi *);
 
 private:
+  struct Vec2Abi {
+    float x{};
+    float y{};
+  };
+
+  struct ActorRotationComponentAbi {
+    Vec2Abi rot{};
+    Vec2Abi rotPrev{};
+  };
+
+  static_assert(sizeof(ActorRotationComponentAbi) == 16);
+
   enum class ModelClass : std::uint8_t {
     FlatItem,
     BlockItem,
@@ -58,36 +77,45 @@ private:
 
   struct ItemRenderTraits {
     bool valid{};
+    bool blockLike{};
+    bool hasBlockShape{};
+    float pivotY{};
+    std::int32_t blockShape{-1};
     ModelClass modelClass{ModelClass::FlatItem};
     SpecialKind specialKind{SpecialKind::None};
-    bool hasBlockShape{};
-    std::int32_t blockShape{-1};
-
-    [[nodiscard]] bool blockLike() const noexcept {
-      return modelClass != ModelClass::FlatItem;
-    }
   };
 
   struct PhysicsState {
     bool initialized{};
-    bool wasGrounded{true};
     float roll{};
     float yaw{};
     std::chrono::steady_clock::time_point lastUpdate{};
     std::chrono::steady_clock::time_point lastSeen{};
   };
 
-  using GetBlockTypeForRenderingFn = const void *(*)(const void *);
-  using BlockGraphicsGetForBlockTypeFn = void *(*)(const void *);
-  using BlockGraphicsGetForBlockFn = void *(*)(const void *);
-  using BlockGraphicsGetBlockShapeFn = std::int32_t (*)(const void *);
+  using GetBlockTypeForRenderingFn =
+      const void *(*)(const void *);
+
+  using BlockGraphicsGetForBlockTypeFn =
+      void *(*)(const void *);
+
+  using BlockGraphicsGetForBlockFn =
+      void *(*)(const void *);
+
+  using BlockGraphicsGetBlockShapeFn =
+      std::int32_t (*)(const void *);
+
+  using IsBlockShape3DFn =
+      bool (*)(std::int32_t);
 
   struct ShadowStorageEmplaceResultAbi {
     std::uintptr_t first{};
     std::uintptr_t second{};
   };
 
-  using RelativeShadowStorageFn = void *(*)(void *, std::uint32_t);
+  using RelativeShadowStorageFn =
+      void *(*)(void *,std::uint32_t);
+
   using RelativeShadowEmplaceFn =
       ShadowStorageEmplaceResultAbi (*)(
           void *,
@@ -97,27 +125,17 @@ private:
 
   static ItemPhysicsRuntime *sInstance;
 
-  static void renderDetour(void *, void *, void *);
+  static void renderDetour(void *,void *,void *);
 
   static void renderItemGroupDetour(
-      void *,
-      void *,
-      void *,
-      std::uint32_t,
-      std::uint32_t,
-      float,
-      float);
+      void *,void *,void *,
+      std::uint32_t,std::uint32_t,float,float);
 
-  void onRender(void *, void *, void *);
+  void onRender(void *,void *,void *);
 
   void onRenderItemGroup(
-      void *,
-      void *,
-      void *,
-      std::uint32_t,
-      std::uint32_t,
-      float,
-      float);
+      void *,void *,void *,
+      std::uint32_t,std::uint32_t,float,float);
 
   bool verifyProfile(
       const ResolvedVirtual &,
@@ -138,8 +156,30 @@ private:
       std::int32_t &) const noexcept;
 
   [[nodiscard]]
+  bool getActorRotation(
+      void *,
+      Vec2Abi &) const noexcept;
+
+  [[nodiscard]]
   bool hasOnGroundComponent(
       void *) const noexcept;
+
+  [[nodiscard]]
+  void *findComponentStorage(
+      void *,
+      std::uint32_t) const noexcept;
+
+  [[nodiscard]]
+  bool findPackedEntity(
+      void *,
+      std::uint32_t,
+      std::uint32_t &) const noexcept;
+
+  [[nodiscard]]
+  void *findDenseComponent(
+      void *,
+      std::uint32_t,
+      std::size_t) const noexcept;
 
   void updateItemShadowComponent(
       void *,
@@ -156,34 +196,24 @@ private:
       bool,
       bool,
       float,
-      float,
       std::chrono::steady_clock::time_point) const;
 
   void pruneStates(
       std::chrono::steady_clock::time_point);
 
-  static float seededUnit(
-      std::uint32_t) noexcept;
-
-  static float wrapPi(
-      float) noexcept;
-
-  static float moveAngle(
-      float,
-      float,
-      float) noexcept;
+  static float seededUnit(std::uint32_t) noexcept;
+  static float wrapPi(float) noexcept;
+  static float moveAngle(float,float,float) noexcept;
 
   static bool libcxxStringEquals(
       std::uintptr_t,
       std::string_view) noexcept;
 
   std::atomic_bool mEnabled{true};
-  std::atomic_bool mSingleModel{true};
+  std::atomic_bool mSingleModel{false};
   std::atomic_bool mHideItemShadow{true};
-
+  std::atomic_bool mOldRotation{false};
   std::atomic<float> mRotationSpeed{1.0f};
-  std::atomic<float> mSettleSpeed{3.0f};
-
   std::atomic_bool mProfileSupported{false};
 
   std::uintptr_t mMinecraftBase{};
@@ -201,6 +231,7 @@ private:
   BlockGraphicsGetForBlockTypeFn mGetBlockGraphicsForBlockType{};
   BlockGraphicsGetForBlockFn mGetBlockGraphicsForBlock{};
   BlockGraphicsGetBlockShapeFn mGetBlockGraphicsShape{};
+  IsBlockShape3DFn mIsBlockShape3D{};
 
   RelativeShadowStorageFn mGetRelativeShadowStorage{};
   RelativeShadowEmplaceFn mEmplaceRelativeShadow{};
@@ -211,8 +242,7 @@ private:
   mutable std::mutex mStateMutex;
   mutable std::mutex mGroupOffsetMutex;
 
-  std::unordered_map<std::uint32_t, PhysicsState> mStates;
-
+  std::unordered_map<std::uint32_t,PhysicsState> mStates;
   std::uint32_t mRenderCounter{};
 };
 
