@@ -1,8 +1,8 @@
 {
-  "version": 7,
+  "version": 8,
   "enabled": true,
-  "singleModel": true,
+  "singleModel": false,
   "hideItemShadow": true,
-  "rotationSpeed": 1.0,
-  "settleSpeed": 3.0
+  "oldRotation": false,
+  "rotationSpeed": 1.0
 }
