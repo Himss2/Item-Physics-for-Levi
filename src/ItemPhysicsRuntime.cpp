@@ -4,56 +4,37 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
-#include <string_view>
 
 namespace itemphysics {
 namespace {
 
-constexpr float kPi = 3.14159265358979323846f;
-constexpr float kDeg = kPi / 180.0f;
+constexpr float kPi=3.14159265358979323846f;
+constexpr float kHalfPi=kPi*0.5f;
+constexpr float kDegToRad=kPi/180.0f;
 
-constexpr float kBaseTilt = 86.40f * kDeg;
+constexpr float kJavaBaseTilt=kHalfPi;
+constexpr float kJavaAirRollRate=10.0f;
+constexpr float kJavaOldGroundRate=5.0f;
+constexpr float kOldSnapEpsilon=5.0f*kDegToRad;
 
-constexpr float kJavaAirRollRate = 10.0f;
-constexpr float kFlatSettleRate = 6.0f;
+constexpr float kJavaBlockOffsetY=-0.20f;
+constexpr float kJavaBlockOffsetZ=-0.08f;
+constexpr float kJavaFlatOffsetZ=-0.04f;
 
-constexpr float kMotionWake = 0.001f;
-constexpr float kGroundFlickerSpeed = 0.080f;
-constexpr float kGroundFlickerVertical = 0.050f;
+constexpr float kNormalBlockPivotY=0.25f;
+constexpr float kLargeBlockPivotY=0.50f;
 
-constexpr float kAtlasFlatLocalY = 0.25f;
+constexpr std::int32_t kSkullShape=83;
+constexpr std::int32_t kLargePivotShape=101;
 
-constexpr auto kStateTtl =
+constexpr auto kStateTtl=
     std::chrono::seconds(8);
 
-constexpr float kFlatHeight = -0.09f;
-constexpr float kBlockHeight = 0.00f;
-constexpr float kThinHeight = -0.11f;
-constexpr float kTorchHeight = -0.11f;
-constexpr float kShapedHeight = -0.10f;
-constexpr float kSkullHeight = -0.25f;
-constexpr float kShieldHeight = -0.10f;
-constexpr float kBannerHeight = -0.10f;
-
-constexpr std::int32_t kSkullShape = 83;
-
-constexpr std::string_view kShieldId =
+constexpr std::string_view kShieldId=
     "minecraft:shield";
 
-constexpr std::string_view kBannerId =
+constexpr std::string_view kBannerId=
     "minecraft:banner";
-
-struct Vec3MotionAbi {
-  float x{};
-  float y{};
-  float z{};
-};
-
-static_assert(
-    sizeof(Vec3MotionAbi) == 12);
-
-using GetPosDeltaFn =
-    const Vec3MotionAbi *(*)(const void *);
 
 struct Vec3Local {
   float x{};
@@ -61,188 +42,51 @@ struct Vec3Local {
   float z{};
 };
 
-thread_local bool
-    gDroppedItemGroupActive = false;
-
-thread_local bool
-    gDroppedItemGroupGrounded = false;
-
-bool isThinGroundShape(
-    std::int32_t s) noexcept {
-
-  switch (s) {
-  case 9:
-  case 14:
-  case 15:
-  case 23:
-  case 67:
-  case 68:
-  case 69:
-  case 72:
-  case 73:
-  case 80:
-  case 96:
-  case 99:
-  case 114:
-  case 126:
-  case 135:
-  case 136:
-    return true;
-
-  default:
-    return false;
-  }
-}
-
-bool isTorchGroundShape(
-    std::int32_t s) noexcept {
-
-  switch (s) {
-  case 1:
-  case 2:
-  case 90:
-  case 101:
-  case 155:
-    return true;
-
-  default:
-    return false;
-  }
-}
-
-bool isShapedGroundShape(
-    std::int32_t s) noexcept {
-
-  switch (s) {
-  case 7:
-  case 8:
-  case 10:
-  case 11:
-  case 12:
-  case 13:
-  case 18:
-  case 19:
-  case 20:
-  case 21:
-  case 22:
-  case 25:
-  case 26:
-  case 28:
-  case 31:
-  case 32:
-  case 40:
-  case 42:
-  case 43:
-  case 44:
-  case 70:
-  case 71:
-  case 74:
-  case 76:
-  case 77:
-  case 78:
-  case 79:
-  case 81:
-  case 84:
-  case 87:
-  case 89:
-  case 100:
-  case 102:
-  case 107:
-  case 108:
-  case 110:
-  case 111:
-  case 112:
-  case 113:
-  case 115:
-  case 116:
-  case 119:
-  case 123:
-  case 133:
-    return true;
-
-  default:
-    return false;
-  }
-}
+thread_local bool gDroppedItemGroupActive=false;
+thread_local bool gDroppedItemGroupGrounded=false;
 
 bool invert3x3FromMat4(
     const Mat4 &m,
     float inv[9]) noexcept {
 
-  const float a00 = m.m[0];
-  const float a01 = m.m[4];
-  const float a02 = m.m[8];
+  const float a00=m.m[0],a01=m.m[4],a02=m.m[8];
+  const float a10=m.m[1],a11=m.m[5],a12=m.m[9];
+  const float a20=m.m[2],a21=m.m[6],a22=m.m[10];
 
-  const float a10 = m.m[1];
-  const float a11 = m.m[5];
-  const float a12 = m.m[9];
+  const float c00=a11*a22-a12*a21;
+  const float c01=a02*a21-a01*a22;
+  const float c02=a01*a12-a02*a11;
 
-  const float a20 = m.m[2];
-  const float a21 = m.m[6];
-  const float a22 = m.m[10];
+  const float c10=a12*a20-a10*a22;
+  const float c11=a00*a22-a02*a20;
+  const float c12=a02*a10-a00*a12;
 
-  const float c00 =
-      a11 * a22 -
-      a12 * a21;
+  const float c20=a10*a21-a11*a20;
+  const float c21=a01*a20-a00*a21;
+  const float c22=a00*a11-a01*a10;
 
-  const float c01 =
-      a02 * a21 -
-      a01 * a22;
+  const float det=
+      a00*c00+
+      a01*c10+
+      a02*c20;
 
-  const float c02 =
-      a01 * a12 -
-      a02 * a11;
-
-  const float c10 =
-      a12 * a20 -
-      a10 * a22;
-
-  const float c11 =
-      a00 * a22 -
-      a02 * a20;
-
-  const float c12 =
-      a02 * a10 -
-      a00 * a12;
-
-  const float c20 =
-      a10 * a21 -
-      a11 * a20;
-
-  const float c21 =
-      a01 * a20 -
-      a00 * a21;
-
-  const float c22 =
-      a00 * a11 -
-      a01 * a10;
-
-  const float det =
-      a00 * c00 +
-      a01 * c10 +
-      a02 * c20;
-
-  if (!std::isfinite(det) ||
-      std::abs(det) < 1.0e-8f) {
-
+  if (!std::isfinite(det)||
+      std::abs(det)<1.0e-8f)
     return false;
-  }
 
-  const float d =
-      1.0f /
-      det;
+  const float d=1.0f/det;
 
-  inv[0] = c00 * d;
-  inv[1] = c01 * d;
-  inv[2] = c02 * d;
+  inv[0]=c00*d;
+  inv[1]=c01*d;
+  inv[2]=c02*d;
 
-  inv[3] = c10 * d;
-  inv[4] = c11 * d;
-  inv[5] = c12 * d;
+  inv[3]=c10*d;
+  inv[4]=c11*d;
+  inv[5]=c12*d;
 
-  inv[6] = c20 * d;
-  inv[7] = c21 * d;
-  inv[8] = c22 * d;
+  inv[6]=c20*d;
+  inv[7]=c21*d;
+  inv[8]=c22*d;
 
   return true;
 }
@@ -252,17 +96,18 @@ Vec3Local transformVector3(
     Vec3Local v) noexcept {
 
   return {
-      m.m[0] * v.x +
-          m.m[4] * v.y +
-          m.m[8] * v.z,
+      m.m[0]*v.x+
+          m.m[4]*v.y+
+          m.m[8]*v.z,
 
-      m.m[1] * v.x +
-          m.m[5] * v.y +
-          m.m[9] * v.z,
+      m.m[1]*v.x+
+          m.m[5]*v.y+
+          m.m[9]*v.z,
 
-      m.m[2] * v.x +
-          m.m[6] * v.y +
-          m.m[10] * v.z};
+      m.m[2]*v.x+
+          m.m[6]*v.y+
+          m.m[10]*v.z
+  };
 }
 
 Vec3Local transformByInverse3(
@@ -270,17 +115,18 @@ Vec3Local transformByInverse3(
     Vec3Local v) noexcept {
 
   return {
-      inv[0] * v.x +
-          inv[1] * v.y +
-          inv[2] * v.z,
+      inv[0]*v.x+
+          inv[1]*v.y+
+          inv[2]*v.z,
 
-      inv[3] * v.x +
-          inv[4] * v.y +
-          inv[5] * v.z,
+      inv[3]*v.x+
+          inv[4]*v.y+
+          inv[5]*v.z,
 
-      inv[6] * v.x +
-          inv[7] * v.y +
-          inv[8] * v.z};
+      inv[6]*v.x+
+          inv[7]*v.y+
+          inv[8]*v.z
+  };
 }
 
 class MatrixPushScope {
@@ -289,111 +135,98 @@ public:
       void *stack,
       ItemPhysicsRuntime::MatrixPushFn push,
       ItemPhysicsRuntime::MatrixRefDtorFn dtor)
-      : mDtor(dtor) {
+      :mDtor(dtor) {
 
-    if (stack &&
-        push &&
-        dtor) {
+    if (!stack||
+        !push||
+        !dtor)
+      return;
 
-      mRef =
-          push(
-              stack,
-              false);
+    mRef=push(
+        stack,
+        false);
 
-      mActive =
-          mRef.stack &&
-          mRef.mat;
-    }
+    mActive=
+        mRef.stack&&
+        mRef.mat;
   }
 
   MatrixPushScope(
-      const MatrixPushScope &) = delete;
+      const MatrixPushScope &)=delete;
 
   MatrixPushScope &
   operator=(
-      const MatrixPushScope &) = delete;
+      const MatrixPushScope &)=delete;
 
   ~MatrixPushScope() {
+    if (!mActive||
+        !mDtor)
+      return;
 
-    if (mActive &&
-        mDtor) {
+    mDtor(&mRef);
 
-      mDtor(
-          &mRef);
-
-      mRef.stack =
-          nullptr;
-
-      mRef.mat =
-          nullptr;
-    }
+    mRef.stack=nullptr;
+    mRef.mat=nullptr;
   }
 
+  [[nodiscard]]
   Mat4 *matrix() noexcept {
-
     return mActive
-               ? mRef.mat
-               : nullptr;
+               ?mRef.mat
+               :nullptr;
   }
 
 private:
-  ItemPhysicsRuntime::MatrixStackRefAbi
-      mRef{};
-
-  ItemPhysicsRuntime::MatrixRefDtorFn
-      mDtor{};
-
-  bool
-      mActive{};
+  ItemPhysicsRuntime::MatrixStackRefAbi mRef{};
+  ItemPhysicsRuntime::MatrixRefDtorFn mDtor{};
+  bool mActive{};
 };
 
 }
 
 ItemPhysicsRuntime *
-ItemPhysicsRuntime::sInstance =
-    nullptr;
+ItemPhysicsRuntime::sInstance=nullptr;
 
 void ItemPhysicsRuntime::applyConfig(
-    const ItemPhysicsConfig &c) noexcept {
+    const ItemPhysicsConfig &config) noexcept {
 
   mEnabled.store(
-      c.enabled,
+      config.enabled,
       std::memory_order_relaxed);
 
   mSingleModel.store(
-      c.singleModel,
+      config.singleModel,
       std::memory_order_relaxed);
 
   mHideItemShadow.store(
-      c.hideItemShadow,
+      config.hideItemShadow,
+      std::memory_order_relaxed);
+
+  mOldRotation.store(
+      config.oldRotation,
       std::memory_order_relaxed);
 
   mRotationSpeed.store(
       static_cast<float>(
-          c.rotationSpeed),
-      std::memory_order_relaxed);
-
-  mSettleSpeed.store(
-      static_cast<float>(
-          c.settleSpeed),
+          config.rotationSpeed),
       std::memory_order_relaxed);
 }
 
 bool ItemPhysicsRuntime::verifyProfile(
-    const ResolvedVirtual &r,
+    const ResolvedVirtual &resolved,
     ll::mod::NativeMod &mod) const {
 
-  const auto verify =
+  const auto verifyWords=
       [&](
           std::uintptr_t address,
-          const auto &fp,
+          const auto &fingerprint,
           const char *name) {
 
-        const std::size_t bytes =
-            fp.size() *
+        const std::size_t bytes=
+            fingerprint.size()*
             sizeof(std::uint32_t);
 
-        if (!r.module.readable(
+        if (!resolved.module.readable(
                 address,
                 bytes)) {
 
@@ -404,72 +237,72 @@ bool ItemPhysicsRuntime::verifyProfile(
           return false;
         }
 
-        const auto *w =
+        const auto *words=
             reinterpret_cast<
                 const std::uint32_t *>(
                 address);
 
-        for (std::size_t i = 0;
-             i < fp.size();
+        for (std::size_t i=0;
+             i<fingerprint.size();
              ++i) {
 
-          if (w[i] != fp[i]) {
+          if (words[i]==fingerprint[i])
+            continue;
 
-            mod.getLogger().warn(
-                "Minecraft profile mismatch: {} word {}",
-                name,
-                i);
+          mod.getLogger().warn(
+              "Minecraft profile mismatch: {} word {}",
+              name,
+              i);
 
-            return false;
-          }
+          return false;
         }
 
         return true;
       };
 
-  if (!verify(
-          r.target,
+  if (!verifyWords(
+          resolved.target,
           profile::kRenderFingerprint,
-          "ItemRenderer::render") ||
+          "ItemRenderer::render")||
 
-      !verify(
-          r.module.base +
-              profile::kGetPosDeltaRva,
-          profile::kGetPosDeltaFingerprint,
-          "Actor::getPosDelta") ||
-
-      !verify(
-          r.module.base +
+      !verifyWords(
+          resolved.module.base+
               profile::kRenderItemGroupLikeRva,
           profile::kRenderItemGroupLikeFingerprint,
-          "ItemRenderer render-group helper") ||
+          "ItemRenderer render-group helper")||
 
-      !verify(
-          r.module.base +
+      !verifyWords(
+          resolved.module.base+
               profile::kGetBlockTypeForRenderingRva,
           profile::kGetBlockTypeForRenderingFingerprint,
-          "ItemStackBase::getBlockTypeForRendering") ||
+          "ItemStackBase::getBlockTypeForRendering")||
 
-      !verify(
-          r.module.base +
+      !verifyWords(
+          resolved.module.base+
               profile::kBlockGraphicsGetForBlockTypeRva,
           profile::kBlockGraphicsGetForBlockTypeFingerprint,
-          "BlockGraphics::getForBlock(BlockType)") ||
+          "BlockGraphics::getForBlock(BlockType)")||
 
-      !verify(
-          r.module.base +
+      !verifyWords(
+          resolved.module.base+
               profile::kBlockGraphicsGetBlockShapeRva,
           profile::kBlockGraphicsGetBlockShapeFingerprint,
-          "BlockGraphics::getBlockShape") ||
+          "BlockGraphics::getBlockShape")||
 
-      !verify(
-          r.module.base +
+      !verifyWords(
+          resolved.module.base+
+              profile::kIsBlockShape3DRva,
+          profile::kIsBlockShape3DFingerprint,
+          "BlockGraphics::isBlockShape3D")||
+
+      !verifyWords(
+          resolved.module.base+
               profile::kRelativeShadowStorageRva,
           profile::kRelativeShadowStorageFingerprint,
-          "RelativeShadowOffsetComponent storage") ||
+          "RelativeShadowOffsetComponent storage")||
 
-      !verify(
-          r.module.base +
+      !verifyWords(
+          resolved.module.base+
               profile::kRelativeShadowEmplaceRva,
           profile::kRelativeShadowEmplaceFingerprint,
           "RelativeShadowOffsetComponent emplace")) {
@@ -477,46 +310,24 @@ bool ItemPhysicsRuntime::verifyProfile(
     return false;
   }
 
-  const auto ex =
+  const auto executable=
       [&](std::uintptr_t rva) {
 
-        return r.module.executable(
-            r.module.base +
-            rva);
+        return resolved.module.executable(
+            resolved.module.base+rva);
       };
 
-  if (!ex(
-          profile::kGetWorldMatrixRva) ||
-
-      !ex(
-          profile::kMatrixStackPushRva) ||
-
-      !ex(
-          profile::kMatrixStackRefDtorRva) ||
-
-      !ex(
-          profile::kGetPosDeltaRva) ||
-
-      !ex(
-          profile::kRenderItemGroupLikeRva) ||
-
-      !ex(
-          profile::kGetBlockTypeForRenderingRva) ||
-
-      !ex(
-          profile::kBlockGraphicsGetForBlockTypeRva) ||
-
-      !ex(
-          profile::kBlockGraphicsGetForBlockRva) ||
-
-      !ex(
-          profile::kBlockGraphicsGetBlockShapeRva) ||
-
-      !ex(
-          profile::kRelativeShadowStorageRva) ||
-
-      !ex(
-          profile::kRelativeShadowEmplaceRva)) {
+  if (!executable(profile::kGetWorldMatrixRva)||
+      !executable(profile::kMatrixStackPushRva)||
+      !executable(profile::kMatrixStackRefDtorRva)||
+      !executable(profile::kRenderItemGroupLikeRva)||
+      !executable(profile::kGetBlockTypeForRenderingRva)||
+      !executable(profile::kBlockGraphicsGetForBlockTypeRva)||
+      !executable(profile::kBlockGraphicsGetForBlockRva)||
+      !executable(profile::kBlockGraphicsGetBlockShapeRva)||
+      !executable(profile::kIsBlockShape3DRva)||
+      !executable(profile::kRelativeShadowStorageRva)||
+      !executable(profile::kRelativeShadowEmplaceRva)) {
 
     mod.getLogger().warn(
         "Minecraft 1.26.45 renderer helper validation failed");
@@ -532,14 +343,13 @@ bool ItemPhysicsRuntime::install(
 
   uninstall();
 
-  auto r =
+  auto resolved=
       resolveVirtualByRtti(
           profile::kMinecraftModule,
           profile::kItemRendererRtti,
           profile::kItemRendererRenderVtableOffset);
 
-  if (!r) {
-
+  if (!resolved) {
     mod.getLogger().warn(
         "Item Physics inactive: failed to resolve ItemRenderer");
 
@@ -547,7 +357,7 @@ bool ItemPhysicsRuntime::install(
   }
 
   if (!verifyProfile(
-          *r,
+          *resolved,
           mod)) {
 
     mod.getLogger().warn(
@@ -556,122 +366,102 @@ bool ItemPhysicsRuntime::install(
     return false;
   }
 
-  mMinecraftBase =
-      r->module.base;
+  mMinecraftBase=
+      resolved->module.base;
 
-  mRenderTarget =
-      r->target;
+  mRenderTarget=
+      resolved->target;
 
-  mRenderItemGroupTarget =
-      mMinecraftBase +
-      profile::
-          kRenderItemGroupLikeRva;
+  mRenderItemGroupTarget=
+      mMinecraftBase+
+      profile::kRenderItemGroupLikeRva;
 
-  mGetWorldMatrix =
-      reinterpret_cast<
-          GetWorldMatrixFn>(
-          mMinecraftBase +
-          profile::
-              kGetWorldMatrixRva);
+  mGetWorldMatrix=
+      reinterpret_cast<GetWorldMatrixFn>(
+          mMinecraftBase+
+          profile::kGetWorldMatrixRva);
 
-  mMatrixPush =
-      reinterpret_cast<
-          MatrixPushFn>(
-          mMinecraftBase +
-          profile::
-              kMatrixStackPushRva);
+  mMatrixPush=
+      reinterpret_cast<MatrixPushFn>(
+          mMinecraftBase+
+          profile::kMatrixStackPushRva);
 
-  mMatrixRefDtor =
-      reinterpret_cast<
-          MatrixRefDtorFn>(
-          mMinecraftBase +
-          profile::
-              kMatrixStackRefDtorRva);
+  mMatrixRefDtor=
+      reinterpret_cast<MatrixRefDtorFn>(
+          mMinecraftBase+
+          profile::kMatrixStackRefDtorRva);
 
-  mGetBlockTypeForRendering =
-      reinterpret_cast<
-          GetBlockTypeForRenderingFn>(
-          mMinecraftBase +
-          profile::
-              kGetBlockTypeForRenderingRva);
+  mGetBlockTypeForRendering=
+      reinterpret_cast<GetBlockTypeForRenderingFn>(
+          mMinecraftBase+
+          profile::kGetBlockTypeForRenderingRva);
 
-  mGetBlockGraphicsForBlockType =
-      reinterpret_cast<
-          BlockGraphicsGetForBlockTypeFn>(
-          mMinecraftBase +
-          profile::
-              kBlockGraphicsGetForBlockTypeRva);
+  mGetBlockGraphicsForBlockType=
+      reinterpret_cast<BlockGraphicsGetForBlockTypeFn>(
+          mMinecraftBase+
+          profile::kBlockGraphicsGetForBlockTypeRva);
 
-  mGetBlockGraphicsForBlock =
-      reinterpret_cast<
-          BlockGraphicsGetForBlockFn>(
-          mMinecraftBase +
-          profile::
-              kBlockGraphicsGetForBlockRva);
+  mGetBlockGraphicsForBlock=
+      reinterpret_cast<BlockGraphicsGetForBlockFn>(
+          mMinecraftBase+
+          profile::kBlockGraphicsGetForBlockRva);
 
-  mGetBlockGraphicsShape =
-      reinterpret_cast<
-          BlockGraphicsGetBlockShapeFn>(
-          mMinecraftBase +
-          profile::
-              kBlockGraphicsGetBlockShapeRva);
+  mGetBlockGraphicsShape=
+      reinterpret_cast<BlockGraphicsGetBlockShapeFn>(
+          mMinecraftBase+
+          profile::kBlockGraphicsGetBlockShapeRva);
 
-  mGetRelativeShadowStorage =
-      reinterpret_cast<
-          RelativeShadowStorageFn>(
-          mMinecraftBase +
-          profile::
-              kRelativeShadowStorageRva);
+  mIsBlockShape3D=
+      reinterpret_cast<IsBlockShape3DFn>(
+          mMinecraftBase+
+          profile::kIsBlockShape3DRva);
 
-  mEmplaceRelativeShadow =
-      reinterpret_cast<
-          RelativeShadowEmplaceFn>(
-          mMinecraftBase +
-          profile::
-              kRelativeShadowEmplaceRva);
+  mGetRelativeShadowStorage=
+      reinterpret_cast<RelativeShadowStorageFn>(
+          mMinecraftBase+
+          profile::kRelativeShadowStorageRva);
 
-  sInstance =
-      this;
+  mEmplaceRelativeShadow=
+      reinterpret_cast<RelativeShadowEmplaceFn>(
+          mMinecraftBase+
+          profile::kRelativeShadowEmplaceRva);
 
-  mOriginal =
-      nullptr;
+  sInstance=this;
+  mOriginal=nullptr;
 
-  mHook =
+  mHook=
       std::make_unique<
           pl::memory::HookHandle>(
+
           reinterpret_cast<void *>(
               mRenderTarget),
 
           reinterpret_cast<void *>(
-              &ItemPhysicsRuntime::
-                  renderDetour),
+              &ItemPhysicsRuntime::renderDetour),
 
           reinterpret_cast<void **>(
               &mOriginal),
 
-          pl::memory::
-              HookPriority::Normal);
+          pl::memory::HookPriority::Normal);
 
-  if (!mHook->installed() ||
+  if (!mHook->installed()||
       !mOriginal) {
 
     mod.getLogger().error(
         "Failed to hook ItemRenderer::render");
 
     mHook.reset();
-
-    sInstance =
-        nullptr;
+    sInstance=nullptr;
 
     return false;
   }
 
-  mRenderItemGroupOriginal =
-      nullptr;
+  mRenderItemGroupOriginal=nullptr;
 
-  mRenderItemGroupHook =
+  mRenderItemGroupHook=
       std::make_unique<
           pl::memory::HookHandle>(
+
           reinterpret_cast<void *>(
               mRenderItemGroupTarget),
 
@@ -682,10 +472,9 @@ bool ItemPhysicsRuntime::install(
           reinterpret_cast<void **>(
               &mRenderItemGroupOriginal),
 
-          pl::memory::
-              HookPriority::Normal);
+          pl::memory::HookPriority::Normal);
 
-  if (!mRenderItemGroupHook->installed() ||
+  if (!mRenderItemGroupHook->installed()||
       !mRenderItemGroupOriginal) {
 
     mod.getLogger().error(
@@ -696,11 +485,8 @@ bool ItemPhysicsRuntime::install(
     mHook->reset();
     mHook.reset();
 
-    mOriginal =
-        nullptr;
-
-    sInstance =
-        nullptr;
+    mOriginal=nullptr;
+    sInstance=nullptr;
 
     return false;
   }
@@ -710,159 +496,121 @@ bool ItemPhysicsRuntime::install(
       std::memory_order_relaxed);
 
   mod.getLogger().info(
-      "Item Physics active: Java ItemPhysic scalar-roll renderer");
+      "Item Physics active: Java ItemPhysic renderer port + native actor yaw");
 
   return true;
 }
 
 void ItemPhysicsRuntime::uninstall() {
-
   mProfileSupported.store(
       false,
       std::memory_order_relaxed);
 
   if (mRenderItemGroupHook) {
-
     mRenderItemGroupHook->reset();
     mRenderItemGroupHook.reset();
   }
 
   if (mHook) {
-
     mHook->reset();
     mHook.reset();
   }
 
-  if (sInstance ==
-      this) {
+  if (sInstance==this)
+    sInstance=nullptr;
 
-    sInstance =
-        nullptr;
-  }
+  mOriginal=nullptr;
+  mRenderItemGroupOriginal=nullptr;
 
-  mOriginal =
-      nullptr;
+  mGetWorldMatrix=nullptr;
+  mMatrixPush=nullptr;
+  mMatrixRefDtor=nullptr;
 
-  mRenderItemGroupOriginal =
-      nullptr;
+  mGetBlockTypeForRendering=nullptr;
+  mGetBlockGraphicsForBlockType=nullptr;
+  mGetBlockGraphicsForBlock=nullptr;
+  mGetBlockGraphicsShape=nullptr;
+  mIsBlockShape3D=nullptr;
 
-  mGetWorldMatrix =
-      nullptr;
+  mGetRelativeShadowStorage=nullptr;
+  mEmplaceRelativeShadow=nullptr;
 
-  mMatrixPush =
-      nullptr;
-
-  mMatrixRefDtor =
-      nullptr;
-
-  mGetBlockTypeForRendering =
-      nullptr;
-
-  mGetBlockGraphicsForBlockType =
-      nullptr;
-
-  mGetBlockGraphicsForBlock =
-      nullptr;
-
-  mGetBlockGraphicsShape =
-      nullptr;
-
-  mGetRelativeShadowStorage =
-      nullptr;
-
-  mEmplaceRelativeShadow =
-      nullptr;
-
-  mRenderTarget =
-      0;
-
-  mRenderItemGroupTarget =
-      0;
-
-  mMinecraftBase =
-      0;
+  mRenderTarget=0;
+  mRenderItemGroupTarget=0;
+  mMinecraftBase=0;
 
   clearStates();
 }
 
 void ItemPhysicsRuntime::clearStates() {
-
-  std::lock_guard lock(
-      mStateMutex);
+  std::lock_guard lock(mStateMutex);
 
   mStates.clear();
-
-  mRenderCounter =
-      0;
+  mRenderCounter=0;
 }
 
 void ItemPhysicsRuntime::renderDetour(
-    void *a,
-    void *b,
-    void *c) {
+    void *self,
+    void *renderContext,
+    void *renderData) {
 
-  if (sInstance) {
-
+  if (sInstance)
     sInstance->onRender(
-        a,
-        b,
-        c);
-  }
+        self,
+        renderContext,
+        renderData);
 }
 
 void ItemPhysicsRuntime::renderItemGroupDetour(
-    void *a,
-    void *b,
-    void *c,
-    std::uint32_t d,
-    std::uint32_t e,
-    float f,
-    float g) {
+    void *self,
+    void *renderContext,
+    void *itemData,
+    std::uint32_t copyCount,
+    std::uint32_t flags,
+    float scale,
+    float animation) {
 
   if (sInstance) {
-
     sInstance->onRenderItemGroup(
-        a,
-        b,
-        c,
-        d,
-        e,
-        f,
-        g);
+        self,
+        renderContext,
+        itemData,
+        copyCount,
+        flags,
+        scale,
+        animation);
   }
 }
 
 void ItemPhysicsRuntime::onRenderItemGroup(
     void *self,
-    void *ctx,
+    void *renderContext,
     void *itemData,
-    std::uint32_t count,
+    std::uint32_t copyCount,
     std::uint32_t flags,
     float scale,
     float animation) {
 
-  const auto original =
+  const auto original=
       mRenderItemGroupOriginal;
 
-  if (!original) {
-
+  if (!original)
     return;
-  }
 
-  if (!gDroppedItemGroupActive ||
-      !gDroppedItemGroupGrounded ||
-      !self ||
-      !ctx ||
-      count <= 1 ||
-      !mGetWorldMatrix ||
-      !mMatrixPush ||
+  if (!gDroppedItemGroupActive||
+      !gDroppedItemGroupGrounded||
+      !self||
+      !renderContext||
+      copyCount<=1||
+      !mGetWorldMatrix||
+      !mMatrixPush||
       !mMatrixRefDtor) {
 
     original(
         self,
-        ctx,
+        renderContext,
         itemData,
-        count,
+        copyCount,
         flags,
         scale,
         animation);
@@ -872,20 +620,19 @@ void ItemPhysicsRuntime::onRenderItemGroup(
 
   MatrixPushScope probe(
       mGetWorldMatrix(
-          ctx),
+          renderContext),
       mMatrixPush,
       mMatrixRefDtor);
 
-  Mat4 *current =
+  Mat4 *current=
       probe.matrix();
 
   if (!current) {
-
     original(
         self,
-        ctx,
+        renderContext,
         itemData,
-        count,
+        copyCount,
         flags,
         scale,
         animation);
@@ -893,20 +640,20 @@ void ItemPhysicsRuntime::onRenderItemGroup(
     return;
   }
 
-  const Mat4 snapshot =
+  const Mat4 matrixSnapshot=
       *current;
 
   float inverse[9]{};
 
   if (!invert3x3FromMat4(
-          snapshot,
+          matrixSnapshot,
           inverse)) {
 
     original(
         self,
-        ctx,
+        renderContext,
         itemData,
-        count,
+        copyCount,
         flags,
         scale,
         animation);
@@ -914,56 +661,47 @@ void ItemPhysicsRuntime::onRenderItemGroup(
     return;
   }
 
-  constexpr std::size_t
-      baseOffset = 0x17C;
+  constexpr std::size_t kOffsetBase=0x17C;
+  constexpr std::size_t kOffsetStride=0x0C;
+  constexpr std::uint32_t kMaxExtraCopies=3;
 
-  constexpr std::size_t
-      stride = 0x0C;
-
-  constexpr std::uint32_t
-      maxExtra = 3;
-
-  const std::uint32_t extra =
+  const std::uint32_t extra=
       std::min<std::uint32_t>(
-          count - 1,
-          maxExtra);
+          copyCount-1,
+          kMaxExtraCopies);
 
   std::lock_guard tableLock(
       mGroupOffsetMutex);
 
   Vec3Local saved[
-      maxExtra]{};
+      kMaxExtraCopies]{};
 
-  auto *base =
+  auto *base=
       reinterpret_cast<
           std::uint8_t *>(
           self);
 
-  for (std::uint32_t i = 0;
-       i < extra;
+  for (std::uint32_t i=0;
+       i<extra;
        ++i) {
 
-    auto *off =
-        reinterpret_cast<
-            Vec3Local *>(
-            base +
-            baseOffset +
-            static_cast<std::size_t>(
-                i) *
-                stride);
+    auto *offset=
+        reinterpret_cast<Vec3Local *>(
+            base+
+            kOffsetBase+
+            static_cast<std::size_t>(i)*
+                kOffsetStride);
 
-    saved[i] =
-        *off;
+    saved[i]=*offset;
 
-    Vec3Local world =
+    Vec3Local world=
         transformVector3(
-            snapshot,
+            matrixSnapshot,
             saved[i]);
 
-    world.y =
-        0.0f;
+    world.y=0.0f;
 
-    *off =
+    *offset=
         transformByInverse3(
             inverse,
             world);
@@ -971,56 +709,47 @@ void ItemPhysicsRuntime::onRenderItemGroup(
 
   original(
       self,
-      ctx,
+      renderContext,
       itemData,
-      count,
+      copyCount,
       flags,
       scale,
       animation);
 
-  for (std::uint32_t i = 0;
-       i < extra;
+  for (std::uint32_t i=0;
+       i<extra;
        ++i) {
 
-    auto *off =
-        reinterpret_cast<
-            Vec3Local *>(
-            base +
-            baseOffset +
-            static_cast<std::size_t>(
-                i) *
-                stride);
+    auto *offset=
+        reinterpret_cast<Vec3Local *>(
+            base+
+            kOffsetBase+
+            static_cast<std::size_t>(i)*
+                kOffsetStride);
 
-    *off =
-        saved[i];
+    *offset=saved[i];
   }
 }
 
 float ItemPhysicsRuntime::seededUnit(
-    std::uint32_t s) noexcept {
+    std::uint32_t seed) noexcept {
 
-  s ^=
-      s << 13;
-
-  s ^=
-      s >> 17;
-
-  s ^=
-      s << 5;
+  seed^=seed<<13;
+  seed^=seed>>17;
+  seed^=seed<<5;
 
   return static_cast<float>(
-             s &
-             0x00FFFFFFu) /
+             seed&
+             0x00FFFFFFu)/
          16777215.0f;
 }
 
 float ItemPhysicsRuntime::wrapPi(
-    float v) noexcept {
+    float value) noexcept {
 
   return std::remainder(
-      v,
-      2.0f *
-          kPi);
+      value,
+      2.0f*kPi);
 }
 
 float ItemPhysicsRuntime::moveAngle(
@@ -1028,154 +757,118 @@ float ItemPhysicsRuntime::moveAngle(
     float target,
     float maxStep) noexcept {
 
-  const float d =
+  const float delta=
       wrapPi(
-          target -
-          current);
+          target-current);
 
-  if (std::abs(d) <=
-      maxStep) {
-
-    return wrapPi(
-        target);
-  }
+  if (std::abs(delta)<=maxStep)
+    return wrapPi(target);
 
   return wrapPi(
-      current +
+      current+
       std::copysign(
           maxStep,
-          d));
+          delta));
 }
 
 bool ItemPhysicsRuntime::libcxxStringEquals(
-    std::uintptr_t address,
+    std::uintptr_t stringAddress,
     std::string_view wanted) noexcept {
 
-  if (!address) {
-
+  if (!stringAddress)
     return false;
-  }
 
-  const auto *raw =
+  const auto *raw=
       reinterpret_cast<
           const std::uint8_t *>(
-          address);
+          stringAddress);
 
-  const std::uint8_t flag =
+  const std::uint8_t flag=
       raw[0];
 
-  std::size_t length =
-      0;
+  std::size_t length=0;
+  const char *data=nullptr;
 
-  const char *data =
-      nullptr;
+  if ((flag&1u)==0) {
+    length=
+        static_cast<std::size_t>(
+            flag>>1);
 
-  if ((flag &
-       1u) ==
-      0) {
-
-    length =
-        static_cast<
-            std::size_t>(
-            flag >>
-            1);
-
-    data =
+    data=
         reinterpret_cast<
             const char *>(
-            raw +
-            1);
-
+            raw+1);
   } else {
-
-    length =
+    length=
         *reinterpret_cast<
             const std::size_t *>(
-            raw +
-            8);
+            raw+8);
 
-    data =
+    data=
         *reinterpret_cast<
             const char *const *>(
-            raw +
-            16);
+            raw+16);
   }
 
-  return
-      data &&
-      length ==
-          wanted.size() &&
-
-      std::memcmp(
-          data,
-          wanted.data(),
-          length) ==
-          0;
+  return data&&
+         length==wanted.size()&&
+         std::memcmp(
+             data,
+             wanted.data(),
+             length)==0;
 }
 
 bool ItemPhysicsRuntime::tryGetRenderBlockShape(
-    std::uintptr_t actor,
+    std::uintptr_t actorAddress,
     std::int32_t &shape) const noexcept {
 
-  shape =
-      -1;
+  shape=-1;
 
-  if (!actor ||
-      !mGetBlockTypeForRendering ||
-      !mGetBlockGraphicsForBlockType ||
-      !mGetBlockGraphicsShape) {
-
+  if (!actorAddress||
+      !mGetBlockTypeForRendering||
+      !mGetBlockGraphicsForBlockType||
+      !mGetBlockGraphicsShape)
     return false;
-  }
 
-  const void *stack =
+  const void *itemStackBase=
       reinterpret_cast<
           const void *>(
-          actor +
-          profile::
-              kItemStackBaseOffset);
+          actorAddress+
+          profile::kItemStackBaseOffset);
 
-  const void *weak =
+  const void *weakPtrAddress=
       mGetBlockTypeForRendering(
-          stack);
+          itemStackBase);
 
-  if (!weak) {
-
+  if (!weakPtrAddress)
     return false;
-  }
 
-  const auto counter =
+  const auto counter=
       *reinterpret_cast<
           const std::uintptr_t *>(
-          weak);
+          weakPtrAddress);
 
-  if (!counter) {
-
+  if (!counter)
     return false;
-  }
 
-  const auto type =
+  const auto blockType=
       *reinterpret_cast<
           const std::uintptr_t *>(
           counter);
 
-  if (!type) {
-
+  if (!blockType)
     return false;
-  }
 
-  const void *graphics =
+  const void *graphics=
       mGetBlockGraphicsForBlockType(
           reinterpret_cast<
               const void *>(
-              type));
+              blockType));
 
-  if (!graphics) {
-
+  if (!graphics)
     return false;
-  }
 
-  shape =
+  shape=
       mGetBlockGraphicsShape(
           graphics);
 
@@ -1186,26 +879,21 @@ bool ItemPhysicsRuntime::tryGetBlockShape(
     const void *block,
     std::int32_t &shape) const noexcept {
 
-  shape =
-      -1;
+  shape=-1;
 
-  if (!block ||
-      !mGetBlockGraphicsForBlock ||
-      !mGetBlockGraphicsShape) {
-
+  if (!block||
+      !mGetBlockGraphicsForBlock||
+      !mGetBlockGraphicsShape)
     return false;
-  }
 
-  const void *graphics =
+  const void *graphics=
       mGetBlockGraphicsForBlock(
           block);
 
-  if (!graphics) {
-
+  if (!graphics)
     return false;
-  }
 
-  shape =
+  shape=
       mGetBlockGraphicsShape(
           graphics);
 
@@ -1214,1077 +902,980 @@ bool ItemPhysicsRuntime::tryGetBlockShape(
 
 ItemPhysicsRuntime::ItemRenderTraits
 ItemPhysicsRuntime::classifyItem(
-    std::uintptr_t actor) const noexcept {
+    std::uintptr_t actorAddress) const noexcept {
 
-  ItemRenderTraits t{};
+  ItemRenderTraits traits{};
 
-  std::int32_t shape =
-      -1;
+  if (!actorAddress)
+    return traits;
+
+  auto useBlockShape=
+      [&](std::int32_t shape) {
+
+        traits.valid=true;
+        traits.modelClass=
+            ModelClass::BlockItem;
+
+        traits.hasBlockShape=true;
+        traits.blockShape=shape;
+
+        traits.blockLike=
+            mIsBlockShape3D
+                ?mIsBlockShape3D(shape)
+                :true;
+
+        traits.pivotY=
+            traits.blockLike
+                ?((shape==kSkullShape||
+                   shape==kLargePivotShape)
+                      ?kLargeBlockPivotY
+                      :kNormalBlockPivotY)
+                :0.0f;
+      };
+
+  std::int32_t renderShape=-1;
 
   if (tryGetRenderBlockShape(
-          actor,
-          shape)) {
+          actorAddress,
+          renderShape)) {
 
-    t.valid =
-        true;
+    useBlockShape(
+        renderShape);
 
-    t.modelClass =
-        ModelClass::BlockItem;
-
-    t.hasBlockShape =
-        true;
-
-    t.blockShape =
-        shape;
-
-    return t;
+    return traits;
   }
 
-  const auto block =
+  const auto block=
       *reinterpret_cast<
           const void *const *>(
-          actor +
-          profile::
-              kBlockPtrOffset);
+          actorAddress+
+          profile::kBlockPtrOffset);
 
   if (block) {
+    std::int32_t blockShape=-1;
 
-    t.valid =
-        true;
-
-    t.modelClass =
-        ModelClass::BlockItem;
-
-    t.hasBlockShape =
-        tryGetBlockShape(
+    if (tryGetBlockShape(
             block,
-            t.blockShape);
+            blockShape)) {
 
-    return t;
+      useBlockShape(
+          blockShape);
+    } else {
+      traits.valid=true;
+
+      traits.modelClass=
+          ModelClass::BlockItem;
+
+      traits.blockLike=true;
+      traits.pivotY=
+          kNormalBlockPivotY;
+    }
+
+    return traits;
   }
 
-  const auto handle =
+  const auto itemHandle=
       *reinterpret_cast<
           const std::uintptr_t *>(
-          actor +
-          profile::
-              kItemHandleOffset);
+          actorAddress+
+          profile::kItemHandleOffset);
 
-  if (!handle) {
+  if (!itemHandle)
+    return traits;
 
-    return t;
-  }
-
-  const auto item =
+  const auto item=
       *reinterpret_cast<
           const std::uintptr_t *>(
-          handle);
+          itemHandle);
 
-  if (!item) {
+  if (!item)
+    return traits;
 
-    return t;
-  }
+  const auto identifier=
+      item+
+      profile::kItemIdentifierOffset;
 
-  const auto id =
-      item +
-      profile::
-          kItemIdentifierOffset;
-
-  t.valid =
-      true;
+  traits.valid=true;
+  traits.blockLike=false;
+  traits.pivotY=0.0f;
 
   if (libcxxStringEquals(
-          id,
+          identifier,
           kShieldId)) {
 
-    t.modelClass =
+    traits.modelClass=
         ModelClass::SpecialItem;
 
-    t.specialKind =
+    traits.specialKind=
         SpecialKind::Shield;
+  }
 
-  } else if (
-      libcxxStringEquals(
-          id,
-          kBannerId)) {
+  else if (libcxxStringEquals(
+               identifier,
+               kBannerId)) {
 
-    t.modelClass =
+    traits.modelClass=
         ModelClass::SpecialItem;
 
-    t.specialKind =
+    traits.specialKind=
         SpecialKind::Banner;
+  }
 
-  } else {
-
-    t.modelClass =
+  else {
+    traits.modelClass=
         ModelClass::FlatItem;
+
+    traits.specialKind=
+        SpecialKind::None;
   }
 
-  return t;
+  return traits;
 }
 
-ItemPhysicsRuntime::PhysicsState &
-ItemPhysicsRuntime::stateFor(
-    std::uint32_t id,
-    std::chrono::steady_clock::time_point now) {
+void *ItemPhysicsRuntime::findComponentStorage(
+    void *actor,
+    std::uint32_t componentHash) const noexcept {
 
-  auto [it, inserted] =
-      mStates.try_emplace(
-          id);
+  if (!actor)
+    return nullptr;
 
-  auto &s =
-      it->second;
+  const auto actorAddress=
+      reinterpret_cast<
+          std::uintptr_t>(
+          actor);
 
-  if (inserted ||
-      !s.initialized) {
+  const auto registry=
+      *reinterpret_cast<
+          const std::uintptr_t *>(
+          actorAddress+
+          profile::kActorRegistryOffset);
 
-    s.initialized =
-        true;
+  if (!registry)
+    return nullptr;
 
-    s.wasGrounded =
-        true;
+  const auto bucketsBegin=
+      *reinterpret_cast<
+          const std::uintptr_t *>(
+          registry+0x38);
 
-    s.roll =
-        0.0f;
+  const auto bucketsEnd=
+      *reinterpret_cast<
+          const std::uintptr_t *>(
+          registry+0x40);
 
-    s.yaw =
-        (seededUnit(
-             id ^
-             0x27D4EB2Du) *
-             2.0f -
-         1.0f) *
-        kPi;
+  const auto nodesBase=
+      *reinterpret_cast<
+          const std::uintptr_t *>(
+          registry+0x50);
 
-    s.lastUpdate =
-        now;
+  const auto sentinel=
+      *reinterpret_cast<
+          const std::uintptr_t *>(
+          registry+0x58);
 
-    s.lastSeen =
-        now;
-  }
+  if (!bucketsBegin||
+      !bucketsEnd||
+      bucketsEnd<=bucketsBegin||
+      !nodesBase)
+    return nullptr;
 
-  return s;
-}
+  const auto bucketBytes=
+      bucketsEnd-
+      bucketsBegin;
 
-void ItemPhysicsRuntime::updateState(
-    PhysicsState &s,
-    bool blockLike,
-    bool grounded,
-    bool hasMotion,
-    float motionX,
-    float motionZ,
-    std::chrono::steady_clock::time_point now) const {
+  if ((bucketBytes%
+       sizeof(std::uintptr_t))!=0||
 
-  const float dt =
-      std::clamp(
-          std::chrono::duration<float>(
-              now -
-              s.lastUpdate)
-              .count(),
-          0.0f,
-          0.05f);
+      bucketBytes/
+              sizeof(std::uintptr_t)>
+          (1u<<20))
+    return nullptr;
 
-  s.lastUpdate =
-      now;
+  const auto bucketCount=
+      bucketBytes/
+      sizeof(std::uintptr_t);
 
-  s.lastSeen =
-      now;
+  if (!bucketCount)
+    return nullptr;
 
-  if (!grounded) {
+  const auto bucket=
+      (bucketCount-1)&
+      componentHash;
 
-    const float h2 =
-        motionX *
-            motionX +
-        motionZ *
-            motionZ;
+  std::int64_t nodeIndex=
+      *reinterpret_cast<
+          const std::int64_t *>(
+          bucketsBegin+
+          bucket*
+              sizeof(std::uintptr_t));
 
-    if (s.wasGrounded &&
-        hasMotion &&
-        h2 >
-            kMotionWake *
-                kMotionWake) {
+  for (int guard=0;
+       nodeIndex!=-1&&
+       guard<4096;
+       ++guard) {
 
-      s.yaw =
-          std::atan2(
-              motionZ,
-              motionX);
+    const auto node=
+        nodesBase+
+        static_cast<
+            std::uintptr_t>(
+            nodeIndex)*
+            32u;
+
+    if (node==sentinel)
+      return nullptr;
+
+    if (*reinterpret_cast<
+            const std::uint32_t *>(
+            node+8)==
+        componentHash) {
+
+      const auto storage=
+          *reinterpret_cast<
+              const std::uintptr_t *>(
+              node+0x10);
+
+      return reinterpret_cast<void *>(
+          storage);
     }
 
-    const float speed =
-        std::clamp(
-            mRotationSpeed.load(
-                std::memory_order_relaxed),
-            0.0f,
-            3.0f);
-
-    s.roll =
-        wrapPi(
-            s.roll +
-            kJavaAirRollRate *
-                speed *
-                dt);
-
-    s.wasGrounded =
-        false;
-
-    return;
+    nodeIndex=
+        *reinterpret_cast<
+            const std::int64_t *>(
+            node);
   }
 
-  if (!blockLike) {
-
-    const float target =
-        std::round(
-            s.roll /
-            kPi) *
-        kPi;
-
-    const float settle =
-        std::max(
-            0.0f,
-            mSettleSpeed.load(
-                std::memory_order_relaxed));
-
-    s.roll =
-        moveAngle(
-            s.roll,
-            target,
-            kFlatSettleRate *
-                settle *
-                dt);
-  }
-
-  s.wasGrounded =
-      true;
+  return nullptr;
 }
 
-void ItemPhysicsRuntime::pruneStates(
-    std::chrono::steady_clock::time_point now) {
+bool ItemPhysicsRuntime::findPackedEntity(
+    void *storage,
+    std::uint32_t entityId,
+    std::uint32_t &packedEntity) const noexcept {
 
-  for (auto it =
-           mStates.begin();
+  packedEntity=0;
 
-       it !=
-       mStates.end();) {
+  if (!storage)
+    return false;
 
-    if (now -
-            it->second.lastSeen >
-        kStateTtl) {
+  const auto storageAddress=
+      reinterpret_cast<
+          std::uintptr_t>(
+          storage);
 
-      it =
-          mStates.erase(
-              it);
+  const auto pagesBegin=
+      *reinterpret_cast<
+          const std::uintptr_t *>(
+          storageAddress+0x08);
 
-    } else {
+  const auto pagesEnd=
+      *reinterpret_cast<
+          const std::uintptr_t *>(
+          storageAddress+0x10);
 
-      ++it;
-    }
-  }
+  if (!pagesBegin||
+      !pagesEnd||
+      pagesEnd<pagesBegin)
+    return false;
+
+  const auto bytes=
+      pagesEnd-
+      pagesBegin;
+
+  if ((bytes%
+       sizeof(std::uintptr_t))!=0)
+    return false;
+
+  const auto pageCount=
+      bytes/
+      sizeof(std::uintptr_t);
+
+  const auto pageIndex=
+      (entityId>>11)&
+      0x7Fu;
+
+  if (pageIndex>=pageCount)
+    return false;
+
+  const auto page=
+      *reinterpret_cast<
+          const std::uintptr_t *>(
+          pagesBegin+
+          pageIndex*
+              sizeof(std::uintptr_t));
+
+  if (!page)
+    return false;
+
+  const auto slot=
+      entityId&
+      0x7FFu;
+
+  packedEntity=
+      *reinterpret_cast<
+          const std::uint32_t *>(
+          page+
+          slot*
+              sizeof(std::uint32_t));
+
+  const auto generation=
+      entityId&
+      0xFFFC0000u;
+
+  return
+      (packedEntity^generation)<=
+      0x3FFFEu;
+}
+
+void *ItemPhysicsRuntime::findDenseComponent(
+    void *actor,
+    std::uint32_t componentHash,
+    std::size_t stride) const noexcept {
+
+  if (!actor||
+      !stride)
+    return nullptr;
+
+  void *storage=
+      findComponentStorage(
+          actor,
+          componentHash);
+
+  if (!storage)
+    return nullptr;
+
+  const auto actorAddress=
+      reinterpret_cast<
+          std::uintptr_t>(
+          actor);
+
+  const auto entityId=
+      *reinterpret_cast<
+          const std::uint32_t *>(
+          actorAddress+
+          profile::kActorEntityIdOffset);
+
+  std::uint32_t packed=0;
+
+  if (!findPackedEntity(
+          storage,
+          entityId,
+          packed))
+    return nullptr;
+
+  const auto dense=
+      packed&
+      0x3FFFFu;
+
+  const auto storageAddress=
+      reinterpret_cast<
+          std::uintptr_t>(
+          storage);
+
+  const auto componentPages=
+      *reinterpret_cast<
+          const std::uintptr_t *>(
+          storageAddress+0x50);
+
+  if (!componentPages)
+    return nullptr;
+
+  const auto page=
+      *reinterpret_cast<
+          const std::uintptr_t *>(
+          componentPages+
+          (dense>>7)*
+              sizeof(std::uintptr_t));
+
+  if (!page)
+    return nullptr;
+
+  return reinterpret_cast<void *>(
+      page+
+      static_cast<std::uintptr_t>(
+          dense&0x7Fu)*
+          stride);
+}
+
+bool ItemPhysicsRuntime::getActorRotation(
+    void *actor,
+    Vec2Abi &rotation) const noexcept {
+
+  rotation={};
+
+  const auto *component=
+      static_cast<
+          const ActorRotationComponentAbi *>(
+          findDenseComponent(
+              actor,
+              profile::kActorRotationComponentHash,
+              sizeof(ActorRotationComponentAbi)));
+
+  if (!component||
+      !std::isfinite(component->rot.x)||
+      !std::isfinite(component->rot.y))
+    return false;
+
+  rotation=
+      component->rot;
+
+  return true;
+}
+
+bool ItemPhysicsRuntime::hasOnGroundComponent(
+    void *actor) const noexcept {
+
+  if (!actor)
+    return false;
+
+  void *storage=
+      findComponentStorage(
+          actor,
+          profile::kOnGroundFlagComponentHash);
+
+  if (!storage)
+    return false;
+
+  const auto actorAddress=
+      reinterpret_cast<
+          std::uintptr_t>(
+          actor);
+
+  const auto entityId=
+      *reinterpret_cast<
+          const std::uint32_t *>(
+          actorAddress+
+          profile::kActorEntityIdOffset);
+
+  std::uint32_t packed=0;
+
+  return findPackedEntity(
+      storage,
+      entityId,
+      packed);
 }
 
 void ItemPhysicsRuntime::updateItemShadowComponent(
     void *actor,
     bool grounded,
-    bool hide) const noexcept {
+    bool hideShadow) const noexcept {
 
-  if (!actor ||
-      !mGetRelativeShadowStorage ||
-      !mEmplaceRelativeShadow) {
-
+  if (!actor||
+      !mGetRelativeShadowStorage||
+      !mEmplaceRelativeShadow)
     return;
-  }
 
-  const auto a =
+  const auto actorAddress=
       reinterpret_cast<
           std::uintptr_t>(
           actor);
 
-  auto *registry =
+  auto *registry=
       *reinterpret_cast<
           void **>(
-          a +
-          profile::
-              kActorRegistryOffset);
+          actorAddress+
+          profile::kActorRegistryOffset);
 
-  const auto entity =
+  const auto entityId=
       *reinterpret_cast<
           const std::uint32_t *>(
-          a +
-          profile::
-              kActorEntityIdOffset);
+          actorAddress+
+          profile::kActorEntityIdOffset);
 
-  if (!registry) {
-
+  if (!registry)
     return;
-  }
 
-  void *storage =
-      mGetRelativeShadowStorage(
-          registry,
-          profile::
-              kRelativeShadowOffsetComponentHash);
+  void *storage=
+      findComponentStorage(
+          actor,
+          profile::kRelativeShadowOffsetComponentHash);
 
   if (!storage) {
+    storage=
+        mGetRelativeShadowStorage(
+            registry,
+            profile::kRelativeShadowOffsetComponentHash);
+  }
 
+  if (!storage)
     return;
-  }
 
-  const float wanted =
-      hide
-          ? std::numeric_limits<float>::max()
-          : (grounded
-                 ? 0.0f
-                 : -0.5f);
+  const float wanted=
+      hideShadow
+          ?std::numeric_limits<float>::max()
+          :(grounded
+                ?0.0f
+                :-0.5f);
 
-  const auto sa =
-      reinterpret_cast<
-          std::uintptr_t>(
-          storage);
+  std::uint32_t packed=0;
 
-  const auto begin =
-      *reinterpret_cast<
-          const std::uintptr_t *>(
-          sa +
-          0x08);
+  if (!findPackedEntity(
+          storage,
+          entityId,
+          packed)) {
 
-  const auto end =
-      *reinterpret_cast<
-          const std::uintptr_t *>(
-          sa +
-          0x10);
-
-  bool present =
-      false;
-
-  std::uint32_t packed =
-      0;
-
-  if (begin &&
-      end >=
-          begin) {
-
-    const auto pageCount =
-        (end -
-         begin) /
-        sizeof(
-            std::uintptr_t);
-
-    const auto pageIndex =
-        (entity >>
-         11) &
-        0x7Fu;
-
-    if (pageIndex <
-        pageCount) {
-
-      const auto page =
-          *reinterpret_cast<
-              const std::uintptr_t *>(
-              begin +
-              pageIndex *
-                  sizeof(
-                      std::uintptr_t));
-
-      if (page) {
-
-        packed =
-            *reinterpret_cast<
-                const std::uint32_t *>(
-                page +
-                (entity &
-                 0x7FFu) *
-                    sizeof(
-                        std::uint32_t));
-
-        present =
-            (packed ^
-             (entity &
-              0xFFFC0000u)) <=
-            0x3FFFEu;
-      }
-    }
-  }
-
-  if (!present) {
-
-    const std::uint32_t copy =
-        entity;
+    const std::uint32_t entityCopy=
+        entityId;
 
     (void)mEmplaceRelativeShadow(
         storage,
-        &copy,
+        &entityCopy,
         false,
         &wanted);
 
     return;
   }
 
-  const auto dense =
-      packed &
+  const auto dense=
+      packed&
       0x3FFFFu;
 
-  const auto pages =
+  const auto storageAddress=
+      reinterpret_cast<
+          std::uintptr_t>(
+          storage);
+
+  const auto componentPages=
       *reinterpret_cast<
           const std::uintptr_t *>(
-          sa +
-          0x50);
+          storageAddress+0x50);
 
-  if (!pages) {
-
+  if (!componentPages)
     return;
-  }
 
-  const auto page =
+  const auto page=
       *reinterpret_cast<
           const std::uintptr_t *>(
-          pages +
-          (dense >>
-           7) *
-              sizeof(
-                  std::uintptr_t));
+          componentPages+
+          (dense>>7)*
+              sizeof(std::uintptr_t));
 
-  if (!page) {
-
+  if (!page)
     return;
-  }
 
   *reinterpret_cast<float *>(
-      page +
-      (dense &
-       0x7Fu) *
-          sizeof(float)) =
+      page+
+      static_cast<std::uintptr_t>(
+          dense&0x7Fu)*
+          sizeof(float))=
       wanted;
 }
 
-bool ItemPhysicsRuntime::hasOnGroundComponent(
-    void *actor) const noexcept {
+ItemPhysicsRuntime::PhysicsState &
+ItemPhysicsRuntime::stateFor(
+    std::uint32_t entityId,
+    std::chrono::steady_clock::time_point now) {
 
-  if (!actor) {
+  auto [it,inserted]=
+      mStates.try_emplace(
+          entityId);
 
-    return false;
+  auto &state=
+      it->second;
+
+  if (inserted||
+      !state.initialized) {
+
+    state.initialized=true;
+
+    state.roll=0.0f;
+
+    state.yaw=
+        (seededUnit(
+             entityId^
+             0x27D4EB2Du)*
+             2.0f-
+         1.0f)*
+        kPi;
+
+    state.lastUpdate=now;
+    state.lastSeen=now;
   }
 
-  const auto a =
-      reinterpret_cast<
-          std::uintptr_t>(
-          actor);
+  return state;
+}
 
-  const auto registry =
-      *reinterpret_cast<
-          const std::uintptr_t *>(
-          a +
-          profile::
-              kActorRegistryOffset);
+void ItemPhysicsRuntime::updateState(
+    PhysicsState &state,
+    bool blockLike,
+    bool grounded,
+    bool hasNativeRotation,
+    float nativeYaw,
+    std::chrono::steady_clock::time_point now) const {
 
-  const auto entity =
-      *reinterpret_cast<
-          const std::uint32_t *>(
-          a +
-          profile::
-              kActorEntityIdOffset);
+  const float dt=
+      std::clamp(
+          std::chrono::duration<float>(
+              now-
+              state.lastUpdate)
+              .count(),
+          0.0f,
+          0.05f);
 
-  if (!registry) {
+  state.lastUpdate=now;
+  state.lastSeen=now;
 
-    return false;
+  if (hasNativeRotation&&
+      std::isfinite(nativeYaw)) {
+
+    state.yaw=
+        wrapPi(
+            nativeYaw);
   }
 
-  const auto begin =
-      *reinterpret_cast<
-          const std::uintptr_t *>(
-          registry +
-          0x38);
+  const float speed=
+      std::clamp(
+          mRotationSpeed.load(
+              std::memory_order_relaxed),
+          0.0f,
+          3.0f);
 
-  const auto end =
-      *reinterpret_cast<
-          const std::uintptr_t *>(
-          registry +
-          0x40);
+  if (!grounded) {
+    state.roll=
+        wrapPi(
+            state.roll+
+            kJavaAirRollRate*
+                speed*
+                dt);
 
-  const auto nodes =
-      *reinterpret_cast<
-          const std::uintptr_t *>(
-          registry +
-          0x50);
-
-  const auto sentinel =
-      *reinterpret_cast<
-          const std::uintptr_t *>(
-          registry +
-          0x58);
-
-  if (!begin ||
-      !end ||
-      end <=
-          begin ||
-      !nodes) {
-
-    return false;
+    return;
   }
 
-  const auto bytes =
-      end -
-      begin;
-
-  if (bytes %
-              sizeof(
-                  std::uintptr_t) !=
-          0 ||
-
-      bytes /
-              sizeof(
-                  std::uintptr_t) >
-          (1u << 20)) {
-
-    return false;
+  if (!blockLike) {
+    state.roll=0.0f;
+    return;
   }
 
-  const auto count =
-      bytes /
-      sizeof(
-          std::uintptr_t);
+  if (!mOldRotation.load(
+          std::memory_order_relaxed))
+    return;
 
-  if (!count) {
+  const float target=
+      std::round(
+          state.roll/
+          kHalfPi)*
+      kHalfPi;
 
-    return false;
+  const float error=
+      std::abs(
+          wrapPi(
+              target-
+              state.roll));
+
+  if (error<=kOldSnapEpsilon) {
+    state.roll=
+        wrapPi(
+            target);
+
+    return;
   }
 
-  const auto bucket =
-      (count -
-       1) &
-      profile::
-          kOnGroundFlagComponentHash;
+  state.roll=
+      moveAngle(
+          state.roll,
+          target,
+          kJavaOldGroundRate*
+              speed*
+              dt);
+}
 
-  std::int64_t index =
-      *reinterpret_cast<
-          const std::int64_t *>(
-          begin +
-          bucket *
-              sizeof(
-                  std::uintptr_t));
+void ItemPhysicsRuntime::pruneStates(
+    std::chrono::steady_clock::time_point now) {
 
-  std::uintptr_t node =
-      0;
+  for (auto it=mStates.begin();
+       it!=mStates.end();) {
 
-  for (int guard = 0;
-       index != -1 &&
-       guard < 4096;
-       ++guard) {
+    if (now-
+            it->second.lastSeen>
+        kStateTtl) {
 
-    node =
-        nodes +
-        static_cast<
-            std::uintptr_t>(
-            index) *
-            32u;
-
-    if (*reinterpret_cast<
-            const std::uint32_t *>(
-            node +
-            8) ==
-        profile::
-            kOnGroundFlagComponentHash) {
-
-      break;
+      it=
+          mStates.erase(
+              it);
+    } else {
+      ++it;
     }
-
-    index =
-        *reinterpret_cast<
-            const std::int64_t *>(
-            node);
-
-    node =
-        0;
   }
-
-  if (!node ||
-      node ==
-          sentinel) {
-
-    return false;
-  }
-
-  const auto storage =
-      *reinterpret_cast<
-          const std::uintptr_t *>(
-          node +
-          0x10);
-
-  if (!storage) {
-
-    return false;
-  }
-
-  const auto pagesBegin =
-      *reinterpret_cast<
-          const std::uintptr_t *>(
-          storage +
-          0x8);
-
-  const auto pagesEnd =
-      *reinterpret_cast<
-          const std::uintptr_t *>(
-          storage +
-          0x10);
-
-  if (!pagesBegin ||
-      !pagesEnd ||
-      pagesEnd <
-          pagesBegin) {
-
-    return false;
-  }
-
-  const auto pageCount =
-      (pagesEnd -
-       pagesBegin) /
-      sizeof(
-          std::uintptr_t);
-
-  const auto pageIndex =
-      (entity >>
-       11) &
-      0x7Fu;
-
-  if (pageIndex >=
-      pageCount) {
-
-    return false;
-  }
-
-  const auto page =
-      *reinterpret_cast<
-          const std::uintptr_t *>(
-          pagesBegin +
-          pageIndex *
-              sizeof(
-                  std::uintptr_t));
-
-  if (!page) {
-
-    return false;
-  }
-
-  const auto slotValue =
-      *reinterpret_cast<
-          const std::uint32_t *>(
-          page +
-          (entity &
-           0x7FFu) *
-              sizeof(
-                  std::uint32_t));
-
-  return
-      (slotValue ^
-       (entity &
-        0xFFFC0000u)) <=
-      0x3FFFEu;
 }
 
 void ItemPhysicsRuntime::onRender(
     void *self,
-    void *ctx,
+    void *renderContext,
     void *renderData) {
 
-  const auto original =
+  const auto original=
       mOriginal;
 
-  if (!original) {
-
+  if (!original)
     return;
-  }
 
-  if (!ctx ||
-      !renderData ||
+  if (!renderContext||
+      !renderData||
       !mProfileSupported.load(
           std::memory_order_relaxed)) {
 
     original(
         self,
-        ctx,
+        renderContext,
         renderData);
 
     return;
   }
 
-  const auto rd =
+  const auto renderDataAddress=
       reinterpret_cast<
           std::uintptr_t>(
           renderData);
 
-  auto *actor =
+  auto *actor=
       *reinterpret_cast<
           void **>(
-          rd +
-          profile::
-              kRenderDataActorOffset);
+          renderDataAddress+
+          profile::kRenderDataActorOffset);
 
   if (!actor) {
-
     original(
         self,
-        ctx,
+        renderContext,
         renderData);
 
     return;
   }
 
-  const auto a =
+  const auto actorAddress=
       reinterpret_cast<
           std::uintptr_t>(
           actor);
 
-  const bool grounded =
+  const bool grounded=
       hasOnGroundComponent(
           actor);
 
-  const bool enabled =
+  const bool enabled=
       mEnabled.load(
           std::memory_order_relaxed);
 
   updateItemShadowComponent(
       actor,
       grounded,
-      enabled &&
+      enabled&&
           mHideItemShadow.load(
               std::memory_order_relaxed));
 
   if (!enabled) {
-
     original(
         self,
-        ctx,
+        renderContext,
         renderData);
 
     return;
   }
 
-  const auto traits =
+  const ItemRenderTraits traits=
       classifyItem(
-          a);
+          actorAddress);
 
   if (!traits.valid) {
-
     original(
         self,
-        ctx,
+        renderContext,
         renderData);
 
     return;
   }
 
-  Vec3MotionAbi motion{};
+  Vec2Abi nativeRotation{};
 
-  bool hasMotion =
-      false;
+  const bool hasNativeRotation=
+      getActorRotation(
+          actor,
+          nativeRotation);
 
-  const auto getPosDelta =
-      reinterpret_cast<
-          GetPosDeltaFn>(
-          mMinecraftBase +
-          profile::
-              kGetPosDeltaRva);
+  const float nativeYaw=
+      hasNativeRotation
+          ?nativeRotation.y*
+               kDegToRad
+          :0.0f;
 
-  if (getPosDelta) {
-
-    if (const auto *p =
-            getPosDelta(
-                actor);
-
-        p &&
-        std::isfinite(
-            p->x) &&
-        std::isfinite(
-            p->y) &&
-        std::isfinite(
-            p->z)) {
-
-      motion =
-          *p;
-
-      hasMotion =
-          true;
-    }
-  }
-
-  const float totalSpeed =
-      hasMotion
-          ? std::sqrt(
-                motion.x *
-                    motion.x +
-                motion.y *
-                    motion.y +
-                motion.z *
-                    motion.z)
-          : 0.0f;
-
-  bool physicsGrounded =
-      grounded;
-
-  PhysicsState snapshot{};
-
-  const auto entity =
+  const auto entityId=
       *reinterpret_cast<
           const std::uint32_t *>(
-          a +
-          profile::
-              kActorEntityIdOffset);
+          actorAddress+
+          profile::kActorEntityIdOffset);
+
+  PhysicsState snapshot{};
 
   {
     std::lock_guard lock(
         mStateMutex);
 
-    const auto now =
+    const auto now=
         std::chrono::
             steady_clock::now();
 
-    auto &state =
+    auto &state=
         stateFor(
-            entity,
+            entityId,
             now);
-
-    if (!physicsGrounded &&
-        state.wasGrounded &&
-        hasMotion &&
-        totalSpeed <
-            kGroundFlickerSpeed &&
-        std::abs(
-            motion.y) <
-            kGroundFlickerVertical) {
-
-      physicsGrounded =
-          true;
-    }
 
     updateState(
         state,
-        traits.blockLike(),
-        physicsGrounded,
-        hasMotion,
-        motion.x,
-        motion.z,
+        traits.blockLike,
+        grounded,
+        hasNativeRotation,
+        nativeYaw,
         now);
 
-    snapshot =
-        state;
+    snapshot=state;
 
-    if ((++mRenderCounter &
-         0xFFu) ==
-        0) {
+    if ((++mRenderCounter&
+         0xFFu)==0) {
 
       pruneStates(
           now);
     }
   }
 
-  auto &count =
+  auto &count=
       *reinterpret_cast<
           std::uint8_t *>(
-          a +
-          profile::
-              kItemCountOffset);
+          actorAddress+
+          profile::kItemCountOffset);
 
-  auto &frame =
+  auto &inItemFrame=
       *reinterpret_cast<
           std::uint8_t *>(
-          a +
-          profile::
-              kIsInItemFrameOffset);
+          actorAddress+
+          profile::kIsInItemFrameOffset);
 
-  const auto oldCount =
-      count;
-
-  const auto oldFrame =
-      frame;
+  const auto oldCount=count;
+  const auto oldInItemFrame=
+      inItemFrame;
 
   if (mSingleModel.load(
           std::memory_order_relaxed)) {
-
-    count =
-        1;
+    count=1;
   }
 
-  frame =
-      1;
+  inItemFrame=1;
 
-  auto *position =
+  auto *position=
       reinterpret_cast<
           float *>(
-          rd +
-          profile::
-              kRenderDataPositionOffset);
+          renderDataAddress+
+          profile::kRenderDataPositionOffset);
 
-  const float oldY =
-      position[1];
-
-  const bool flat =
-      traits.modelClass ==
-      ModelClass::FlatItem;
-
-  if (flat) {
-
-    position[1] =
-        oldY +
-        kFlatHeight;
-  }
-
-  if (grounded) {
-
-    if (traits.specialKind ==
-        SpecialKind::Shield) {
-
-      position[1] +=
-          kShieldHeight;
-
-    } else if (
-        traits.specialKind ==
-        SpecialKind::Banner) {
-
-      position[1] +=
-          kBannerHeight;
-
-    } else if (
-        traits.hasBlockShape) {
-
-      const auto shape =
-          traits.blockShape;
-
-      if (shape ==
-          kSkullShape) {
-
-        position[1] +=
-            kSkullHeight;
-
-      } else if (
-          isThinGroundShape(
-              shape)) {
-
-        position[1] +=
-            kThinHeight;
-
-      } else if (
-          isTorchGroundShape(
-              shape)) {
-
-        position[1] +=
-            kTorchHeight;
-
-      } else if (
-          isShapedGroundShape(
-              shape)) {
-
-        position[1] +=
-            kShapedHeight;
-
-      } else {
-
-        position[1] +=
-            kBlockHeight;
-      }
-    }
-  }
-
-  MatrixPushScope scope(
+  void *stack=
       mGetWorldMatrix
-          ? mGetWorldMatrix(
-                ctx)
-          : nullptr,
-      mMatrixPush,
-      mMatrixRefDtor);
+          ?mGetWorldMatrix(
+               renderContext)
+          :nullptr;
 
-  Mat4 *matrix =
-      scope.matrix();
+  {
+    MatrixPushScope matrixScope(
+        stack,
+        mMatrixPush,
+        mMatrixRefDtor);
 
-  if (!matrix) {
+    Mat4 *matrix=
+        matrixScope.matrix();
 
-    position[1] =
-        oldY;
+    if (!matrix) {
+      count=oldCount;
+      inItemFrame=oldInItemFrame;
 
-    count =
-        oldCount;
+      original(
+          self,
+          renderContext,
+          renderData);
 
-    frame =
-        oldFrame;
+      return;
+    }
 
-    original(
-        self,
-        ctx,
-        renderData);
-
-    return;
-  }
-
-  const float x =
-      position[0];
-
-  const float y =
-      position[1];
-
-  const float z =
-      position[2];
-
-  postTranslate(
-      *matrix,
-      x,
-      y,
-      z);
-
-  postRotateX(
-      *matrix,
-      kBaseTilt);
-
-  postRotateZ(
-      *matrix,
-      snapshot.yaw);
-
-  postRotateY(
-      *matrix,
-      snapshot.roll);
-
-  if (flat) {
+    const float x=position[0];
+    const float y=position[1];
+    const float z=position[2];
 
     postTranslate(
         *matrix,
-        0.0f,
-        kAtlasFlatLocalY,
-        0.0f);
+        x,
+        y,
+        z);
+
+    postRotateX(
+        *matrix,
+        kJavaBaseTilt);
+
+    postRotateZ(
+        *matrix,
+        snapshot.yaw);
+
+    if (traits.blockLike) {
+      postTranslate(
+          *matrix,
+          0.0f,
+          kJavaBlockOffsetY,
+          kJavaBlockOffsetZ);
+
+      postTranslate(
+          *matrix,
+          0.0f,
+          traits.pivotY,
+          0.0f);
+
+      postRotateY(
+          *matrix,
+          snapshot.roll);
+
+      postTranslate(
+          *matrix,
+          0.0f,
+          -traits.pivotY,
+          0.0f);
+    } else {
+      postTranslate(
+          *matrix,
+          0.0f,
+          0.0f,
+          kJavaFlatOffsetZ);
+
+      postRotateY(
+          *matrix,
+          snapshot.roll);
+    }
+
+    postTranslate(
+        *matrix,
+        -x,
+        -y,
+        -z);
+
+    const bool previousActive=
+        gDroppedItemGroupActive;
+
+    const bool previousGrounded=
+        gDroppedItemGroupGrounded;
+
+    gDroppedItemGroupActive=
+        !mSingleModel.load(
+            std::memory_order_relaxed);
+
+    gDroppedItemGroupGrounded=
+        grounded;
+
+    original(
+        self,
+        renderContext,
+        renderData);
+
+    gDroppedItemGroupActive=
+        previousActive;
+
+    gDroppedItemGroupGrounded=
+        previousGrounded;
   }
 
-  postTranslate(
-      *matrix,
-      -x,
-      -y,
-      -z);
-
-  const bool prevActive =
-      gDroppedItemGroupActive;
-
-  const bool prevGround =
-      gDroppedItemGroupGrounded;
-
-  gDroppedItemGroupActive =
-      !mSingleModel.load(
-          std::memory_order_relaxed);
-
-  gDroppedItemGroupGrounded =
-      grounded;
-
-  original(
-      self,
-      ctx,
-      renderData);
-
-  gDroppedItemGroupActive =
-      prevActive;
-
-  gDroppedItemGroupGrounded =
-      prevGround;
-
-  position[1] =
-      oldY;
-
-  count =
-      oldCount;
-
-  frame =
-      oldFrame;
+  count=oldCount;
+  inItemFrame=oldInItemFrame;
 }
 
 }
