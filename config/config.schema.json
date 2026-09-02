@@ -1,14 +1,40 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Levi Item Physics",
-  "description": "Java-style dropped item physics rendered client-side with a fixed ground pose.",
+  "description": "Java ItemPhysic-style dropped item rotation with Bedrock renderer adaptation.",
   "type": "object",
   "properties": {
-    "version": {"type": "integer", "default": 7, "readOnly": true},
-    "enabled": {"type": "boolean", "title": "Enabled", "default": true},
-    "singleModel": {"type": "boolean", "title": "Single Model", "default": true},
-    "hideItemShadow": {"type": "boolean", "title": "Hide Item Shadow", "default": true},
-    "rotationSpeed": {"type": "number", "title": "Tumble Speed", "minimum": 0.25, "maximum": 3.0, "default": 1.0},
-    "settleSpeed": {"type": "number", "title": "Settle Speed", "minimum": 0.5, "maximum": 8.0, "default": 3.0}
+    "version": {
+      "type": "integer",
+      "default": 8,
+      "readOnly": true
+    },
+    "enabled": {
+      "type": "boolean",
+      "title": "Enabled",
+      "default": true
+    },
+    "singleModel": {
+      "type": "boolean",
+      "title": "Single Model",
+      "default": false
+    },
+    "hideItemShadow": {
+      "type": "boolean",
+      "title": "Hide Item Shadow",
+      "default": true
+    },
+    "oldRotation": {
+      "type": "boolean",
+      "title": "Old Rotation",
+      "default": false
+    },
+    "rotationSpeed": {
+      "type": "number",
+      "title": "Tumble Speed",
+      "minimum": 0.25,
+      "maximum": 3.0,
+      "default": 1.0
+    }
   }
 }
