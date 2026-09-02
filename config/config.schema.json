@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Levi Item Physics",
-  "description": "Java ItemPhysic-style dropped item rotation with Bedrock renderer adaptation.",
+  "description": "Java ItemPhysic-style dropped-item physics adapted to Bedrock render models.",
   "type": "object",
   "properties": {
     "version": {
       "type": "integer",
-      "default": 8,
+      "default": 9,
       "readOnly": true
     },
     "enabled": {
