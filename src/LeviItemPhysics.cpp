@@ -1,6 +1,5 @@
 #include "ItemPhysicsConfig.hpp"
 #include "ItemPhysicsRuntime.hpp"
-
 #include <cerrno>
 #include <cmath>
 #include <cstdlib>
@@ -9,7 +8,6 @@
 #include <sstream>
 #include <string>
 #include <string_view>
-
 #include <pl/Mod.hpp>
 #include <pl/ModMenu.hpp>
 
@@ -32,33 +30,6 @@ constexpr std::string_view kRotationSpeedKey =
 
 constexpr std::string_view kSettleSpeedKey =
     "settleSpeed";
-
-constexpr std::string_view kGroundTiltKey =
-    "groundTilt";
-
-constexpr std::string_view kHeightOffsetKey =
-    "heightOffset";
-
-constexpr std::string_view kBlockGroundHeightKey =
-    "blockGroundHeight";
-
-constexpr std::string_view kThinBlockGroundHeightKey =
-    "thinBlockGroundHeight";
-
-constexpr std::string_view kTorchGroundHeightKey =
-    "torchGroundHeight";
-
-constexpr std::string_view kShapedBlockGroundHeightKey =
-    "shapedBlockGroundHeight";
-
-constexpr std::string_view kSkullGroundHeightKey =
-    "skullGroundHeight";
-
-constexpr std::string_view kShieldGroundHeightKey =
-    "shieldGroundHeight";
-
-constexpr std::string_view kBannerGroundHeightKey =
-    "bannerGroundHeight";
 
 bool parseBool(
     std::string_view value,
@@ -287,177 +258,6 @@ public:
                 numberText(
                     kMaxSettleSpeed))
 
-            .config(
-                std::string(
-                    kGroundTiltKey),
-
-                "Ground Angle",
-
-                pl::modmenu::
-                    ConfigType::
-                        SliderFloat,
-
-                numberText(
-                    snapshot.groundTilt),
-
-                numberText(
-                    kMinGroundTilt),
-
-                numberText(
-                    kMaxGroundTilt))
-
-            .config(
-                std::string(
-                    kHeightOffsetKey),
-
-                "Flat Item Height",
-
-                pl::modmenu::
-                    ConfigType::
-                        SliderFloat,
-
-                numberText(
-                    snapshot.heightOffset),
-
-                numberText(
-                    kMinHeightOffset),
-
-                numberText(
-                    kMaxHeightOffset))
-
-            .config(
-                std::string(
-                    kBlockGroundHeightKey),
-
-                "Block Ground Height",
-
-                pl::modmenu::
-                    ConfigType::
-                        SliderFloat,
-
-                numberText(
-                    snapshot.blockGroundHeight),
-
-                numberText(
-                    kMinGroundHeight),
-
-                numberText(
-                    kMaxGroundHeight))
-
-            .config(
-                std::string(
-                    kThinBlockGroundHeightKey),
-
-                "Thin Block Height",
-
-                pl::modmenu::
-                    ConfigType::
-                        SliderFloat,
-
-                numberText(
-                    snapshot.thinBlockGroundHeight),
-
-                numberText(
-                    kMinGroundHeight),
-
-                numberText(
-                    kMaxGroundHeight))
-
-            .config(
-                std::string(
-                    kTorchGroundHeightKey),
-
-                "Torch / Cross Height",
-
-                pl::modmenu::
-                    ConfigType::
-                        SliderFloat,
-
-                numberText(
-                    snapshot.torchGroundHeight),
-
-                numberText(
-                    kMinGroundHeight),
-
-                numberText(
-                    kMaxGroundHeight))
-
-            .config(
-                std::string(
-                    kShapedBlockGroundHeightKey),
-
-                "Shaped Block Height",
-
-                pl::modmenu::
-                    ConfigType::
-                        SliderFloat,
-
-                numberText(
-                    snapshot.shapedBlockGroundHeight),
-
-                numberText(
-                    kMinGroundHeight),
-
-                numberText(
-                    kMaxGroundHeight))
-
-            .config(
-                std::string(
-                    kSkullGroundHeightKey),
-
-                "Head / Skull Height",
-
-                pl::modmenu::
-                    ConfigType::
-                        SliderFloat,
-
-                numberText(
-                    snapshot.skullGroundHeight),
-
-                numberText(
-                    kMinGroundHeight),
-
-                numberText(
-                    kMaxGroundHeight))
-
-            .config(
-                std::string(
-                    kShieldGroundHeightKey),
-
-                "Shield Height",
-
-                pl::modmenu::
-                    ConfigType::
-                        SliderFloat,
-
-                numberText(
-                    snapshot.shieldGroundHeight),
-
-                numberText(
-                    kMinGroundHeight),
-
-                numberText(
-                    kMaxGroundHeight))
-
-            .config(
-                std::string(
-                    kBannerGroundHeightKey),
-
-                "Banner Height",
-
-                pl::modmenu::
-                    ConfigType::
-                        SliderFloat,
-
-                numberText(
-                    snapshot.bannerGroundHeight),
-
-                numberText(
-                    kMinGroundHeight),
-
-                numberText(
-                    kMaxGroundHeight))
-
             .onConfigChanged(
                 onConfigChanged)
 
@@ -480,7 +280,7 @@ public:
 
       mSelf.getLogger().info(
           "Item Physics enabled and registered in Mod Menu "
-          "with Ground Height V4 sliders + Item Shadow toggle");
+          "with fixed ground pose + Item Shadow toggle");
 
     } else {
 
@@ -519,7 +319,6 @@ public:
   }
 
 private:
-
   ll::mod::NativeMod &
       mSelf;
 
@@ -697,96 +496,6 @@ private:
 
     else if (
         key ==
-        kGroundTiltKey) {
-
-      config.groundTilt =
-          parseDouble(
-              value,
-              config.groundTilt);
-    }
-
-    else if (
-        key ==
-        kHeightOffsetKey) {
-
-      config.heightOffset =
-          parseDouble(
-              value,
-              config.heightOffset);
-    }
-
-    else if (
-        key ==
-        kBlockGroundHeightKey) {
-
-      config.blockGroundHeight =
-          parseDouble(
-              value,
-              config.blockGroundHeight);
-    }
-
-    else if (
-        key ==
-        kThinBlockGroundHeightKey) {
-
-      config.thinBlockGroundHeight =
-          parseDouble(
-              value,
-              config.thinBlockGroundHeight);
-    }
-
-    else if (
-        key ==
-        kTorchGroundHeightKey) {
-
-      config.torchGroundHeight =
-          parseDouble(
-              value,
-              config.torchGroundHeight);
-    }
-
-    else if (
-        key ==
-        kShapedBlockGroundHeightKey) {
-
-      config.shapedBlockGroundHeight =
-          parseDouble(
-              value,
-              config.shapedBlockGroundHeight);
-    }
-
-    else if (
-        key ==
-        kSkullGroundHeightKey) {
-
-      config.skullGroundHeight =
-          parseDouble(
-              value,
-              config.skullGroundHeight);
-    }
-
-    else if (
-        key ==
-        kShieldGroundHeightKey) {
-
-      config.shieldGroundHeight =
-          parseDouble(
-              value,
-              config.shieldGroundHeight);
-    }
-
-    else if (
-        key ==
-        kBannerGroundHeightKey) {
-
-      config.bannerGroundHeight =
-          parseDouble(
-              value,
-              config.bannerGroundHeight);
-    }
-
-    else if (
-        key ==
         kEnabledKey) {
 
       config.enabled =
@@ -823,7 +532,7 @@ private:
 using RegisteredMod =
     LeviItemPhysicsMod;
 
-} // namespace itemphysics
+}
 
 PL_REGISTER_MOD(
     itemphysics::RegisteredMod,
