@@ -7,60 +7,254 @@
 
 namespace itemphysics {
 namespace {
-
 constexpr float kPi=3.14159265358979323846f;
 constexpr float kHalfPi=kPi*0.5f;
 constexpr float kDegToRad=kPi/180.0f;
+constexpr auto kStateTtl=std::chrono::seconds(8);
+constexpr std::int32_t kSkullShape=83;
+constexpr float kExtentEpsilon=0.0005f;
+constexpr float kThinYRatio=0.70f;
+constexpr std::string_view kShieldId="minecraft:shield";
+constexpr std::string_view kBannerId="minecraft:banner";
 
 constexpr float kJavaBaseTilt=kHalfPi;
 constexpr float kJavaAirRollRate=10.0f;
 constexpr float kJavaOldGroundRate=5.0f;
-constexpr float kOldSnapEpsilon=5.0f*kDegToRad;
-
+constexpr float kJavaBlockPivotY=0.20f;
 constexpr float kJavaBlockOffsetY=-0.20f;
 constexpr float kJavaBlockOffsetZ=-0.08f;
-constexpr float kJavaFlatOffsetZ=-0.04f;
+constexpr float kPlanarPreAlignStartY=0.035f;
+constexpr float kPlanarPreAlignFullY=-0.12f;
+constexpr float kPlanarPreAlignRate=8.0f;
+constexpr float kPlanarGroundRate=14.0f;
+constexpr float kShapedMaxGroundTilt=35.0f*kDegToRad;
 
-constexpr float kNormalBlockPivotY=0.25f;
-constexpr float kLargeBlockPivotY=0.50f;
+constexpr float kFlatHeight=-0.09f;
+constexpr float kThinHeight=-0.11f;
+constexpr float kShapedHeight=-0.10f;
+constexpr float kHeadHeight=-0.25f;
+constexpr float kSpecialHeight=-0.10f;
+constexpr float kAtlasFlatLocalY=0.25f;
 
-constexpr std::int32_t kSkullShape=83;
-constexpr std::int32_t kLargePivotShape=101;
+constexpr float kMinecraftTicksPerSecond=20.0f;
+constexpr float kSensitiveWake=0.010f;
+constexpr float kBaseNaturalSpin=0.72f;
+constexpr float kHorizontalSpinGain=0.40f;
+constexpr float kVerticalSpinGain=0.08f;
+constexpr float kMaxFlatAngular=3.15f;
+constexpr float kMaxThinAngular=2.45f;
+constexpr float kMaxSpecialAngular=2.75f;
+constexpr float kAirDampingFlat=2.15f;
+constexpr float kAirDampingThin=2.45f;
+constexpr float kAirDampingSpecial=2.25f;
+constexpr float kPreSettleDelay=0.040f;
+constexpr float kPreSettleRamp=0.260f;
+constexpr float kPreSpringFlat=27.0f;
+constexpr float kPreSpringThin=29.0f;
+constexpr float kPreSpringSpecial=27.0f;
+constexpr float kPreDampingFlat=8.6f;
+constexpr float kPreDampingThin=9.2f;
+constexpr float kPreDampingSpecial=8.7f;
+constexpr float kContactSpringFlat=34.0f;
+constexpr float kContactSpringThin=36.0f;
+constexpr float kContactSpringSpecial=34.0f;
+constexpr float kContactDampingFlat=11.4f;
+constexpr float kContactDampingThin=12.0f;
+constexpr float kContactDampingSpecial=11.5f;
+constexpr float kStopAngular=0.020f;
+constexpr float kStopError=0.0045f;
 
-constexpr auto kStateTtl=
-    std::chrono::seconds(8);
+constexpr float kHeadAirTilt=24.0f*kDegToRad;
+constexpr float kHeadAirResponse=6.5f;
+constexpr float kHeadGroundResponse=10.0f;
 
-constexpr std::string_view kShieldId=
-    "minecraft:shield";
-
-constexpr std::string_view kBannerId=
-    "minecraft:banner";
-
-struct Vec3Local {
-  float x{};
-  float y{};
-  float z{};
-};
-
+struct Vec3Local { float x{},y{},z{}; };
+struct QuatLocal { float w{1.0f},x{},y{},z{}; };
 thread_local bool gDroppedItemGroupActive=false;
 thread_local bool gDroppedItemGroupGrounded=false;
+
+float dot3(Vec3Local a,Vec3Local b) noexcept { return a.x*b.x+a.y*b.y+a.z*b.z; }
+Vec3Local cross3(Vec3Local a,Vec3Local b) noexcept { return {a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x}; }
+float length3(Vec3Local v) noexcept { return std::sqrt(dot3(v,v)); }
+
+Vec3Local normalize3(Vec3Local v,Vec3Local fallback={1,0,0}) noexcept {
+  const float l=length3(v);
+  if(!std::isfinite(l)||l<1e-6f)return fallback;
+  const float s=1.0f/l;
+  return {v.x*s,v.y*s,v.z*s};
+}
+
+QuatLocal normalizeQ(QuatLocal q) noexcept {
+  const float l=std::sqrt(q.w*q.w+q.x*q.x+q.y*q.y+q.z*q.z);
+  if(!std::isfinite(l)||l<1e-7f)return {};
+  const float s=1.0f/l;
+  return {q.w*s,q.x*s,q.y*s,q.z*s};
+}
+
+QuatLocal mulQ(QuatLocal a,QuatLocal b) noexcept {
+  return {
+      a.w*b.w-a.x*b.x-a.y*b.y-a.z*b.z,
+      a.w*b.x+a.x*b.w+a.y*b.z-a.z*b.y,
+      a.w*b.y-a.x*b.z+a.y*b.w+a.z*b.x,
+      a.w*b.z+a.x*b.y-a.y*b.x+a.z*b.w
+  };
+}
+
+QuatLocal axisAngleQ(Vec3Local axis,float angle) noexcept {
+  axis=normalize3(axis);
+  const float h=angle*0.5f,s=std::sin(h);
+  return normalizeQ({std::cos(h),axis.x*s,axis.y*s,axis.z*s});
+}
+
+Vec3Local rotateQ(QuatLocal q,Vec3Local v) noexcept {
+  q=normalizeQ(q);
+  const Vec3Local u{q.x,q.y,q.z};
+  const Vec3Local uv=cross3(u,v),uuv=cross3(u,uv);
+  return {
+      v.x+2*(q.w*uv.x+uuv.x),
+      v.y+2*(q.w*uv.y+uuv.y),
+      v.z+2*(q.w*uv.z+uuv.z)
+  };
+}
+
+QuatLocal fromToQ(Vec3Local from,Vec3Local to) noexcept {
+  from=normalize3(from);
+  to=normalize3(to);
+  const float d=std::clamp(dot3(from,to),-1.0f,1.0f);
+  if(d>0.999999f)return {};
+  if(d<-0.999999f){
+    Vec3Local axis=cross3(from,{1,0,0});
+    if(length3(axis)<1e-4f)axis=cross3(from,{0,0,1});
+    return axisAngleQ(axis,kPi);
+  }
+  const Vec3Local c=cross3(from,to);
+  return normalizeQ({1+d,c.x,c.y,c.z});
+}
+
+Vec3Local shortestAngularError(QuatLocal current,QuatLocal target) noexcept {
+  current=normalizeQ(current);
+  target=normalizeQ(target);
+
+  QuatLocal d=normalizeQ(
+      mulQ(
+          target,
+          {current.w,-current.x,-current.y,-current.z}));
+
+  if(d.w<0){
+    d.w=-d.w;
+    d.x=-d.x;
+    d.y=-d.y;
+    d.z=-d.z;
+  }
+
+  const float vl=std::sqrt(
+      d.x*d.x+
+      d.y*d.y+
+      d.z*d.z);
+
+  if(vl<1e-7f)return {};
+
+  const float a=2*std::atan2(
+      vl,
+      std::clamp(d.w,-1.0f,1.0f));
+
+  const float s=a/vl;
+
+  return {
+      d.x*s,
+      d.y*s,
+      d.z*s
+  };
+}
+
+QuatLocal integrateWorldAngular(
+    QuatLocal q,
+    Vec3Local omega,
+    float dt) noexcept {
+
+  const float speed=length3(omega);
+
+  if(speed<1e-5f||dt<=0)
+    return q;
+
+  return normalizeQ(
+      mulQ(
+          axisAngleQ(omega,speed*dt),
+          q));
+}
+
+void postRotateQuat(
+    Mat4 &m,
+    QuatLocal q) noexcept {
+
+  q=normalizeQ(q);
+
+  const float xx=q.x*q.x;
+  const float yy=q.y*q.y;
+  const float zz=q.z*q.z;
+  const float xy=q.x*q.y;
+  const float xz=q.x*q.z;
+  const float yz=q.y*q.z;
+  const float wx=q.w*q.x;
+  const float wy=q.w*q.y;
+  const float wz=q.w*q.z;
+
+  const float r00=1-2*(yy+zz);
+  const float r01=2*(xy-wz);
+  const float r02=2*(xz+wy);
+
+  const float r10=2*(xy+wz);
+  const float r11=1-2*(xx+zz);
+  const float r12=2*(yz-wx);
+
+  const float r20=2*(xz-wy);
+  const float r21=2*(yz+wx);
+  const float r22=1-2*(xx+yy);
+
+  float c0[4],c1[4],c2[4];
+
+  std::memcpy(c0,&m.m[0],sizeof(c0));
+  std::memcpy(c1,&m.m[4],sizeof(c1));
+  std::memcpy(c2,&m.m[8],sizeof(c2));
+
+  for(int r=0;r<4;++r){
+    m.m[r]=
+        c0[r]*r00+
+        c1[r]*r10+
+        c2[r]*r20;
+
+    m.m[4+r]=
+        c0[r]*r01+
+        c1[r]*r11+
+        c2[r]*r21;
+
+    m.m[8+r]=
+        c0[r]*r02+
+        c1[r]*r12+
+        c2[r]*r22;
+  }
+}
 
 bool invert3x3FromMat4(
     const Mat4 &m,
     float inv[9]) noexcept {
 
-  const float a00=m.m[0],a01=m.m[4],a02=m.m[8];
-  const float a10=m.m[1],a11=m.m[5],a12=m.m[9];
-  const float a20=m.m[2],a21=m.m[6],a22=m.m[10];
+  const float a00=m.m[0];
+  const float a01=m.m[4];
+  const float a02=m.m[8];
+  const float a10=m.m[1];
+  const float a11=m.m[5];
+  const float a12=m.m[9];
+  const float a20=m.m[2];
+  const float a21=m.m[6];
+  const float a22=m.m[10];
 
   const float c00=a11*a22-a12*a21;
   const float c01=a02*a21-a01*a22;
   const float c02=a01*a12-a02*a11;
-
   const float c10=a12*a20-a10*a22;
   const float c11=a00*a22-a02*a20;
   const float c12=a02*a10-a00*a12;
-
   const float c20=a10*a21-a11*a20;
   const float c21=a01*a20-a00*a21;
   const float c22=a00*a11-a01*a10;
@@ -70,8 +264,8 @@ bool invert3x3FromMat4(
       a01*c10+
       a02*c20;
 
-  if (!std::isfinite(det)||
-      std::abs(det)<1.0e-8f)
+  if(!std::isfinite(det)||
+     std::abs(det)<1e-8f)
     return false;
 
   const float d=1.0f/det;
@@ -79,11 +273,9 @@ bool invert3x3FromMat4(
   inv[0]=c00*d;
   inv[1]=c01*d;
   inv[2]=c02*d;
-
   inv[3]=c10*d;
   inv[4]=c11*d;
   inv[5]=c12*d;
-
   inv[6]=c20*d;
   inv[7]=c21*d;
   inv[8]=c22*d;
@@ -92,21 +284,13 @@ bool invert3x3FromMat4(
 }
 
 Vec3Local transformVector3(
-    const Mat4 &m,
+    const Mat4&m,
     Vec3Local v) noexcept {
 
   return {
-      m.m[0]*v.x+
-          m.m[4]*v.y+
-          m.m[8]*v.z,
-
-      m.m[1]*v.x+
-          m.m[5]*v.y+
-          m.m[9]*v.z,
-
-      m.m[2]*v.x+
-          m.m[6]*v.y+
-          m.m[10]*v.z
+      m.m[0]*v.x+m.m[4]*v.y+m.m[8]*v.z,
+      m.m[1]*v.x+m.m[5]*v.y+m.m[9]*v.z,
+      m.m[2]*v.x+m.m[6]*v.y+m.m[10]*v.z
   };
 }
 
@@ -115,18 +299,99 @@ Vec3Local transformByInverse3(
     Vec3Local v) noexcept {
 
   return {
-      inv[0]*v.x+
-          inv[1]*v.y+
-          inv[2]*v.z,
-
-      inv[3]*v.x+
-          inv[4]*v.y+
-          inv[5]*v.z,
-
-      inv[6]*v.x+
-          inv[7]*v.y+
-          inv[8]*v.z
+      inv[0]*v.x+inv[1]*v.y+inv[2]*v.z,
+      inv[3]*v.x+inv[4]*v.y+inv[5]*v.z,
+      inv[6]*v.x+inv[7]*v.y+inv[8]*v.z
   };
+}
+
+bool isThinGroundShape(std::int32_t s) noexcept {
+  switch(s){
+  case 9:
+  case 14:
+  case 15:
+  case 23:
+  case 67:
+  case 68:
+  case 69:
+  case 72:
+  case 73:
+  case 80:
+  case 96:
+  case 99:
+  case 114:
+  case 126:
+  case 135:
+  case 136:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool isTorchGroundShape(std::int32_t s) noexcept {
+  switch(s){
+  case 1:
+  case 2:
+  case 90:
+  case 101:
+  case 155:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool isShapedGroundShape(std::int32_t s) noexcept {
+  switch(s){
+  case 7:
+  case 8:
+  case 10:
+  case 11:
+  case 12:
+  case 13:
+  case 18:
+  case 19:
+  case 20:
+  case 21:
+  case 22:
+  case 25:
+  case 26:
+  case 28:
+  case 31:
+  case 32:
+  case 40:
+  case 42:
+  case 43:
+  case 44:
+  case 70:
+  case 71:
+  case 74:
+  case 76:
+  case 77:
+  case 78:
+  case 79:
+  case 81:
+  case 84:
+  case 87:
+  case 89:
+  case 100:
+  case 102:
+  case 107:
+  case 108:
+  case 110:
+  case 111:
+  case 112:
+  case 113:
+  case 115:
+  case 116:
+  case 119:
+  case 123:
+  case 133:
+    return true;
+  default:
+    return false;
+  }
 }
 
 class MatrixPushScope {
@@ -135,41 +400,29 @@ public:
       void *stack,
       ItemPhysicsRuntime::MatrixPushFn push,
       ItemPhysicsRuntime::MatrixRefDtorFn dtor)
-      :mDtor(dtor) {
+      :mDtor(dtor){
 
-    if (!stack||
-        !push||
-        !dtor)
-      return;
-
-    mRef=push(
-        stack,
-        false);
-
-    mActive=
-        mRef.stack&&
-        mRef.mat;
+    if(stack&&push&&dtor){
+      mRef=push(stack,false);
+      mActive=mRef.stack&&mRef.mat;
+    }
   }
 
   MatrixPushScope(
-      const MatrixPushScope &)=delete;
+      const MatrixPushScope&)=delete;
 
-  MatrixPushScope &
+  MatrixPushScope&
   operator=(
-      const MatrixPushScope &)=delete;
+      const MatrixPushScope&)=delete;
 
-  ~MatrixPushScope() {
-    if (!mActive||
-        !mDtor)
-      return;
-
-    mDtor(&mRef);
-
-    mRef.stack=nullptr;
-    mRef.mat=nullptr;
+  ~MatrixPushScope(){
+    if(mActive&&mDtor){
+      mDtor(&mRef);
+      mRef.stack=nullptr;
+      mRef.mat=nullptr;
+    }
   }
 
-  [[nodiscard]]
   Mat4 *matrix() noexcept {
     return mActive
                ?mRef.mat
@@ -181,54 +434,52 @@ private:
   ItemPhysicsRuntime::MatrixRefDtorFn mDtor{};
   bool mActive{};
 };
-
 }
 
-ItemPhysicsRuntime *
-ItemPhysicsRuntime::sInstance=nullptr;
+ItemPhysicsRuntime *ItemPhysicsRuntime::sInstance=nullptr;
 
 void ItemPhysicsRuntime::applyConfig(
-    const ItemPhysicsConfig &config) noexcept {
+    const ItemPhysicsConfig &c) noexcept {
 
   mEnabled.store(
-      config.enabled,
+      c.enabled,
       std::memory_order_relaxed);
 
   mSingleModel.store(
-      config.singleModel,
+      c.singleModel,
       std::memory_order_relaxed);
 
   mHideItemShadow.store(
-      config.hideItemShadow,
+      c.hideItemShadow,
       std::memory_order_relaxed);
 
   mOldRotation.store(
-      config.oldRotation,
+      c.oldRotation,
       std::memory_order_relaxed);
 
   mRotationSpeed.store(
       static_cast<float>(
-          config.rotationSpeed),
+          c.rotationSpeed),
       std::memory_order_relaxed);
 }
 
 bool ItemPhysicsRuntime::verifyProfile(
-    const ResolvedVirtual &resolved,
+    const ResolvedVirtual &r,
     ll::mod::NativeMod &mod) const {
 
-  const auto verifyWords=
+  const auto verify=
       [&](
           std::uintptr_t address,
-          const auto &fingerprint,
-          const char *name) {
+          const auto &fp,
+          const char *name){
 
         const std::size_t bytes=
-            fingerprint.size()*
+            fp.size()*
             sizeof(std::uint32_t);
 
-        if (!resolved.module.readable(
+        if(!r.module.readable(
                 address,
-                bytes)) {
+                bytes)){
 
           mod.getLogger().warn(
               "{} is not readable",
@@ -237,97 +488,100 @@ bool ItemPhysicsRuntime::verifyProfile(
           return false;
         }
 
-        const auto *words=
+        const auto *w=
             reinterpret_cast<
-                const std::uint32_t *>(
+                const std::uint32_t*>(
                 address);
 
-        for (std::size_t i=0;
-             i<fingerprint.size();
-             ++i) {
+        for(std::size_t i=0;
+            i<fp.size();
+            ++i){
 
-          if (words[i]==fingerprint[i])
-            continue;
+          if(w[i]!=fp[i]){
+            mod.getLogger().warn(
+                "Minecraft profile mismatch: {} word {}",
+                name,
+                i);
 
-          mod.getLogger().warn(
-              "Minecraft profile mismatch: {} word {}",
-              name,
-              i);
-
-          return false;
+            return false;
+          }
         }
 
         return true;
       };
 
-  if (!verifyWords(
-          resolved.target,
-          profile::kRenderFingerprint,
-          "ItemRenderer::render")||
+  if(!verify(
+         r.target,
+         profile::kRenderFingerprint,
+         "ItemRenderer::render")||
 
-      !verifyWords(
-          resolved.module.base+
-              profile::kRenderItemGroupLikeRva,
-          profile::kRenderItemGroupLikeFingerprint,
-          "ItemRenderer render-group helper")||
+     !verify(
+         r.module.base+
+             profile::kGetPosDeltaRva,
+         profile::kGetPosDeltaFingerprint,
+         "Actor::getPosDelta")||
 
-      !verifyWords(
-          resolved.module.base+
-              profile::kGetBlockTypeForRenderingRva,
-          profile::kGetBlockTypeForRenderingFingerprint,
-          "ItemStackBase::getBlockTypeForRendering")||
+     !verify(
+         r.module.base+
+             profile::kRenderItemGroupLikeRva,
+         profile::kRenderItemGroupLikeFingerprint,
+         "ItemRenderer render-group helper")||
 
-      !verifyWords(
-          resolved.module.base+
-              profile::kBlockGraphicsGetForBlockTypeRva,
-          profile::kBlockGraphicsGetForBlockTypeFingerprint,
-          "BlockGraphics::getForBlock(BlockType)")||
+     !verify(
+         r.module.base+
+             profile::kGetBlockTypeForRenderingRva,
+         profile::kGetBlockTypeForRenderingFingerprint,
+         "ItemStackBase::getBlockTypeForRendering")||
 
-      !verifyWords(
-          resolved.module.base+
-              profile::kBlockGraphicsGetBlockShapeRva,
-          profile::kBlockGraphicsGetBlockShapeFingerprint,
-          "BlockGraphics::getBlockShape")||
+     !verify(
+         r.module.base+
+             profile::kBlockGraphicsGetForBlockTypeRva,
+         profile::kBlockGraphicsGetForBlockTypeFingerprint,
+         "BlockGraphics::getForBlock(BlockType)")||
 
-      !verifyWords(
-          resolved.module.base+
-              profile::kIsBlockShape3DRva,
-          profile::kIsBlockShape3DFingerprint,
-          "BlockGraphics::isBlockShape3D")||
+     !verify(
+         r.module.base+
+             profile::kBlockGraphicsGetBlockShapeRva,
+         profile::kBlockGraphicsGetBlockShapeFingerprint,
+         "BlockGraphics::getBlockShape")||
 
-      !verifyWords(
-          resolved.module.base+
-              profile::kRelativeShadowStorageRva,
-          profile::kRelativeShadowStorageFingerprint,
-          "RelativeShadowOffsetComponent storage")||
+     !verify(
+         r.module.base+
+             profile::kIsBlockShape3DRva,
+         profile::kIsBlockShape3DFingerprint,
+         "BlockGraphics::isBlockShape3D")||
 
-      !verifyWords(
-          resolved.module.base+
-              profile::kRelativeShadowEmplaceRva,
-          profile::kRelativeShadowEmplaceFingerprint,
-          "RelativeShadowOffsetComponent emplace")) {
+     !verify(
+         r.module.base+
+             profile::kRelativeShadowStorageRva,
+         profile::kRelativeShadowStorageFingerprint,
+         "RelativeShadowOffsetComponent storage")||
 
+     !verify(
+         r.module.base+
+             profile::kRelativeShadowEmplaceRva,
+         profile::kRelativeShadowEmplaceFingerprint,
+         "RelativeShadowOffsetComponent emplace"))
     return false;
-  }
 
-  const auto executable=
-      [&](std::uintptr_t rva) {
-
-        return resolved.module.executable(
-            resolved.module.base+rva);
+  const auto ex=
+      [&](std::uintptr_t rva){
+        return r.module.executable(
+            r.module.base+rva);
       };
 
-  if (!executable(profile::kGetWorldMatrixRva)||
-      !executable(profile::kMatrixStackPushRva)||
-      !executable(profile::kMatrixStackRefDtorRva)||
-      !executable(profile::kRenderItemGroupLikeRva)||
-      !executable(profile::kGetBlockTypeForRenderingRva)||
-      !executable(profile::kBlockGraphicsGetForBlockTypeRva)||
-      !executable(profile::kBlockGraphicsGetForBlockRva)||
-      !executable(profile::kBlockGraphicsGetBlockShapeRva)||
-      !executable(profile::kIsBlockShape3DRva)||
-      !executable(profile::kRelativeShadowStorageRva)||
-      !executable(profile::kRelativeShadowEmplaceRva)) {
+  if(!ex(profile::kGetWorldMatrixRva)||
+     !ex(profile::kMatrixStackPushRva)||
+     !ex(profile::kMatrixStackRefDtorRva)||
+     !ex(profile::kGetPosDeltaRva)||
+     !ex(profile::kRenderItemGroupLikeRva)||
+     !ex(profile::kGetBlockTypeForRenderingRva)||
+     !ex(profile::kBlockGraphicsGetForBlockTypeRva)||
+     !ex(profile::kBlockGraphicsGetForBlockRva)||
+     !ex(profile::kBlockGraphicsGetBlockShapeRva)||
+     !ex(profile::kIsBlockShape3DRva)||
+     !ex(profile::kRelativeShadowStorageRva)||
+     !ex(profile::kRelativeShadowEmplaceRva)){
 
     mod.getLogger().warn(
         "Minecraft 1.26.45 renderer helper validation failed");
@@ -339,38 +593,32 @@ bool ItemPhysicsRuntime::verifyProfile(
 }
 
 bool ItemPhysicsRuntime::install(
-    ll::mod::NativeMod &mod) {
+    ll::mod::NativeMod &mod){
 
   uninstall();
 
-  auto resolved=
+  auto r=
       resolveVirtualByRtti(
           profile::kMinecraftModule,
           profile::kItemRendererRtti,
           profile::kItemRendererRenderVtableOffset);
 
-  if (!resolved) {
+  if(!r){
     mod.getLogger().warn(
         "Item Physics inactive: failed to resolve ItemRenderer");
 
     return false;
   }
 
-  if (!verifyProfile(
-          *resolved,
-          mod)) {
-
+  if(!verifyProfile(*r,mod)){
     mod.getLogger().warn(
         "Item Physics safe passthrough: Minecraft profile unsupported");
 
     return false;
   }
 
-  mMinecraftBase=
-      resolved->module.base;
-
-  mRenderTarget=
-      resolved->target;
+  mMinecraftBase=r->module.base;
+  mRenderTarget=r->target;
 
   mRenderItemGroupTarget=
       mMinecraftBase+
@@ -390,6 +638,11 @@ bool ItemPhysicsRuntime::install(
       reinterpret_cast<MatrixRefDtorFn>(
           mMinecraftBase+
           profile::kMatrixStackRefDtorRva);
+
+  mGetPosDelta=
+      reinterpret_cast<GetPosDeltaFn>(
+          mMinecraftBase+
+          profile::kGetPosDeltaRva);
 
   mGetBlockTypeForRendering=
       reinterpret_cast<GetBlockTypeForRenderingFn>(
@@ -432,20 +685,16 @@ bool ItemPhysicsRuntime::install(
   mHook=
       std::make_unique<
           pl::memory::HookHandle>(
-
-          reinterpret_cast<void *>(
+          reinterpret_cast<void*>(
               mRenderTarget),
-
-          reinterpret_cast<void *>(
+          reinterpret_cast<void*>(
               &ItemPhysicsRuntime::renderDetour),
-
-          reinterpret_cast<void **>(
+          reinterpret_cast<void**>(
               &mOriginal),
-
           pl::memory::HookPriority::Normal);
 
-  if (!mHook->installed()||
-      !mOriginal) {
+  if(!mHook->installed()||
+     !mOriginal){
 
     mod.getLogger().error(
         "Failed to hook ItemRenderer::render");
@@ -461,21 +710,16 @@ bool ItemPhysicsRuntime::install(
   mRenderItemGroupHook=
       std::make_unique<
           pl::memory::HookHandle>(
-
-          reinterpret_cast<void *>(
+          reinterpret_cast<void*>(
               mRenderItemGroupTarget),
-
-          reinterpret_cast<void *>(
-              &ItemPhysicsRuntime::
-                  renderItemGroupDetour),
-
-          reinterpret_cast<void **>(
+          reinterpret_cast<void*>(
+              &ItemPhysicsRuntime::renderItemGroupDetour),
+          reinterpret_cast<void**>(
               &mRenderItemGroupOriginal),
-
           pl::memory::HookPriority::Normal);
 
-  if (!mRenderItemGroupHook->installed()||
-      !mRenderItemGroupOriginal) {
+  if(!mRenderItemGroupHook->installed()||
+     !mRenderItemGroupOriginal){
 
     mod.getLogger().error(
         "Failed to hook item render-group helper");
@@ -496,45 +740,42 @@ bool ItemPhysicsRuntime::install(
       std::memory_order_relaxed);
 
   mod.getLogger().info(
-      "Item Physics active: Java ItemPhysic renderer port + native actor yaw");
+      "Item Physics active: Java core + Bedrock family landing v9");
 
   return true;
 }
 
-void ItemPhysicsRuntime::uninstall() {
+void ItemPhysicsRuntime::uninstall(){
   mProfileSupported.store(
       false,
       std::memory_order_relaxed);
 
-  if (mRenderItemGroupHook) {
+  if(mRenderItemGroupHook){
     mRenderItemGroupHook->reset();
     mRenderItemGroupHook.reset();
   }
 
-  if (mHook) {
+  if(mHook){
     mHook->reset();
     mHook.reset();
   }
 
-  if (sInstance==this)
+  if(sInstance==this)
     sInstance=nullptr;
 
   mOriginal=nullptr;
   mRenderItemGroupOriginal=nullptr;
-
   mGetWorldMatrix=nullptr;
   mMatrixPush=nullptr;
   mMatrixRefDtor=nullptr;
-
+  mGetPosDelta=nullptr;
   mGetBlockTypeForRendering=nullptr;
   mGetBlockGraphicsForBlockType=nullptr;
   mGetBlockGraphicsForBlock=nullptr;
   mGetBlockGraphicsShape=nullptr;
   mIsBlockShape3D=nullptr;
-
   mGetRelativeShadowStorage=nullptr;
   mEmplaceRelativeShadow=nullptr;
-
   mRenderTarget=0;
   mRenderItemGroupTarget=0;
   mMinecraftBase=0;
@@ -542,75 +783,75 @@ void ItemPhysicsRuntime::uninstall() {
   clearStates();
 }
 
-void ItemPhysicsRuntime::clearStates() {
-  std::lock_guard lock(mStateMutex);
+void ItemPhysicsRuntime::clearStates(){
+  std::lock_guard lock(
+      mStateMutex);
 
   mStates.clear();
   mRenderCounter=0;
 }
 
 void ItemPhysicsRuntime::renderDetour(
-    void *self,
-    void *renderContext,
-    void *renderData) {
+    void*a,
+    void*b,
+    void*c){
 
-  if (sInstance)
+  if(sInstance)
     sInstance->onRender(
-        self,
-        renderContext,
-        renderData);
+        a,
+        b,
+        c);
 }
 
 void ItemPhysicsRuntime::renderItemGroupDetour(
-    void *self,
-    void *renderContext,
-    void *itemData,
-    std::uint32_t copyCount,
-    std::uint32_t flags,
-    float scale,
-    float animation) {
+    void*a,
+    void*b,
+    void*c,
+    std::uint32_t d,
+    std::uint32_t e,
+    float f,
+    float g){
 
-  if (sInstance) {
+  if(sInstance)
     sInstance->onRenderItemGroup(
-        self,
-        renderContext,
-        itemData,
-        copyCount,
-        flags,
-        scale,
-        animation);
-  }
+        a,
+        b,
+        c,
+        d,
+        e,
+        f,
+        g);
 }
 
 void ItemPhysicsRuntime::onRenderItemGroup(
     void *self,
-    void *renderContext,
+    void *ctx,
     void *itemData,
-    std::uint32_t copyCount,
+    std::uint32_t count,
     std::uint32_t flags,
     float scale,
-    float animation) {
+    float animation){
 
   const auto original=
       mRenderItemGroupOriginal;
 
-  if (!original)
+  if(!original)
     return;
 
-  if (!gDroppedItemGroupActive||
-      !gDroppedItemGroupGrounded||
-      !self||
-      !renderContext||
-      copyCount<=1||
-      !mGetWorldMatrix||
-      !mMatrixPush||
-      !mMatrixRefDtor) {
+  if(!gDroppedItemGroupActive||
+     !gDroppedItemGroupGrounded||
+     !self||
+     !ctx||
+     count<=1||
+     !mGetWorldMatrix||
+     !mMatrixPush||
+     !mMatrixRefDtor){
 
     original(
         self,
-        renderContext,
+        ctx,
         itemData,
-        copyCount,
+        count,
         flags,
         scale,
         animation);
@@ -619,20 +860,19 @@ void ItemPhysicsRuntime::onRenderItemGroup(
   }
 
   MatrixPushScope probe(
-      mGetWorldMatrix(
-          renderContext),
+      mGetWorldMatrix(ctx),
       mMatrixPush,
       mMatrixRefDtor);
 
   Mat4 *current=
       probe.matrix();
 
-  if (!current) {
+  if(!current){
     original(
         self,
-        renderContext,
+        ctx,
         itemData,
-        copyCount,
+        count,
         flags,
         scale,
         animation);
@@ -640,20 +880,20 @@ void ItemPhysicsRuntime::onRenderItemGroup(
     return;
   }
 
-  const Mat4 matrixSnapshot=
+  const Mat4 snapshot=
       *current;
 
   float inverse[9]{};
 
-  if (!invert3x3FromMat4(
-          matrixSnapshot,
-          inverse)) {
+  if(!invert3x3FromMat4(
+          snapshot,
+          inverse)){
 
     original(
         self,
-        renderContext,
+        ctx,
         itemData,
-        copyCount,
+        count,
         flags,
         scale,
         animation);
@@ -661,47 +901,47 @@ void ItemPhysicsRuntime::onRenderItemGroup(
     return;
   }
 
-  constexpr std::size_t kOffsetBase=0x17C;
-  constexpr std::size_t kOffsetStride=0x0C;
-  constexpr std::uint32_t kMaxExtraCopies=3;
+  constexpr std::size_t baseOffset=0x17C;
+  constexpr std::size_t stride=0x0C;
+  constexpr std::uint32_t maxExtra=3;
 
   const std::uint32_t extra=
       std::min<std::uint32_t>(
-          copyCount-1,
-          kMaxExtraCopies);
+          count-1,
+          maxExtra);
 
   std::lock_guard tableLock(
       mGroupOffsetMutex);
 
-  Vec3Local saved[
-      kMaxExtraCopies]{};
+  Vec3Local saved[maxExtra]{};
 
   auto *base=
       reinterpret_cast<
-          std::uint8_t *>(
+          std::uint8_t*>(
           self);
 
-  for (std::uint32_t i=0;
-       i<extra;
-       ++i) {
+  for(std::uint32_t i=0;
+      i<extra;
+      ++i){
 
-    auto *offset=
-        reinterpret_cast<Vec3Local *>(
+    auto *off=
+        reinterpret_cast<
+            Vec3Local*>(
             base+
-            kOffsetBase+
+            baseOffset+
             static_cast<std::size_t>(i)*
-                kOffsetStride);
+                stride);
 
-    saved[i]=*offset;
+    saved[i]=*off;
 
     Vec3Local world=
         transformVector3(
-            matrixSnapshot,
+            snapshot,
             saved[i]);
 
-    world.y=0.0f;
+    world.y=0;
 
-    *offset=
+    *off=
         transformByInverse3(
             inverse,
             world);
@@ -709,47 +949,47 @@ void ItemPhysicsRuntime::onRenderItemGroup(
 
   original(
       self,
-      renderContext,
+      ctx,
       itemData,
-      copyCount,
+      count,
       flags,
       scale,
       animation);
 
-  for (std::uint32_t i=0;
-       i<extra;
-       ++i) {
+  for(std::uint32_t i=0;
+      i<extra;
+      ++i){
 
-    auto *offset=
-        reinterpret_cast<Vec3Local *>(
+    auto *off=
+        reinterpret_cast<
+            Vec3Local*>(
             base+
-            kOffsetBase+
+            baseOffset+
             static_cast<std::size_t>(i)*
-                kOffsetStride);
+                stride);
 
-    *offset=saved[i];
+    *off=saved[i];
   }
 }
 
 float ItemPhysicsRuntime::seededUnit(
-    std::uint32_t seed) noexcept {
+    std::uint32_t s) noexcept {
 
-  seed^=seed<<13;
-  seed^=seed>>17;
-  seed^=seed<<5;
+  s^=s<<13;
+  s^=s>>17;
+  s^=s<<5;
 
   return static_cast<float>(
-             seed&
-             0x00FFFFFFu)/
+             s&0x00FFFFFFu)/
          16777215.0f;
 }
 
 float ItemPhysicsRuntime::wrapPi(
-    float value) noexcept {
+    float v) noexcept {
 
   return std::remainder(
-      value,
-      2.0f*kPi);
+      v,
+      2*kPi);
 }
 
 float ItemPhysicsRuntime::moveAngle(
@@ -757,115 +997,112 @@ float ItemPhysicsRuntime::moveAngle(
     float target,
     float maxStep) noexcept {
 
-  const float delta=
+  const float d=
       wrapPi(
           target-current);
 
-  if (std::abs(delta)<=maxStep)
+  if(std::abs(d)<=maxStep)
     return wrapPi(target);
 
   return wrapPi(
       current+
       std::copysign(
           maxStep,
-          delta));
+          d));
 }
 
 bool ItemPhysicsRuntime::libcxxStringEquals(
-    std::uintptr_t stringAddress,
+    std::uintptr_t address,
     std::string_view wanted) noexcept {
 
-  if (!stringAddress)
+  if(!address)
     return false;
 
   const auto *raw=
       reinterpret_cast<
-          const std::uint8_t *>(
-          stringAddress);
+          const std::uint8_t*>(
+          address);
 
   const std::uint8_t flag=
       raw[0];
 
-  std::size_t length=0;
+  std::size_t len=0;
   const char *data=nullptr;
 
-  if ((flag&1u)==0) {
-    length=
+  if((flag&1u)==0){
+    len=
         static_cast<std::size_t>(
             flag>>1);
 
     data=
         reinterpret_cast<
-            const char *>(
+            const char*>(
             raw+1);
-  } else {
-    length=
+  }else{
+    len=
         *reinterpret_cast<
-            const std::size_t *>(
+            const std::size_t*>(
             raw+8);
 
     data=
         *reinterpret_cast<
-            const char *const *>(
+            const char*const*>(
             raw+16);
   }
 
   return data&&
-         length==wanted.size()&&
+         len==wanted.size()&&
          std::memcmp(
              data,
              wanted.data(),
-             length)==0;
+             len)==0;
 }
 
 bool ItemPhysicsRuntime::tryGetRenderBlockShape(
-    std::uintptr_t actorAddress,
+    std::uintptr_t actor,
     std::int32_t &shape) const noexcept {
 
   shape=-1;
 
-  if (!actorAddress||
-      !mGetBlockTypeForRendering||
-      !mGetBlockGraphicsForBlockType||
-      !mGetBlockGraphicsShape)
+  if(!actor||
+     !mGetBlockTypeForRendering||
+     !mGetBlockGraphicsForBlockType||
+     !mGetBlockGraphicsShape)
     return false;
 
-  const void *itemStackBase=
-      reinterpret_cast<
-          const void *>(
-          actorAddress+
-          profile::kItemStackBaseOffset);
-
-  const void *weakPtrAddress=
+  const void *weak=
       mGetBlockTypeForRendering(
-          itemStackBase);
+          reinterpret_cast<
+              const void*>(
+              actor+
+              profile::kItemStackBaseOffset));
 
-  if (!weakPtrAddress)
+  if(!weak)
     return false;
 
   const auto counter=
       *reinterpret_cast<
-          const std::uintptr_t *>(
-          weakPtrAddress);
+          const std::uintptr_t*>(
+          weak);
 
-  if (!counter)
+  if(!counter)
     return false;
 
-  const auto blockType=
+  const auto type=
       *reinterpret_cast<
-          const std::uintptr_t *>(
+          const std::uintptr_t*>(
           counter);
 
-  if (!blockType)
+  if(!type)
     return false;
 
   const void *graphics=
       mGetBlockGraphicsForBlockType(
           reinterpret_cast<
-              const void *>(
-              blockType));
+              const void*>(
+              type));
 
-  if (!graphics)
+  if(!graphics)
     return false;
 
   shape=
@@ -875,272 +1112,451 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
   return true;
 }
 
-bool ItemPhysicsRuntime::tryGetBlockShape(
+bool ItemPhysicsRuntime::buildBlockRenderInfo(
     const void *block,
-    std::int32_t &shape) const noexcept {
+    BlockRenderInfo &info) const noexcept {
 
-  shape=-1;
+  info={};
 
-  if (!block||
-      !mGetBlockGraphicsForBlock||
-      !mGetBlockGraphicsShape)
+  if(!block)
     return false;
 
-  const void *graphics=
-      mGetBlockGraphicsForBlock(
+  if(mGetBlockGraphicsForBlock&&
+     mGetBlockGraphicsShape){
+
+    if(const void *g=
+           mGetBlockGraphicsForBlock(
+               block))
+
+      info.blockShape=
+          mGetBlockGraphicsShape(
+              g);
+  }
+
+  const auto addr=
+      reinterpret_cast<
+          std::uintptr_t>(
           block);
 
-  if (!graphics)
-    return false;
+  auto *type=
+      *reinterpret_cast<
+          void*const*>(
+          addr+
+          profile::kBlockTypeOffset);
 
-  shape=
-      mGetBlockGraphicsShape(
-          graphics);
+  if(type){
+    auto **vt=
+        *reinterpret_cast<
+            void***>(
+            type);
+
+    if(vt){
+      constexpr std::size_t slot=
+          profile::kBlockTypeGetVisualShapeVtableOffset/
+          sizeof(void*);
+
+      auto fn=
+          reinterpret_cast<
+              GetVisualShapeFn>(
+              vt[slot]);
+
+      if(fn){
+        AabbAbi scratch{};
+
+        if(const AabbAbi *b=
+               fn(
+                   type,
+                   block,
+                   &scratch)){
+
+          const float dx=
+              b->maxX-b->minX;
+
+          const float dy=
+              b->maxY-b->minY;
+
+          const float dz=
+              b->maxZ-b->minZ;
+
+          if(std::isfinite(dx)&&
+             std::isfinite(dy)&&
+             std::isfinite(dz)&&
+             dx>kExtentEpsilon&&
+             dy>kExtentEpsilon&&
+             dz>kExtentEpsilon){
+
+            const float hMin=
+                std::min(
+                    dx,
+                    dz);
+
+            const float hMax=
+                std::max(
+                    dx,
+                    dz);
+
+            info.keepHorizontal=
+                dy<=
+                hMin*
+                    kThinYRatio;
+
+            info.verticalPlane=
+                dy>0.55f&&
+                hMin<=0.34f&&
+                hMax>=0.68f;
+
+            info.rodLike=
+                dy>0.55f&&
+                hMax<=0.60f;
+          }
+        }
+      }
+    }
+  }
+
+  if(info.blockShape==kSkullShape)
+    info.keepHorizontal=false;
+
+  info.valid=true;
 
   return true;
 }
 
 ItemPhysicsRuntime::ItemRenderTraits
 ItemPhysicsRuntime::classifyItem(
-    std::uintptr_t actorAddress) const noexcept {
+    std::uintptr_t actor) const noexcept {
 
-  ItemRenderTraits traits{};
+  ItemRenderTraits t{};
 
-  if (!actorAddress)
-    return traits;
+  if(!actor)
+    return t;
 
-  auto useBlockShape=
-      [&](std::int32_t shape) {
+  std::int32_t rendererShape=-1;
 
-        traits.valid=true;
-        traits.modelClass=
-            ModelClass::BlockItem;
+  if(tryGetRenderBlockShape(
+         actor,
+         rendererShape)){
 
-        traits.hasBlockShape=true;
-        traits.blockShape=shape;
-
-        traits.blockLike=
-            mIsBlockShape3D
-                ?mIsBlockShape3D(shape)
-                :true;
-
-        traits.pivotY=
-            traits.blockLike
-                ?((shape==kSkullShape||
-                   shape==kLargePivotShape)
-                      ?kLargeBlockPivotY
-                      :kNormalBlockPivotY)
-                :0.0f;
-      };
-
-  std::int32_t renderShape=-1;
-
-  if (tryGetRenderBlockShape(
-          actorAddress,
-          renderShape)) {
-
-    useBlockShape(
-        renderShape);
-
-    return traits;
+    t.hasRenderShape=true;
+    t.renderShape=rendererShape;
   }
 
   const auto block=
       *reinterpret_cast<
-          const void *const *>(
-          actorAddress+
+          const void*const*>(
+          actor+
           profile::kBlockPtrOffset);
 
-  if (block) {
-    std::int32_t blockShape=-1;
+  if(block){
+    t.valid=true;
+    t.modelClass=
+        ModelClass::BlockItem;
 
-    if (tryGetBlockShape(
-            block,
-            blockShape)) {
+    (void)buildBlockRenderInfo(
+        block,
+        t.block);
 
-      useBlockShape(
-          blockShape);
-    } else {
-      traits.valid=true;
+    if(t.block.blockShape<0&&
+       t.hasRenderShape)
 
-      traits.modelClass=
-          ModelClass::BlockItem;
+      t.block.blockShape=
+          t.renderShape;
+  }
 
-      traits.blockLike=true;
-      traits.pivotY=
-          kNormalBlockPivotY;
+  else if(t.hasRenderShape){
+    t.valid=true;
+    t.modelClass=
+        ModelClass::BlockItem;
+
+    t.block.valid=true;
+    t.block.blockShape=
+        t.renderShape;
+  }
+
+  else{
+    const auto handle=
+        *reinterpret_cast<
+            const std::uintptr_t*>(
+            actor+
+            profile::kItemHandleOffset);
+
+    if(!handle)
+      return t;
+
+    const auto item=
+        *reinterpret_cast<
+            const std::uintptr_t*>(
+            handle);
+
+    if(!item)
+      return t;
+
+    const auto id=
+        item+
+        profile::kItemIdentifierOffset;
+
+    t.valid=true;
+
+    if(libcxxStringEquals(
+           id,
+           kShieldId)){
+
+      t.modelClass=
+          ModelClass::SpecialItem;
+
+      t.specialKind=
+          SpecialKind::Shield;
+
+      t.family=
+          MotionFamily::Special;
     }
 
-    return traits;
+    else if(libcxxStringEquals(
+                id,
+                kBannerId)){
+
+      t.modelClass=
+          ModelClass::SpecialItem;
+
+      t.specialKind=
+          SpecialKind::Banner;
+
+      t.family=
+          MotionFamily::Special;
+    }
+
+    else{
+      t.modelClass=
+          ModelClass::FlatItem;
+
+      t.family=
+          MotionFamily::FlatItem;
+    }
+
+    return t;
   }
 
-  const auto itemHandle=
+  const std::int32_t shape=
+      t.hasRenderShape
+          ?t.renderShape
+          :t.block.blockShape;
+
+  if(shape==kSkullShape){
+    t.family=
+        MotionFamily::Head;
+
+    return t;
+  }
+
+  if(t.block.keepHorizontal||
+     isThinGroundShape(
+         shape)){
+
+    t.family=
+        MotionFamily::HorizontalThin;
+
+    return t;
+  }
+
+  if(t.block.verticalPlane){
+    t.family=
+        MotionFamily::ShapedBlock;
+
+    return t;
+  }
+
+  if(t.block.rodLike||
+     isTorchGroundShape(
+         shape)||
+     isShapedGroundShape(
+         shape)){
+
+    t.family=
+        MotionFamily::ShapedBlock;
+
+    return t;
+  }
+
+  if(shape>=0&&
+     mIsBlockShape3D&&
+     !mIsBlockShape3D(
+         shape)){
+
+    t.family=
+        MotionFamily::ShapedBlock;
+
+    return t;
+  }
+
+  t.family=
+      MotionFamily::FullBlock;
+
+  return t;
+}
+
+bool ItemPhysicsRuntime::getActorYaw(
+    void *actor,
+    float &yaw) const noexcept {
+
+  yaw=0;
+
+  if(!actor)
+    return false;
+
+  const auto a=
+      reinterpret_cast<
+          std::uintptr_t>(
+          actor);
+
+  if(*reinterpret_cast<
+         const std::uint8_t*>(
+         a+
+         profile::kItemRenderAdjustmentsEngagedOffset)){
+
+    const float firstYaw=
+        *reinterpret_cast<
+            const float*>(
+            a+
+            profile::kItemFirstRenderedYawOffset);
+
+    if(std::isfinite(
+           firstYaw)){
+
+      yaw=
+          firstYaw*
+          kDegToRad;
+
+      return true;
+    }
+  }
+
+  const auto p=
       *reinterpret_cast<
-          const std::uintptr_t *>(
-          actorAddress+
-          profile::kItemHandleOffset);
+          const std::uintptr_t*>(
+          a+
+          profile::kActorRotationComponentPtrOffset);
 
-  if (!itemHandle)
-    return traits;
+  if(!p)
+    return false;
 
-  const auto item=
+  const Vec2Abi r=
       *reinterpret_cast<
-          const std::uintptr_t *>(
-          itemHandle);
+          const Vec2Abi*>(
+          p);
 
-  if (!item)
-    return traits;
+  if(!std::isfinite(r.x)||
+     !std::isfinite(r.y))
+    return false;
 
-  const auto identifier=
-      item+
-      profile::kItemIdentifierOffset;
+  yaw=
+      r.y*
+      kDegToRad;
 
-  traits.valid=true;
-  traits.blockLike=false;
-  traits.pivotY=0.0f;
-
-  if (libcxxStringEquals(
-          identifier,
-          kShieldId)) {
-
-    traits.modelClass=
-        ModelClass::SpecialItem;
-
-    traits.specialKind=
-        SpecialKind::Shield;
-  }
-
-  else if (libcxxStringEquals(
-               identifier,
-               kBannerId)) {
-
-    traits.modelClass=
-        ModelClass::SpecialItem;
-
-    traits.specialKind=
-        SpecialKind::Banner;
-  }
-
-  else {
-    traits.modelClass=
-        ModelClass::FlatItem;
-
-    traits.specialKind=
-        SpecialKind::None;
-  }
-
-  return traits;
+  return true;
 }
 
 void *ItemPhysicsRuntime::findComponentStorage(
     void *actor,
-    std::uint32_t componentHash) const noexcept {
+    std::uint32_t hash) const noexcept {
 
-  if (!actor)
+  if(!actor)
     return nullptr;
 
-  const auto actorAddress=
+  const auto a=
       reinterpret_cast<
           std::uintptr_t>(
           actor);
 
   const auto registry=
       *reinterpret_cast<
-          const std::uintptr_t *>(
-          actorAddress+
+          const std::uintptr_t*>(
+          a+
           profile::kActorRegistryOffset);
 
-  if (!registry)
+  if(!registry)
     return nullptr;
 
-  const auto bucketsBegin=
+  const auto begin=
       *reinterpret_cast<
-          const std::uintptr_t *>(
+          const std::uintptr_t*>(
           registry+0x38);
 
-  const auto bucketsEnd=
+  const auto end=
       *reinterpret_cast<
-          const std::uintptr_t *>(
+          const std::uintptr_t*>(
           registry+0x40);
 
-  const auto nodesBase=
+  const auto nodes=
       *reinterpret_cast<
-          const std::uintptr_t *>(
+          const std::uintptr_t*>(
           registry+0x50);
 
   const auto sentinel=
       *reinterpret_cast<
-          const std::uintptr_t *>(
+          const std::uintptr_t*>(
           registry+0x58);
 
-  if (!bucketsBegin||
-      !bucketsEnd||
-      bucketsEnd<=bucketsBegin||
-      !nodesBase)
+  if(!begin||
+     !end||
+     end<=begin||
+     !nodes)
     return nullptr;
 
-  const auto bucketBytes=
-      bucketsEnd-
-      bucketsBegin;
+  const auto bytes=
+      end-begin;
 
-  if ((bucketBytes%
-       sizeof(std::uintptr_t))!=0||
-
-      bucketBytes/
-              sizeof(std::uintptr_t)>
-          (1u<<20))
+  if(bytes%
+         sizeof(std::uintptr_t)||
+     bytes/
+         sizeof(std::uintptr_t)>
+         (1u<<20))
     return nullptr;
 
-  const auto bucketCount=
-      bucketBytes/
+  const auto count=
+      bytes/
       sizeof(std::uintptr_t);
 
-  if (!bucketCount)
+  if(!count)
     return nullptr;
 
-  const auto bucket=
-      (bucketCount-1)&
-      componentHash;
-
-  std::int64_t nodeIndex=
+  std::int64_t index=
       *reinterpret_cast<
-          const std::int64_t *>(
-          bucketsBegin+
-          bucket*
+          const std::int64_t*>(
+          begin+
+          ((count-1)&hash)*
               sizeof(std::uintptr_t));
 
-  for (int guard=0;
-       nodeIndex!=-1&&
-       guard<4096;
-       ++guard) {
+  for(int guard=0;
+      index!=-1&&
+      guard<4096;
+      ++guard){
 
     const auto node=
-        nodesBase+
+        nodes+
         static_cast<
             std::uintptr_t>(
-            nodeIndex)*
+            index)*
             32u;
 
-    if (node==sentinel)
+    if(node==sentinel)
       return nullptr;
 
-    if (*reinterpret_cast<
-            const std::uint32_t *>(
-            node+8)==
-        componentHash) {
+    if(*reinterpret_cast<
+           const std::uint32_t*>(
+           node+8)==hash){
 
       const auto storage=
           *reinterpret_cast<
-              const std::uintptr_t *>(
+              const std::uintptr_t*>(
               node+0x10);
 
-      return reinterpret_cast<void *>(
+      return reinterpret_cast<void*>(
           storage);
     }
 
-    nodeIndex=
+    index=
         *reinterpret_cast<
-            const std::int64_t *>(
+            const std::int64_t*>(
             node);
   }
 
@@ -1149,182 +1565,73 @@ void *ItemPhysicsRuntime::findComponentStorage(
 
 bool ItemPhysicsRuntime::findPackedEntity(
     void *storage,
-    std::uint32_t entityId,
-    std::uint32_t &packedEntity) const noexcept {
+    std::uint32_t entity,
+    std::uint32_t &packed) const noexcept {
 
-  packedEntity=0;
+  packed=0;
 
-  if (!storage)
+  if(!storage)
     return false;
 
-  const auto storageAddress=
+  const auto s=
       reinterpret_cast<
           std::uintptr_t>(
           storage);
 
-  const auto pagesBegin=
+  const auto begin=
       *reinterpret_cast<
-          const std::uintptr_t *>(
-          storageAddress+0x08);
+          const std::uintptr_t*>(
+          s+0x08);
 
-  const auto pagesEnd=
+  const auto end=
       *reinterpret_cast<
-          const std::uintptr_t *>(
-          storageAddress+0x10);
+          const std::uintptr_t*>(
+          s+0x10);
 
-  if (!pagesBegin||
-      !pagesEnd||
-      pagesEnd<pagesBegin)
+  if(!begin||
+     !end||
+     end<begin)
     return false;
 
-  const auto bytes=
-      pagesEnd-
-      pagesBegin;
-
-  if ((bytes%
-       sizeof(std::uintptr_t))!=0)
-    return false;
-
-  const auto pageCount=
-      bytes/
+  const auto count=
+      (end-begin)/
       sizeof(std::uintptr_t);
 
-  const auto pageIndex=
-      (entityId>>11)&
+  const auto pi=
+      (entity>>11)&
       0x7Fu;
 
-  if (pageIndex>=pageCount)
+  if(pi>=count)
     return false;
 
   const auto page=
       *reinterpret_cast<
-          const std::uintptr_t *>(
-          pagesBegin+
-          pageIndex*
+          const std::uintptr_t*>(
+          begin+
+          pi*
               sizeof(std::uintptr_t));
 
-  if (!page)
+  if(!page)
     return false;
 
-  const auto slot=
-      entityId&
-      0x7FFu;
-
-  packedEntity=
+  packed=
       *reinterpret_cast<
-          const std::uint32_t *>(
+          const std::uint32_t*>(
           page+
-          slot*
+          (entity&0x7FFu)*
               sizeof(std::uint32_t));
 
-  const auto generation=
-      entityId&
-      0xFFFC0000u;
-
   return
-      (packedEntity^generation)<=
+      (packed^
+       (entity&
+        0xFFFC0000u))<=
       0x3FFFEu;
-}
-
-void *ItemPhysicsRuntime::findDenseComponent(
-    void *actor,
-    std::uint32_t componentHash,
-    std::size_t stride) const noexcept {
-
-  if (!actor||
-      !stride)
-    return nullptr;
-
-  void *storage=
-      findComponentStorage(
-          actor,
-          componentHash);
-
-  if (!storage)
-    return nullptr;
-
-  const auto actorAddress=
-      reinterpret_cast<
-          std::uintptr_t>(
-          actor);
-
-  const auto entityId=
-      *reinterpret_cast<
-          const std::uint32_t *>(
-          actorAddress+
-          profile::kActorEntityIdOffset);
-
-  std::uint32_t packed=0;
-
-  if (!findPackedEntity(
-          storage,
-          entityId,
-          packed))
-    return nullptr;
-
-  const auto dense=
-      packed&
-      0x3FFFFu;
-
-  const auto storageAddress=
-      reinterpret_cast<
-          std::uintptr_t>(
-          storage);
-
-  const auto componentPages=
-      *reinterpret_cast<
-          const std::uintptr_t *>(
-          storageAddress+0x50);
-
-  if (!componentPages)
-    return nullptr;
-
-  const auto page=
-      *reinterpret_cast<
-          const std::uintptr_t *>(
-          componentPages+
-          (dense>>7)*
-              sizeof(std::uintptr_t));
-
-  if (!page)
-    return nullptr;
-
-  return reinterpret_cast<void *>(
-      page+
-      static_cast<std::uintptr_t>(
-          dense&0x7Fu)*
-          stride);
-}
-
-bool ItemPhysicsRuntime::getActorRotation(
-    void *actor,
-    Vec2Abi &rotation) const noexcept {
-
-  rotation={};
-
-  const auto *component=
-      static_cast<
-          const ActorRotationComponentAbi *>(
-          findDenseComponent(
-              actor,
-              profile::kActorRotationComponentHash,
-              sizeof(ActorRotationComponentAbi)));
-
-  if (!component||
-      !std::isfinite(component->rot.x)||
-      !std::isfinite(component->rot.y))
-    return false;
-
-  rotation=
-      component->rot;
-
-  return true;
 }
 
 bool ItemPhysicsRuntime::hasOnGroundComponent(
     void *actor) const noexcept {
 
-  if (!actor)
+  if(!actor)
     return false;
 
   void *storage=
@@ -1332,56 +1639,56 @@ bool ItemPhysicsRuntime::hasOnGroundComponent(
           actor,
           profile::kOnGroundFlagComponentHash);
 
-  if (!storage)
+  if(!storage)
     return false;
 
-  const auto actorAddress=
+  const auto a=
       reinterpret_cast<
           std::uintptr_t>(
           actor);
 
-  const auto entityId=
+  const auto entity=
       *reinterpret_cast<
-          const std::uint32_t *>(
-          actorAddress+
+          const std::uint32_t*>(
+          a+
           profile::kActorEntityIdOffset);
 
-  std::uint32_t packed=0;
+  std::uint32_t packed{};
 
   return findPackedEntity(
       storage,
-      entityId,
+      entity,
       packed);
 }
 
 void ItemPhysicsRuntime::updateItemShadowComponent(
     void *actor,
     bool grounded,
-    bool hideShadow) const noexcept {
+    bool hide) const noexcept {
 
-  if (!actor||
-      !mGetRelativeShadowStorage||
-      !mEmplaceRelativeShadow)
+  if(!actor||
+     !mGetRelativeShadowStorage||
+     !mEmplaceRelativeShadow)
     return;
 
-  const auto actorAddress=
+  const auto a=
       reinterpret_cast<
           std::uintptr_t>(
           actor);
 
   auto *registry=
       *reinterpret_cast<
-          void **>(
-          actorAddress+
+          void**>(
+          a+
           profile::kActorRegistryOffset);
 
-  const auto entityId=
+  const auto entity=
       *reinterpret_cast<
-          const std::uint32_t *>(
-          actorAddress+
+          const std::uint32_t*>(
+          a+
           profile::kActorEntityIdOffset);
 
-  if (!registry)
+  if(!registry)
     return;
 
   void *storage=
@@ -1389,36 +1696,35 @@ void ItemPhysicsRuntime::updateItemShadowComponent(
           actor,
           profile::kRelativeShadowOffsetComponentHash);
 
-  if (!storage) {
+  if(!storage)
     storage=
         mGetRelativeShadowStorage(
             registry,
             profile::kRelativeShadowOffsetComponentHash);
-  }
 
-  if (!storage)
+  if(!storage)
     return;
 
   const float wanted=
-      hideShadow
+      hide
           ?std::numeric_limits<float>::max()
           :(grounded
                 ?0.0f
                 :-0.5f);
 
-  std::uint32_t packed=0;
+  std::uint32_t packed{};
 
-  if (!findPackedEntity(
-          storage,
-          entityId,
-          packed)) {
+  if(!findPackedEntity(
+         storage,
+         entity,
+         packed)){
 
-    const std::uint32_t entityCopy=
-        entityId;
+    const std::uint32_t copy=
+        entity;
 
     (void)mEmplaceRelativeShadow(
         storage,
-        &entityCopy,
+        &copy,
         false,
         &wanted);
 
@@ -1429,30 +1735,30 @@ void ItemPhysicsRuntime::updateItemShadowComponent(
       packed&
       0x3FFFFu;
 
-  const auto storageAddress=
+  const auto s=
       reinterpret_cast<
           std::uintptr_t>(
           storage);
 
-  const auto componentPages=
+  const auto pages=
       *reinterpret_cast<
-          const std::uintptr_t *>(
-          storageAddress+0x50);
+          const std::uintptr_t*>(
+          s+0x50);
 
-  if (!componentPages)
+  if(!pages)
     return;
 
   const auto page=
       *reinterpret_cast<
-          const std::uintptr_t *>(
-          componentPages+
+          const std::uintptr_t*>(
+          pages+
           (dense>>7)*
               sizeof(std::uintptr_t));
 
-  if (!page)
+  if(!page)
     return;
 
-  *reinterpret_cast<float *>(
+  *reinterpret_cast<float*>(
       page+
       static_cast<std::uintptr_t>(
           dense&0x7Fu)*
@@ -1460,188 +1766,732 @@ void ItemPhysicsRuntime::updateItemShadowComponent(
       wanted;
 }
 
-ItemPhysicsRuntime::PhysicsState &
+ItemPhysicsRuntime::PhysicsState&
 ItemPhysicsRuntime::stateFor(
-    std::uint32_t entityId,
-    std::chrono::steady_clock::time_point now) {
+    std::uint32_t id,
+    std::chrono::steady_clock::time_point now,
+    bool hasYaw,
+    float yaw){
 
   auto [it,inserted]=
       mStates.try_emplace(
-          entityId);
+          id);
 
-  auto &state=
+  auto &s=
       it->second;
 
-  if (inserted||
-      !state.initialized) {
+  if(inserted||
+     !s.initialized){
 
-    state.initialized=true;
+    s={};
 
-    state.roll=0.0f;
+    s.initialized=true;
+    s.wasGrounded=true;
 
-    state.yaw=
-        (seededUnit(
-             entityId^
-             0x27D4EB2Du)*
-             2.0f-
-         1.0f)*
-        kPi;
+    s.yaw=
+        hasYaw
+            ?wrapPi(yaw)
+            :(seededUnit(
+                  id^
+                  0x27D4EB2Du)*
+                  2-
+              1)*
+              kPi;
 
-    state.lastUpdate=now;
-    state.lastSeen=now;
+    s.restYaw=
+        s.yaw;
+
+    s.headDirection=
+        seededUnit(
+            id^
+            0x9E3779B9u)<
+                0.5f
+            ?-1.0f
+            :1.0f;
+
+    s.born=
+        s.lastUpdate=
+        s.lastSeen=
+        now;
   }
 
-  return state;
+  return s;
 }
 
 void ItemPhysicsRuntime::updateState(
-    PhysicsState &state,
-    bool blockLike,
+    PhysicsState &s,
+    const ItemRenderTraits &t,
     bool grounded,
-    bool hasNativeRotation,
-    float nativeYaw,
+    const Vec3Abi &motion,
+    bool hasMotion,
     std::chrono::steady_clock::time_point now) const {
 
   const float dt=
       std::clamp(
           std::chrono::duration<float>(
               now-
-              state.lastUpdate)
+              s.lastUpdate)
               .count(),
           0.0f,
           0.05f);
 
-  state.lastUpdate=now;
-  state.lastSeen=now;
+  s.lastUpdate=now;
+  s.lastSeen=now;
 
-  if (hasNativeRotation&&
-      std::isfinite(nativeYaw)) {
+  const bool enteredAir=
+      !grounded&&
+      s.wasGrounded;
 
-    state.yaw=
-        wrapPi(
-            nativeYaw);
+  if(enteredAir){
+    s.born=now;
+    s.launchImpulseApplied=false;
+    s.airTargetCaptured=false;
+    s.restOrientation={};
   }
 
-  const float speed=
+  const float control=
       std::clamp(
           mRotationSpeed.load(
               std::memory_order_relaxed),
           0.0f,
           3.0f);
 
-  if (!grounded) {
-    state.roll=
-        wrapPi(
-            state.roll+
-            kJavaAirRollRate*
-                speed*
+  if(t.family==MotionFamily::FullBlock||
+     t.family==MotionFamily::ShapedBlock){
+
+    const auto safeShapedTarget=
+        [&](float roll){
+
+          const float base=
+              std::round(
+                  roll/
+                  kPi)*
+              kPi;
+
+          const float error=
+              wrapPi(
+                  roll-
+                  base);
+
+          if(std::abs(error)<=
+             kShapedMaxGroundTilt)
+            return roll;
+
+          return wrapPi(
+              base+
+              std::copysign(
+                  kShapedMaxGroundTilt,
+                  error));
+        };
+
+    if(!grounded){
+      s.javaRoll=
+          wrapPi(
+              s.javaRoll+
+              kJavaAirRollRate*
+                  control*
+                  dt);
+
+      if(t.family==
+         MotionFamily::ShapedBlock){
+
+        const float descent=
+            hasMotion
+                ?std::clamp(
+                     (kPlanarPreAlignStartY-
+                      motion.y)/
+                         (kPlanarPreAlignStartY-
+                          kPlanarPreAlignFullY),
+                     0.0f,
+                     1.0f)
+                :0.0f;
+
+        if(descent>0){
+          const float target=
+              safeShapedTarget(
+                  s.javaRoll);
+
+          s.javaRoll=
+              moveAngle(
+                  s.javaRoll,
+                  target,
+                  (kJavaAirRollRate*
+                       control+
+                   kPlanarPreAlignRate)*
+                      descent*
+                      dt);
+        }
+      }
+    }
+
+    else if(t.family==
+            MotionFamily::ShapedBlock){
+
+      const float target=
+          safeShapedTarget(
+              s.javaRoll);
+
+      s.javaRoll=
+          moveAngle(
+              s.javaRoll,
+              target,
+              kPlanarGroundRate*
+                  dt);
+    }
+
+    else if(mOldRotation.load(
+                std::memory_order_relaxed)){
+
+      const float target=
+          std::round(
+              s.javaRoll/
+              kHalfPi)*
+          kHalfPi;
+
+      s.javaRoll=
+          moveAngle(
+              s.javaRoll,
+              target,
+              kJavaOldGroundRate*
+                  control*
+                  dt);
+    }
+
+    s.wasGrounded=
+        grounded;
+
+    return;
+  }
+
+  if(t.family==
+     MotionFamily::Head){
+
+    const float age=
+        std::max(
+            0.0f,
+            std::chrono::duration<float>(
+                now-
+                s.born)
+                .count());
+
+    const float target=
+        grounded
+            ?0.0f
+            :s.headDirection*
+                 kHeadAirTilt*
+                 std::clamp(
+                     age/
+                         0.22f,
+                     0.0f,
+                     1.0f);
+
+    const float rate=
+        grounded
+            ?kHeadGroundResponse
+            :kHeadAirResponse;
+
+    const float alpha=
+        dt>0
+            ?1.0f-
+                 std::exp(
+                     -rate*
+                     dt)
+            :0.0f;
+
+    s.headTilt+=
+        (target-
+         s.headTilt)*
+        alpha;
+
+    s.wasGrounded=
+        grounded;
+
+    return;
+  }
+
+  auto getQ=
+      [&](){
+
+        return normalizeQ({
+            s.orientation.w,
+            s.orientation.x,
+            s.orientation.y,
+            s.orientation.z});
+      };
+
+  auto putQ=
+      [&](QuatLocal q){
+
+        q=
+            normalizeQ(
+                q);
+
+        s.orientation={
+            q.w,
+            q.x,
+            q.y,
+            q.z};
+      };
+
+  const bool thin=
+      t.family==
+      MotionFamily::HorizontalThin;
+
+  const auto supportTarget=
+      [&](QuatLocal q){
+
+        q=
+            normalizeQ(
+                q);
+
+        const Vec3Local axis=
+            rotateQ(
+                q,
+                thin
+                    ?Vec3Local{0,1,0}
+                    :Vec3Local{0,0,1});
+
+        const Vec3Local target=
+            axis.y>=0
+                ?Vec3Local{0,1,0}
+                :Vec3Local{0,-1,0};
+
+        return normalizeQ(
+            mulQ(
+                fromToQ(
+                    axis,
+                    target),
+                q));
+      };
+
+  const float maxAngular=
+      thin
+          ?kMaxThinAngular
+          :(t.family==
+                MotionFamily::Special
+                ?kMaxSpecialAngular
+                :kMaxFlatAngular);
+
+  const float airDamping=
+      thin
+          ?kAirDampingThin
+          :(t.family==
+                MotionFamily::Special
+                ?kAirDampingSpecial
+                :kAirDampingFlat);
+
+  const float preSpring=
+      thin
+          ?kPreSpringThin
+          :(t.family==
+                MotionFamily::Special
+                ?kPreSpringSpecial
+                :kPreSpringFlat);
+
+  const float preDamping=
+      thin
+          ?kPreDampingThin
+          :(t.family==
+                MotionFamily::Special
+                ?kPreDampingSpecial
+                :kPreDampingFlat);
+
+  const float contactSpring=
+      thin
+          ?kContactSpringThin
+          :(t.family==
+                MotionFamily::Special
+                ?kContactSpringSpecial
+                :kContactSpringFlat);
+
+  const float contactDamping=
+      thin
+          ?kContactDampingThin
+          :(t.family==
+                MotionFamily::Special
+                ?kContactDampingSpecial
+                :kContactDampingFlat);
+
+  if(!grounded&&
+     !s.launchImpulseApplied){
+
+    const float hs=
+        hasMotion
+            ?std::sqrt(
+                 motion.x*
+                     motion.x+
+                 motion.z*
+                     motion.z)
+            :0.0f;
+
+    const float total=
+        hasMotion
+            ?std::sqrt(
+                 hs*
+                     hs+
+                 motion.y*
+                     motion.y)
+            :0.0f;
+
+    if(total>=
+           kSensitiveWake||
+       enteredAir){
+
+      Vec3Local axis;
+
+      if(hs>1e-4f)
+        axis={
+            -motion.z/
+                hs,
+            0,
+            motion.x/
+                hs};
+      else
+        axis={
+            -std::sin(
+                s.yaw),
+            0,
+            std::cos(
+                s.yaw)};
+
+      axis=
+          normalize3(
+              axis);
+
+      const float horizontal=
+          hs*
+          kMinecraftTicksPerSecond;
+
+      const float vertical=
+          hasMotion
+              ?std::abs(
+                   motion.y)*
+                   kMinecraftTicksPerSecond
+              :0.0f;
+
+      float spin=
+          (kBaseNaturalSpin+
+           horizontal*
+               kHorizontalSpinGain+
+           vertical*
+               kVerticalSpinGain)*
+          control;
+
+      spin=
+          std::clamp(
+              spin,
+              0.25f,
+              maxAngular);
+
+      s.angularX=
+          axis.x*
+          spin;
+
+      s.angularY=0;
+
+      s.angularZ=
+          axis.z*
+          spin;
+
+      s.launchImpulseApplied=
+          true;
+    }
+  }
+
+  const auto integrate=
+      [&](QuatLocal target,
+          float spring,
+          float damping,
+          float strength,
+          float freeDamping){
+
+        QuatLocal q=
+            getQ();
+
+        Vec3Local omega{
+            s.angularX,
+            s.angularY,
+            s.angularZ};
+
+        if(freeDamping>0){
+          const float d=
+              std::exp(
+                  -freeDamping*
+                  dt);
+
+          omega.x*=d;
+          omega.y*=d;
+          omega.z*=d;
+        }
+
+        if(strength>0){
+          const Vec3Local err=
+              shortestAngularError(
+                  q,
+                  target);
+
+          const float k=
+              spring*
+              strength;
+
+          const float c=
+              damping*
+              std::sqrt(
+                  std::max(
+                      strength,
+                      0.05f));
+
+          omega.x+=
+              (err.x*k-
+               omega.x*c)*
+              dt;
+
+          omega.y+=
+              (err.y*k-
+               omega.y*c)*
+              dt;
+
+          omega.z+=
+              (err.z*k-
+               omega.z*c)*
+              dt;
+        }
+
+        const float speed=
+            length3(
+                omega);
+
+        if(speed>
+               maxAngular&&
+           speed>
+               1e-5f){
+
+          const float f=
+              maxAngular/
+              speed;
+
+          omega.x*=f;
+          omega.y*=f;
+          omega.z*=f;
+        }
+
+        q=
+            integrateWorldAngular(
+                q,
+                omega,
                 dt);
 
-    return;
+        if(strength>0){
+          const float err=
+              length3(
+                  shortestAngularError(
+                      q,
+                      target));
+
+          if(err<
+                 kStopError&&
+             length3(
+                 omega)<
+                 kStopAngular){
+
+            q=target;
+            omega={};
+          }
+        }
+
+        putQ(q);
+
+        s.angularX=
+            omega.x;
+
+        s.angularY=
+            omega.y;
+
+        s.angularZ=
+            omega.z;
+      };
+
+  if(!grounded){
+    const float age=
+        std::max(
+            0.0f,
+            std::chrono::duration<float>(
+                now-
+                s.born)
+                .count());
+
+    if(age>=
+           kPreSettleDelay&&
+       !s.airTargetCaptured){
+
+      const auto target=
+          supportTarget(
+              getQ());
+
+      s.restOrientation={
+          target.w,
+          target.x,
+          target.y,
+          target.z};
+
+      s.airTargetCaptured=
+          true;
+    }
+
+    QuatLocal target=
+        getQ();
+
+    float strength=0;
+
+    if(s.airTargetCaptured){
+      target=
+          normalizeQ({
+              s.restOrientation.w,
+              s.restOrientation.x,
+              s.restOrientation.y,
+              s.restOrientation.z});
+
+      float a=
+          std::clamp(
+              (age-
+               kPreSettleDelay)/
+                  kPreSettleRamp,
+              0.0f,
+              1.0f);
+
+      a=
+          a*
+          a*
+          (3-
+           2*
+               a);
+
+      const float descent=
+          hasMotion
+              ?std::clamp(
+                   (0.055f-
+                    motion.y)/
+                       0.18f,
+                   0.0f,
+                   1.0f)
+              :0.5f;
+
+      strength=
+          a*
+          (0.58f+
+           0.42f*
+               descent);
+    }
+
+    integrate(
+        target,
+        preSpring,
+        preDamping,
+        strength,
+        airDamping);
   }
 
-  if (!blockLike) {
-    state.roll=0.0f;
-    return;
+  else{
+    if(!s.airTargetCaptured){
+      const auto target=
+          supportTarget(
+              getQ());
+
+      s.restOrientation={
+          target.w,
+          target.x,
+          target.y,
+          target.z};
+
+      s.airTargetCaptured=
+          true;
+    }
+
+    const QuatLocal target=
+        normalizeQ({
+            s.restOrientation.w,
+            s.restOrientation.x,
+            s.restOrientation.y,
+            s.restOrientation.z});
+
+    integrate(
+        target,
+        contactSpring,
+        contactDamping,
+        1.0f,
+        0.0f);
   }
 
-  if (!mOldRotation.load(
-          std::memory_order_relaxed))
-    return;
-
-  const float target=
-      std::round(
-          state.roll/
-          kHalfPi)*
-      kHalfPi;
-
-  const float error=
-      std::abs(
-          wrapPi(
-              target-
-              state.roll));
-
-  if (error<=kOldSnapEpsilon) {
-    state.roll=
-        wrapPi(
-            target);
-
-    return;
-  }
-
-  state.roll=
-      moveAngle(
-          state.roll,
-          target,
-          kJavaOldGroundRate*
-              speed*
-              dt);
+  s.wasGrounded=
+      grounded;
 }
 
 void ItemPhysicsRuntime::pruneStates(
-    std::chrono::steady_clock::time_point now) {
+    std::chrono::steady_clock::time_point now){
 
-  for (auto it=mStates.begin();
-       it!=mStates.end();) {
+  for(auto it=
+          mStates.begin();
+      it!=
+          mStates.end();){
 
-    if (now-
-            it->second.lastSeen>
-        kStateTtl) {
+    if(now-
+           it->second.lastSeen>
+       kStateTtl)
 
       it=
           mStates.erase(
               it);
-    } else {
+
+    else
       ++it;
-    }
   }
 }
 
 void ItemPhysicsRuntime::onRender(
     void *self,
-    void *renderContext,
-    void *renderData) {
+    void *ctx,
+    void *renderData){
 
   const auto original=
       mOriginal;
 
-  if (!original)
+  if(!original)
     return;
 
-  if (!renderContext||
-      !renderData||
-      !mProfileSupported.load(
-          std::memory_order_relaxed)) {
+  if(!ctx||
+     !renderData||
+     !mProfileSupported.load(
+         std::memory_order_relaxed)){
 
     original(
         self,
-        renderContext,
+        ctx,
         renderData);
 
     return;
   }
 
-  const auto renderDataAddress=
+  const auto rd=
       reinterpret_cast<
           std::uintptr_t>(
           renderData);
 
   auto *actor=
       *reinterpret_cast<
-          void **>(
-          renderDataAddress+
+          void**>(
+          rd+
           profile::kRenderDataActorOffset);
 
-  if (!actor) {
+  if(!actor){
     original(
         self,
-        renderContext,
+        ctx,
         renderData);
 
     return;
   }
 
-  const auto actorAddress=
+  const auto a=
       reinterpret_cast<
           std::uintptr_t>(
           actor);
@@ -1661,45 +2511,57 @@ void ItemPhysicsRuntime::onRender(
           mHideItemShadow.load(
               std::memory_order_relaxed));
 
-  if (!enabled) {
+  if(!enabled){
     original(
         self,
-        renderContext,
+        ctx,
         renderData);
 
     return;
   }
 
-  const ItemRenderTraits traits=
+  const auto traits=
       classifyItem(
-          actorAddress);
+          a);
 
-  if (!traits.valid) {
+  if(!traits.valid){
     original(
         self,
-        renderContext,
+        ctx,
         renderData);
 
     return;
   }
 
-  Vec2Abi nativeRotation{};
+  Vec3Abi motion{};
+  bool hasMotion=false;
 
-  const bool hasNativeRotation=
-      getActorRotation(
+  if(mGetPosDelta){
+    if(const auto *p=
+           mGetPosDelta(
+               actor);
+
+       p&&
+       std::isfinite(p->x)&&
+       std::isfinite(p->y)&&
+       std::isfinite(p->z)){
+
+      motion=*p;
+      hasMotion=true;
+    }
+  }
+
+  float nativeYaw=0;
+
+  const bool hasYaw=
+      getActorYaw(
           actor,
-          nativeRotation);
+          nativeYaw);
 
-  const float nativeYaw=
-      hasNativeRotation
-          ?nativeRotation.y*
-               kDegToRad
-          :0.0f;
-
-  const auto entityId=
+  const auto entity=
       *reinterpret_cast<
-          const std::uint32_t *>(
-          actorAddress+
+          const std::uint32_t*>(
+          a+
           profile::kActorEntityIdOffset);
 
   PhysicsState snapshot{};
@@ -1714,92 +2576,138 @@ void ItemPhysicsRuntime::onRender(
 
     auto &state=
         stateFor(
-            entityId,
-            now);
+            entity,
+            now,
+            hasYaw,
+            nativeYaw);
 
     updateState(
         state,
-        traits.blockLike,
+        traits,
         grounded,
-        hasNativeRotation,
-        nativeYaw,
+        motion,
+        hasMotion,
         now);
 
     snapshot=state;
 
-    if ((++mRenderCounter&
-         0xFFu)==0) {
+    if((++mRenderCounter&
+        0xFFu)==0)
 
       pruneStates(
           now);
-    }
   }
 
   auto &count=
       *reinterpret_cast<
-          std::uint8_t *>(
-          actorAddress+
+          std::uint8_t*>(
+          a+
           profile::kItemCountOffset);
 
-  auto &inItemFrame=
+  auto &frame=
       *reinterpret_cast<
-          std::uint8_t *>(
-          actorAddress+
+          std::uint8_t*>(
+          a+
           profile::kIsInItemFrameOffset);
 
-  const auto oldCount=count;
-  const auto oldInItemFrame=
-      inItemFrame;
+  const auto oldCount=
+      count;
 
-  if (mSingleModel.load(
-          std::memory_order_relaxed)) {
+  const auto oldFrame=
+      frame;
+
+  if(mSingleModel.load(
+         std::memory_order_relaxed))
+
     count=1;
-  }
 
-  inItemFrame=1;
+  frame=1;
 
   auto *position=
       reinterpret_cast<
-          float *>(
-          renderDataAddress+
+          float*>(
+          rd+
           profile::kRenderDataPositionOffset);
 
-  void *stack=
+  const float oldY=
+      position[1];
+
+  if(traits.family==
+     MotionFamily::FlatItem)
+
+    position[1]+=
+        kFlatHeight;
+
+  if(grounded){
+    switch(traits.family){
+    case MotionFamily::HorizontalThin:
+      position[1]+=
+          kThinHeight;
+      break;
+
+    case MotionFamily::ShapedBlock:
+      position[1]+=
+          kShapedHeight;
+      break;
+
+    case MotionFamily::Head:
+      position[1]+=
+          kHeadHeight;
+      break;
+
+    case MotionFamily::Special:
+      position[1]+=
+          kSpecialHeight;
+      break;
+
+    default:
+      break;
+    }
+  }
+
+  MatrixPushScope scope(
       mGetWorldMatrix
           ?mGetWorldMatrix(
-               renderContext)
-          :nullptr;
+               ctx)
+          :nullptr,
+      mMatrixPush,
+      mMatrixRefDtor);
 
-  {
-    MatrixPushScope matrixScope(
-        stack,
-        mMatrixPush,
-        mMatrixRefDtor);
+  Mat4 *matrix=
+      scope.matrix();
 
-    Mat4 *matrix=
-        matrixScope.matrix();
+  if(!matrix){
+    position[1]=oldY;
+    count=oldCount;
+    frame=oldFrame;
 
-    if (!matrix) {
-      count=oldCount;
-      inItemFrame=oldInItemFrame;
+    original(
+        self,
+        ctx,
+        renderData);
 
-      original(
-          self,
-          renderContext,
-          renderData);
+    return;
+  }
 
-      return;
-    }
+  const float x=
+      position[0];
 
-    const float x=position[0];
-    const float y=position[1];
-    const float z=position[2];
+  const float y=
+      position[1];
 
-    postTranslate(
-        *matrix,
-        x,
-        y,
-        z);
+  const float z=
+      position[2];
+
+  postTranslate(
+      *matrix,
+      x,
+      y,
+      z);
+
+  if(traits.family==
+         MotionFamily::FullBlock||
+     traits.family==
+         MotionFamily::ShapedBlock){
 
     postRotateX(
         *matrix,
@@ -1809,73 +2717,99 @@ void ItemPhysicsRuntime::onRender(
         *matrix,
         snapshot.yaw);
 
-    if (traits.blockLike) {
-      postTranslate(
-          *matrix,
-          0.0f,
-          kJavaBlockOffsetY,
-          kJavaBlockOffsetZ);
-
-      postTranslate(
-          *matrix,
-          0.0f,
-          traits.pivotY,
-          0.0f);
-
-      postRotateY(
-          *matrix,
-          snapshot.roll);
-
-      postTranslate(
-          *matrix,
-          0.0f,
-          -traits.pivotY,
-          0.0f);
-    } else {
-      postTranslate(
-          *matrix,
-          0.0f,
-          0.0f,
-          kJavaFlatOffsetZ);
-
-      postRotateY(
-          *matrix,
-          snapshot.roll);
-    }
+    postTranslate(
+        *matrix,
+        0,
+        kJavaBlockOffsetY,
+        kJavaBlockOffsetZ);
 
     postTranslate(
         *matrix,
-        -x,
-        -y,
-        -z);
+        0,
+        kJavaBlockPivotY,
+        0);
 
-    const bool previousActive=
-        gDroppedItemGroupActive;
+    postRotateY(
+        *matrix,
+        snapshot.javaRoll);
 
-    const bool previousGrounded=
-        gDroppedItemGroupGrounded;
-
-    gDroppedItemGroupActive=
-        !mSingleModel.load(
-            std::memory_order_relaxed);
-
-    gDroppedItemGroupGrounded=
-        grounded;
-
-    original(
-        self,
-        renderContext,
-        renderData);
-
-    gDroppedItemGroupActive=
-        previousActive;
-
-    gDroppedItemGroupGrounded=
-        previousGrounded;
+    postTranslate(
+        *matrix,
+        0,
+        -kJavaBlockPivotY,
+        0);
   }
 
+  else if(traits.family==
+          MotionFamily::Head){
+
+    postRotateY(
+        *matrix,
+        snapshot.yaw);
+
+    postRotateX(
+        *matrix,
+        snapshot.headTilt);
+
+    postRotateZ(
+        *matrix,
+        snapshot.headTilt*
+            0.22f);
+  }
+
+  else{
+    postRotateQuat(
+        *matrix,
+        {
+            snapshot.orientation.w,
+            snapshot.orientation.x,
+            snapshot.orientation.y,
+            snapshot.orientation.z
+        });
+
+    if(traits.family==
+       MotionFamily::FlatItem)
+
+      postTranslate(
+          *matrix,
+          0,
+          kAtlasFlatLocalY,
+          0);
+  }
+
+  postTranslate(
+      *matrix,
+      -x,
+      -y,
+      -z);
+
+  const bool prevA=
+      gDroppedItemGroupActive;
+
+  const bool prevG=
+      gDroppedItemGroupGrounded;
+
+  gDroppedItemGroupActive=
+      !mSingleModel.load(
+          std::memory_order_relaxed);
+
+  gDroppedItemGroupGrounded=
+      grounded;
+
+  original(
+      self,
+      ctx,
+      renderData);
+
+  gDroppedItemGroupActive=
+      prevA;
+
+  gDroppedItemGroupGrounded=
+      prevG;
+
+  position[1]=oldY;
   count=oldCount;
-  inItemFrame=oldInItemFrame;
+  frame=oldFrame;
 }
 
 }
