@@ -8,50 +8,23 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_ANDROID_STL_TYPE c++_shared)
 
 include(FetchContent)
-
 FetchContent_Declare(
   preloader_android
   GIT_REPOSITORY https://github.com/LiteLDev/preloader-android.git
   GIT_TAG 26ff71e48483aeddf2b5657b994ef4ade63e5cc0
 )
-
-FetchContent_Declare(
-  nlohmann_json
-  GIT_REPOSITORY https://github.com/nlohmann/json.git
-  GIT_TAG v3.11.3
-)
-
-FetchContent_Declare(
-  boost_pfr
-  GIT_REPOSITORY https://github.com/boostorg/pfr.git
-  GIT_TAG boost-1.88.0
-)
-
-FetchContent_Declare(
-  magic_enum
-  GIT_REPOSITORY https://github.com/Neargye/magic_enum.git
-  GIT_TAG v0.9.7
-)
-
 FetchContent_Declare(
   fmt
   GIT_REPOSITORY https://github.com/fmtlib/fmt.git
   GIT_TAG 11.2.0
 )
-
 set(FMT_DOC OFF CACHE BOOL "" FORCE)
 set(FMT_TEST OFF CACHE BOOL "" FORCE)
 set(FMT_INSTALL OFF CACHE BOOL "" FORCE)
-
-FetchContent_MakeAvailable(
-  nlohmann_json
-  boost_pfr
-  magic_enum
-  fmt
-  preloader_android
-)
+FetchContent_MakeAvailable(fmt preloader_android)
 
 add_library(
   levi_item_physics
@@ -81,33 +54,18 @@ target_include_directories(
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 
-target_link_libraries(
-  levi_item_physics
-  PRIVATE
-  preloader
-  nlohmann_json::nlohmann_json
-  Boost::pfr
-  magic_enum::magic_enum
-  fmt::fmt
-)
+# The visual core intentionally has no JSON/reflection dependency. fmt is the
+# only support library retained because it is part of the preloader logger API.
+# c++_shared stays external in LeviLaunchroid, keeping this .so small.
+target_link_libraries(levi_item_physics PRIVATE preloader fmt::fmt)
 
 find_library(LOG_LIB log)
 find_library(DL_LIB dl)
-
 if(LOG_LIB)
-  target_link_libraries(
-    levi_item_physics
-    PRIVATE
-    "${LOG_LIB}"
-  )
+  target_link_libraries(levi_item_physics PRIVATE "${LOG_LIB}")
 endif()
-
 if(DL_LIB)
-  target_link_libraries(
-    levi_item_physics
-    PRIVATE
-    "${DL_LIB}"
-  )
+  target_link_libraries(levi_item_physics PRIVATE "${DL_LIB}")
 endif()
 
 target_compile_options(
@@ -128,24 +86,21 @@ target_link_options(
   PRIVATE
   -Wl,-z,max-page-size=16384
   -Wl,--gc-sections
+  -Wl,--icf=safe
+  -Wl,--as-needed
+  -Wl,--exclude-libs,ALL
   -Wl,--strip-all
 )
 
 include(CheckIPOSupported)
-check_ipo_supported(
-  RESULT IPO_OK
-  OUTPUT IPO_ERROR
-)
-
+check_ipo_supported(RESULT IPO_OK OUTPUT IPO_ERROR)
 if(IPO_OK)
   set_property(
     TARGET levi_item_physics
-    PROPERTY
-    INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
+    PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
   )
+else()
+  message(WARNING "IPO/LTO unavailable: ${IPO_ERROR}")
 endif()
 
-message(
-  STATUS
-  "Levi Item Physics: ABI=${ANDROID_ABI}, platform=${ANDROID_PLATFORM}, size-optimized Release"
-)
+message(STATUS "Levi Item Physics: ABI=${ANDROID_ABI}, platform=${ANDROID_PLATFORM}, strict 1.26.45.1 visual profile")

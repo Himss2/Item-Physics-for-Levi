@@ -1,37 +1,47 @@
-# Implementation notes / RE mapping
+# Implementation notes: universal visual core 0.8.0
 
-## Hook
+## Source behavior reproduced
 
-Analyzed target:
+Java ItemPhysic `1.8.15` injects at the dropped-item renderer, so spawn origin
+does not select an animation. It has one scalar `xRot` and one `yRot` for all
+items. `usesBlockLight()` changes only the transform/pivot and copy layout.
 
-- RTTI: `12ItemRenderer`
-- vptr slot: `+0x18`
-- analyzed `ItemRenderer::render` RVA: `0xA29F7A8`
+The Bedrock implementation follows the same boundary:
 
-The runtime does **not** hardcode that render RVA for resolution. It resolves RTTI/vtable at runtime and only uses the known RVA as a fingerprint/reference.
+1. Hook `ItemRenderer::render` once.
+2. Read `OnGroundFlagComponent` from the actor ECS registry.
+3. Advance one scalar rotation from `age + partialTick`.
+4. Choose block or flat pivot; never choose a separate motion family.
+5. Push the world matrix, apply the Java pose around render position, submit one
+   native model, and pop the matrix.
+6. Repeat submission using Java's model-count and seeded copy offsets.
 
-## Profile offsets currently guarded by fingerprint
+Using `age + partialTick` prevents double updates during multiple render passes,
+stops naturally while game time is paused, and avoids wall-clock catch-up after
+world changes. A discontinuity above ten ticks resets the baseline.
 
-- Actor registry: `Actor + 0x10`
-- Actor entity id: `Actor + 0x18`
-- Item stack count: `ItemActor + 0x3B2`
-- `mIsInItemFrame`: `ItemActor + 0x440`
-- `ActorRenderData::mActor`: `+0x00`
-- ActorRenderData render position: `+0x10`
-- BaseActorRenderContext::getWorldMatrix RVA: `0xA5C6868`
-- MatrixStack::push(bool) RVA: `0x107CC67C`
-- MatrixStackRef destructor RVA: `0x107CCD40`
+## Analyzed target
 
-## ECS
+- Minecraft: `1.26.45.1`, ARM64
+- SHA-256: `444e77434bdd3789a0d90978d06336a99831e78e52955e528258cc375dfa0557`
+- Build ID: `868e275cb295e9a275bb29d2258edc2f7dc48761`
+- ItemActor constructor: `0xF123A24`, allocation size `0x450`
+- ItemRenderer render: RTTI slot `+0x18`, RVA `0xA29F708`
+- Render-group helper: `0xA29F338`
+- Context world matrix: `0xA5C67C8`
+- Context partial tick: `0xA5C678C` (`ldr s0, [x0, #0xB0]; ret`)
+- Matrix push/destructor: `0x107CBFFC` / `0x107CC6C0`
+- ItemStackBase block-render query: `0xF642ADC`
+- On-ground component hash: `0xC29078A0`
 
-`OnGroundFlagComponent` entt/FNV hash:
+Relevant ItemActor fields are guarded indirectly by the constructor/render
+profile and are centralized in `TargetProfile.hpp`: age `+0x428`, bob offset
+`+0x434`, item-frame render bypass `+0x440`, stack `+0x390`, count `+0x3B2`.
+The loaded ELF GNU Build ID is checked before any hook is installed.
 
-```text
-0xC29078A0
-```
+## Intentional stage boundary
 
-Ground state is read from the actor's ECS registry rather than raycasting every frame.
-
-## Current expected tuning work
-
-The first device test should focus on **pivot/orientation**, not hook discovery. The hook, vanilla-bob bypass, count bypass, ground flag, and MatrixStack path are implemented from RE. Shield/banner and block/3D model origin corrections still need visual validation.
+This build does not hook `ItemActor::postNormalTick`, `Actor::move`, inventory
+drop, or fluid queries. Those hooks should be added only after this visual ABI
+and pivot are confirmed on-device. The next stage can then add Java trajectory
+physics without changing the renderer architecture.
