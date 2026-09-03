@@ -1,0 +1,321 @@
+name: Build Levi Item Physics
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+  pull_request:
+
+  workflow_dispatch:
+
+env:
+  NDK_VERSION: 28.2.13676358
+  ANDROID_ABI: arm64-v8a
+  ANDROID_PLATFORM: android-24
+
+  SO_PATH: build/out/arm64-v8a/liblevi_item_physics.so
+  LEVIPACK_NAME: levi-item-physics.levipack
+
+jobs:
+  build:
+    name: Build ARM64
+    runs-on: ubuntu-latest
+
+    steps:
+      # ============================================================
+      # Checkout
+      # ============================================================
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # ============================================================
+      # Android SDK / NDK
+      # ============================================================
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sdkmanager "ndk;${NDK_VERSION}"
+
+          NDK_PATH="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
+
+          if [ ! -f "${NDK_PATH}/build/cmake/android.toolchain.cmake" ]; then
+            echo "ERROR: Android NDK toolchain was not found:"
+            echo "${NDK_PATH}"
+            exit 1
+          fi
+
+          echo "ANDROID_NDK_HOME=${NDK_PATH}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=${NDK_PATH}" >> "$GITHUB_ENV"
+
+          echo "Using Android NDK:"
+          echo "${NDK_PATH}"
+
+      # ============================================================
+      # Build dependencies
+      # ============================================================
+
+      - name: Install Ninja
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y ninja-build zip file binutils
+
+      # ============================================================
+      # Configure
+      # ============================================================
+
+      - name: Configure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cmake \
+            -S . \
+            -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="${ANDROID_ABI}" \
+            -DANDROID_PLATFORM="${ANDROID_PLATFORM}" \
+            -DANDROID_STL=c++_shared
+
+      # ============================================================
+      # Compile
+      # ============================================================
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cmake --build build \
+            --target levi_item_physics
+
+      # ============================================================
+      # Verify actual shared library
+      # ============================================================
+
+      - name: Verify shared library
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "Searching generated shared libraries"
+          echo "========================================"
+
+          find build \
+            -type f \
+            -name "*.so" \
+            -print
+
+          echo
+          echo "Expected Item Physics library:"
+          echo "${SO_PATH}"
+
+          if [ ! -f "${SO_PATH}" ]; then
+            echo
+            echo "ERROR: liblevi_item_physics.so was not found."
+            echo
+            echo "Expected:"
+            echo "${SO_PATH}"
+            echo
+            echo "All files under build/out:"
+            find build/out -type f -print 2>/dev/null || true
+
+            exit 1
+          fi
+
+          echo
+          echo "Shared library found successfully."
+
+          echo
+          echo "========================================"
+          echo "File information"
+          echo "========================================"
+
+          file "${SO_PATH}"
+
+          echo
+          echo "========================================"
+          echo "ELF header"
+          echo "========================================"
+
+          readelf -h "${SO_PATH}"
+
+          echo
+          echo "========================================"
+          echo "Dynamic dependencies"
+          echo "========================================"
+
+          readelf -d "${SO_PATH}" \
+            | grep NEEDED \
+            || true
+
+          echo
+          echo "========================================"
+          echo "Levi registration symbol"
+          echo "========================================"
+
+          readelf -Ws "${SO_PATH}" \
+            | grep PLGetModRegistration \
+            || true
+
+      # ============================================================
+      # Create LeviPack
+      #
+      # IMPORTANT:
+      # Isi .levipack HARUS hanya:
+      #
+      # manifest.json
+      # liblevi_item_physics.so
+      #
+      # ============================================================
+
+      - name: Create LeviPack
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf package
+          rm -f "${LEVIPACK_NAME}"
+
+          mkdir -p package
+
+          cp \
+            manifest.json \
+            package/manifest.json
+
+          cp \
+            "${SO_PATH}" \
+            package/liblevi_item_physics.so
+
+          echo "Files before packaging:"
+          find package \
+            -maxdepth 1 \
+            -type f \
+            -printf "%f\n" \
+            | sort
+
+          cd package
+
+          zip \
+            -9 \
+            "../${LEVIPACK_NAME}" \
+            manifest.json \
+            liblevi_item_physics.so
+
+          cd ..
+
+      # ============================================================
+      # Verify LeviPack
+      # ============================================================
+
+      - name: Verify LeviPack contents
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "LeviPack contents"
+          echo "========================================"
+
+          unzip -l "${LEVIPACK_NAME}"
+
+          echo
+          echo "Raw entries:"
+
+          unzip -Z1 "${LEVIPACK_NAME}"
+
+          COUNT="$(
+            unzip -Z1 "${LEVIPACK_NAME}" \
+              | sed '/^$/d' \
+              | wc -l
+          )"
+
+          echo
+          echo "Entry count: ${COUNT}"
+
+          if [ "${COUNT}" -ne 2 ]; then
+            echo
+            echo "ERROR:"
+            echo "LeviPack must contain exactly 2 files:"
+            echo
+            echo "manifest.json"
+            echo "liblevi_item_physics.so"
+            echo
+            echo "Actual contents:"
+            unzip -Z1 "${LEVIPACK_NAME}"
+
+            exit 1
+          fi
+
+          if ! unzip -Z1 "${LEVIPACK_NAME}" \
+            | grep -Fxq "manifest.json"; then
+
+            echo "ERROR: manifest.json missing from LeviPack."
+            exit 1
+          fi
+
+          if ! unzip -Z1 "${LEVIPACK_NAME}" \
+            | grep -Fxq "liblevi_item_physics.so"; then
+
+            echo "ERROR: liblevi_item_physics.so missing from LeviPack."
+            exit 1
+          fi
+
+          echo
+          echo "LeviPack structure is correct."
+
+      # ============================================================
+      # Prepare artifact
+      #
+      # GitHub artifact ZIP will contain ONLY:
+      #
+      # levi-item-physics.levipack
+      #
+      # ============================================================
+
+      - name: Prepare GitHub artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf artifact
+          mkdir -p artifact
+
+          cp \
+            "${LEVIPACK_NAME}" \
+            "artifact/${LEVIPACK_NAME}"
+
+          echo "Artifact contents:"
+
+          find artifact \
+            -maxdepth 1 \
+            -type f \
+            -printf "%f\n"
+
+      # ============================================================
+      # Upload
+      # ============================================================
+
+      - name: Upload LeviPack
+        uses: actions/upload-artifact@v4
+        with:
+          name: levi-item-physics-arm64-v8a
+          path: artifact/levi-item-physics.levipack
+          if-no-files-found: error
+          retention-days: 30
