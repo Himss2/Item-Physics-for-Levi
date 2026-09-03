@@ -49,6 +49,30 @@ PROFILE = {
         [0xF9400408, 0xB40000C8, 0xF9400100, 0xB4000080,
          0xF9400008, 0xF9401D01, 0xD61F0020],
     ),
+    "Actor::getPosDelta": (
+        0x0EC82A68,
+        [0xF9410408, 0x91006100, 0xD65F03C0],
+    ),
+    "BlockGraphics::getForBlock(BlockType)": (
+        0x0A2189DC,
+        [0xA9BF7BFD, 0x910003FD, 0x9556EC78, 0xA8C17BFD,
+         0x17FFFFA1],
+    ),
+    "BlockGraphics::getForBlock(Block)": (
+        0x0A2189F0,
+        [0xA9BF7BFD, 0x910003FD, 0xF9403400, 0x9556EC72,
+         0x955A115F],
+    ),
+    "BlockGraphics::getBlockShape": (
+        0x0A219718,
+        [0xB9401000, 0xD65F03C0],
+    ),
+    "BlockGraphics::isBlockShape3D": (
+        0x0A280E68,
+        [0x7102781F, 0x54000148, 0x2A0003E8, 0xB0FC4EC9,
+         0x9117E929, 0x100000AA, 0x3868692B, 0x8B0B094A,
+         0x52800020, 0xD61F0140],
+    ),
 }
 
 
