@@ -9,6 +9,7 @@ fi
 BUILD="$ROOT/build/android-arm64-v8a-Release"
 DIST="$ROOT/dist/arm64-v8a"
 PKG="$DIST/levi-item-physics"
+MAX_SO_BYTES=614400
 rm -rf "$BUILD" "$DIST"
 cmake -S "$ROOT" -B "$BUILD" -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
@@ -16,13 +17,18 @@ cmake -S "$ROOT" -B "$BUILD" -G Ninja \
   -DANDROID_PLATFORM=android-24 \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build "$BUILD" --target levi_item_physics
-mkdir -p "$PKG/config"
+SO="$BUILD/out/arm64-v8a/liblevi_item_physics.so"
+SO_BYTES="$(wc -c < "$SO")"
+if (( SO_BYTES > MAX_SO_BYTES )); then
+  echo "liblevi_item_physics.so is ${SO_BYTES} bytes; hard limit is ${MAX_SO_BYTES} bytes." >&2
+  exit 1
+fi
+
+mkdir -p "$PKG"
 cp "$ROOT/manifest.json" "$PKG/manifest.json"
-cp "$ROOT/config/config.json" "$PKG/config/config.json"
-cp "$ROOT/config/config.schema.json" "$PKG/config/config.schema.json"
-cp "$BUILD/out/arm64-v8a/liblevi_item_physics.so" "$PKG/liblevi_item_physics.so"
+cp "$SO" "$PKG/liblevi_item_physics.so"
 (
   cd "$PKG"
   zip -qr "$DIST/levi-item-physics.levipack" .
 )
-echo "Built: $DIST/levi-item-physics.levipack"
+echo "Built: $DIST/levi-item-physics.levipack (${SO_BYTES} byte .so)"
