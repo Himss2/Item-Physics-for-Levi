@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.8.0
+# Implementation notes: universal visual core 0.8.1
 
 ## Source behavior reproduced
 
@@ -9,9 +9,12 @@ items. `usesBlockLight()` changes only the transform/pivot and copy layout.
 The Bedrock implementation follows the same boundary:
 
 1. Hook `ItemRenderer::render` once.
-2. Read `OnGroundFlagComponent` from the actor ECS registry.
+2. Read `OnGroundFlagComponent` from the actor ECS registry. If a Bedrock spawn
+   path omits it, require `VerticalCollisionFlagComponent`, near-zero velocity,
+   and stable position on two different ItemActor age ticks.
 3. Advance one scalar rotation from `age + partialTick`.
-4. Choose block or flat pivot; never choose a separate motion family.
+4. Choose block or flat pivot; never choose a separate motion family. A legacy
+   model classifier is retained only for render-origin ground height.
 5. Push the world matrix, apply the Java pose around render position, submit one
    native model, and pop the matrix.
 6. Repeat submission using Java's model-count and seeded copy offsets.
@@ -33,6 +36,9 @@ world changes. A discontinuity above ten ticks resets the baseline.
 - Matrix push/destructor: `0x107CBFFC` / `0x107CC6C0`
 - ItemStackBase block-render query: `0xF642ADC`
 - On-ground component hash: `0xC29078A0`
+- Vertical-collision component hash: `0xC6A02A9A`
+- Actor position delta: `0xEC82A68`
+- BlockGraphics helpers: `0xA2189DC`, `0xA2189F0`, `0xA219718`, `0xA280E68`
 
 Relevant ItemActor fields are guarded indirectly by the constructor/render
 profile and are centralized in `TargetProfile.hpp`: age `+0x428`, bob offset

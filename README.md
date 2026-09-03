@@ -1,22 +1,29 @@
 # Levi Item Physics
 
 ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.45.1`.
-Version `0.8.0` is the first device-test build of the universal visual core
-reconstructed from Java ItemPhysic `1.8.15`.
+Version `0.8.1` keeps the universal Java ItemPhysic `1.8.15` animation and
+restores Bedrock-model-specific ground-height correction.
 
-## Implemented in 0.8.0
+## Implemented in 0.8.1
 
 - One `ItemRenderer::render` hook covers every dropped `ItemActor`, regardless
   of whether it came from Q, a dead mob, a broken container, a block drop,
   player death, a dispenser, or a network spawn.
-- Every model uses the same Java `xRot` law. Model classification only selects
-  Java's block pivot or flat-item pivot.
+- Every model uses the same Java `xRot` law. Model classification selects only
+  the Java block/flat pivot and a render-origin height correction; it never
+  selects a different animation.
 - There is no quaternion impulse, landing spring, shaped-block pre-alignment,
   head animation, or special shield/banner animation.
 - Airborne rotation is `realtimeDeltaTicks * 0.25 * 2`.
-- Flat items snap to their ground pose only when `OnGroundFlagComponent` exists.
+- Flat items snap to their ground pose on native `OnGroundFlagComponent`.
+  A conservative fallback handles Bedrock drops that omit that flag: vertical
+  collision, near-zero vertical motion, and stable position must coexist on two
+  distinct game ticks. It never predicts contact in mid-air.
 - Block items freeze at the exact contact angle (`oldRotation=false`, Java
   default).
+- Ground offsets are restored for flat, thin, shaped, head, special, and full
+  block models. Full blocks are lowered slightly. Dragon Head keeps its exact
+  frozen landing angle and receives tilt-dependent clearance for its jaw.
 - Java stack-copy thresholds are used: `1 / 2 / 3 / 4 / 5` models at
   `1 / 2 / 17 / 33 / 49` items.
 - The first tick remains vanilla, matching Java ItemPhysic's warm-up rule.
@@ -24,6 +31,8 @@ reconstructed from Java ItemPhysic `1.8.15`.
 - Item count is never modified. A scoped render-group hook forces one native
   model per custom submission.
 - Vanilla item shadow is preserved.
+- The lightweight `item_physics.main` entry is registered in Levi Mod Menu;
+  toggling it changes only the render path and does not reinstall hooks.
 
 This stage changes rendering only. Java gameplay physics, fluids, charged-Q,
 damage/fire rules, and pickup behavior belong to later device-tested stages.
