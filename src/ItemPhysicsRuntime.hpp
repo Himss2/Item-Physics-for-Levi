@@ -23,6 +23,9 @@ public:
   bool install(ll::mod::NativeMod &);
   void uninstall();
   void clearStates() noexcept;
+  void setEnabled(bool enabled) noexcept {
+    mEnabled.store(enabled, std::memory_order_relaxed);
+  }
 
   [[nodiscard]] bool profileSupported() const noexcept {
     return mProfileSupported.load(std::memory_order_relaxed);
@@ -46,6 +49,38 @@ public:
   using MatrixRefDtorFn = void (*)(MatrixStackRefAbi *);
 
 private:
+  struct AabbAbi {
+    float minX{}, minY{}, minZ{}, maxX{}, maxY{}, maxZ{};
+  };
+  static_assert(sizeof(AabbAbi) == 24);
+
+  struct Vec3Abi {
+    float x{}, y{}, z{};
+  };
+
+  enum class HeightClass : std::uint8_t {
+    FullBlock,
+    ShapedBlock,
+    FlatItem,
+    HorizontalThin,
+    Head,
+    Special
+  };
+
+  struct BlockRenderInfo {
+    bool keepHorizontal{};
+    bool verticalPlane{};
+    bool rodLike{};
+    std::int32_t blockShape{-1};
+  };
+
+  struct ItemRenderTraits {
+    bool valid{};
+    bool block{};
+    bool dragonHead{};
+    HeightClass height{HeightClass::FlatItem};
+  };
+
   struct VisualState {
     std::uint32_t entity{};
     std::uint32_t lastSeen{};
@@ -53,12 +88,24 @@ private:
     float xRot{};
     float yRot{};
     float lastSample{};
+    float lastWorldY{};
     float modelScale{};
+    std::int32_t lastProbeAge{-1};
+    std::uint8_t stableContactTicks{};
+    std::uint8_t movingTicks{};
     bool used{};
     bool sampled{};
+    bool positionSampled{};
+    bool groundedLatched{};
   };
 
+  using GetPosDeltaFn = const Vec3Abi *(*)(const void *);
   using GetBlockTypeForRenderingFn = const void *(*)(const void *);
+  using BlockGraphicsGetForBlockTypeFn = void *(*)(const void *);
+  using BlockGraphicsGetForBlockFn = void *(*)(const void *);
+  using BlockGraphicsGetBlockShapeFn = std::int32_t (*)(const void *);
+  using IsBlockShape3DFn = bool (*)(std::int32_t);
+  using GetVisualShapeFn = const AabbAbi *(*)(void *, const void *, AabbAbi *);
 
   static constexpr std::size_t kStateCapacity = 512;
 
@@ -73,17 +120,28 @@ private:
 
   [[nodiscard]] bool verifyProfile(const ResolvedVirtual &,
                                    ll::mod::NativeMod &) const;
-  [[nodiscard]] bool isBlockItem(std::uintptr_t) const noexcept;
+  [[nodiscard]] ItemRenderTraits classifyItem(std::uintptr_t) const noexcept;
+  [[nodiscard]] bool buildBlockRenderInfo(const void *,
+                                          BlockRenderInfo &) const noexcept;
+  [[nodiscard]] bool tryGetRenderBlockShape(std::uintptr_t,
+                                            std::int32_t &) const noexcept;
+  [[nodiscard]] bool itemIdentifierEquals(std::uintptr_t,
+                                          const char *) const noexcept;
+  [[nodiscard]] bool hasComponent(void *, std::uint32_t) const noexcept;
   [[nodiscard]] bool hasOnGroundComponent(void *) const noexcept;
   [[nodiscard]] void *findComponentStorage(void *, std::uint32_t) const noexcept;
   [[nodiscard]] bool findPackedEntity(void *, std::uint32_t,
                                       std::uint32_t &) const noexcept;
 
   VisualState &stateFor(std::uint32_t, std::int32_t, float, float) noexcept;
+  [[nodiscard]] bool resolveGrounded(VisualState &, void *, std::int32_t,
+                                     float) const noexcept;
   static void updateRotation(VisualState &, bool, bool, std::int32_t,
                              float) noexcept;
+  static float heightOffset(const ItemRenderTraits &, bool, float) noexcept;
   static std::uint32_t javaCopyCount(std::uint32_t) noexcept;
 
+  std::atomic_bool mEnabled{true};
   std::atomic_bool mProfileSupported{false};
   std::uintptr_t mMinecraftBase{};
   std::uintptr_t mRenderTarget{};
@@ -95,7 +153,12 @@ private:
   GetPartialTickFn mGetPartialTick{};
   MatrixPushFn mMatrixPush{};
   MatrixRefDtorFn mMatrixRefDtor{};
+  GetPosDeltaFn mGetPosDelta{};
   GetBlockTypeForRenderingFn mGetBlockTypeForRendering{};
+  BlockGraphicsGetForBlockTypeFn mGetBlockGraphicsForBlockType{};
+  BlockGraphicsGetForBlockFn mGetBlockGraphicsForBlock{};
+  BlockGraphicsGetBlockShapeFn mGetBlockGraphicsShape{};
+  IsBlockShape3DFn mIsBlockShape3D{};
 
   std::unique_ptr<pl::memory::HookHandle> mHook;
   std::unique_ptr<pl::memory::HookHandle> mRenderItemGroupHook;

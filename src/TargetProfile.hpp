@@ -23,10 +23,14 @@ inline constexpr std::ptrdiff_t kItemAgeOffset = 0x428;
 inline constexpr std::ptrdiff_t kItemBobOffset = 0x434;
 inline constexpr std::ptrdiff_t kIsInItemFrameOffset = 0x440;
 inline constexpr std::ptrdiff_t kItemStackBaseOffset = 0x390;
+inline constexpr std::ptrdiff_t kItemHandleOffset = 0x398;
 inline constexpr std::ptrdiff_t kBlockPtrOffset = 0x3A8;
 inline constexpr std::ptrdiff_t kItemCountOffset = 0x3B2;
 inline constexpr std::ptrdiff_t kRenderDataActorOffset = 0x00;
 inline constexpr std::ptrdiff_t kRenderDataPositionOffset = 0x10;
+inline constexpr std::ptrdiff_t kItemIdentifierOffset = 0xF0;
+inline constexpr std::ptrdiff_t kBlockTypeOffset = 0x68;
+inline constexpr std::size_t kBlockTypeGetVisualShapeVtableOffset = 0x50;
 
 inline constexpr std::uintptr_t kItemRendererRenderRva = 0x0A29F708;
 inline constexpr std::uintptr_t kRenderItemGroupLikeRva = 0x0A29F338;
@@ -35,8 +39,15 @@ inline constexpr std::uintptr_t kGetPartialTickRva = 0x0A5C678C;
 inline constexpr std::uintptr_t kMatrixStackPushRva = 0x107CBFFC;
 inline constexpr std::uintptr_t kMatrixStackRefDtorRva = 0x107CC6C0;
 inline constexpr std::uintptr_t kGetBlockTypeForRenderingRva = 0x0F642ADC;
+inline constexpr std::uintptr_t kGetPosDeltaRva = 0x0EC82A68;
+inline constexpr std::uintptr_t kBlockGraphicsGetForBlockTypeRva = 0x0A2189DC;
+inline constexpr std::uintptr_t kBlockGraphicsGetForBlockRva = 0x0A2189F0;
+inline constexpr std::uintptr_t kBlockGraphicsGetBlockShapeRva = 0x0A219718;
+inline constexpr std::uintptr_t kIsBlockShape3DRva = 0x0A280E68;
 
 inline constexpr std::uint32_t kOnGroundFlagComponentHash = 0xC29078A0u;
+inline constexpr std::uint32_t kVerticalCollisionFlagComponentHash =
+    0xC6A02A9Au;
 
 inline constexpr std::array<std::uint32_t, 24> kRenderFingerprint = {
     0xD103C3FFu, 0x6D072BEBu, 0x6D0823E9u, 0xA9097BFDu,
@@ -70,5 +81,23 @@ inline constexpr std::array<std::uint32_t, 7>
     kGetBlockTypeForRenderingFingerprint = {
         0xF9400408u, 0xB40000C8u, 0xF9400100u, 0xB4000080u,
         0xF9400008u, 0xF9401D01u, 0xD61F0020u};
+
+inline constexpr std::array<std::uint32_t, 3> kGetPosDeltaFingerprint = {
+    0xF9410408u, 0x91006100u, 0xD65F03C0u};
+
+inline constexpr std::array<std::uint32_t, 5>
+    kBlockGraphicsGetForBlockTypeFingerprint = {
+        0xA9BF7BFDu, 0x910003FDu, 0x9556EC78u, 0xA8C17BFDu, 0x17FFFFA1u};
+
+inline constexpr std::array<std::uint32_t, 5>
+    kBlockGraphicsGetForBlockFingerprint = {
+        0xA9BF7BFDu, 0x910003FDu, 0xF9403400u, 0x9556EC72u, 0x955A115Fu};
+
+inline constexpr std::array<std::uint32_t, 2>
+    kBlockGraphicsGetBlockShapeFingerprint = {0xB9401000u, 0xD65F03C0u};
+
+inline constexpr std::array<std::uint32_t, 10> kIsBlockShape3DFingerprint = {
+    0x7102781Fu, 0x54000148u, 0x2A0003E8u, 0xB0FC4EC9u, 0x9117E929u,
+    0x100000AAu, 0x3868692Bu, 0x8B0B094Au, 0x52800020u, 0xD61F0140u};
 
 } // namespace itemphysics::profile

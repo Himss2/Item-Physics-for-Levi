@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 
 namespace itemphysics {
 namespace {
@@ -19,9 +20,121 @@ constexpr float kFlatCopyCenterStep = 0.09375f;
 constexpr float kFlatModelScale = 0.50f;
 constexpr float kDefaultBlockScale = 0.25f;
 constexpr float kMaxContinuousDeltaTicks = 10.0f;
+constexpr std::int32_t kSkullShape = 83;
+constexpr float kExtentEpsilon = 0.0005f;
+constexpr float kThinYRatio = 0.70f;
+
+// These are render-origin corrections only. They never select or alter an
+// animation law; every dropped item still uses the Java xRot path below.
+constexpr float kFullBlockGroundY = -0.035f;
+constexpr float kFlatItemY = -0.09f;
+constexpr float kHorizontalThinGroundY = -0.11f;
+constexpr float kShapedBlockGroundY = -0.10f;
+constexpr float kHeadGroundY = -0.25f;
+constexpr float kSpecialGroundY = -0.10f;
+constexpr float kDragonHeadBaseLiftY = 0.055f;
+constexpr float kDragonHeadTiltLiftY = 0.10f;
+
+constexpr float kStablePositionEpsilon = 0.012f;
+constexpr float kStableVerticalSpeed = 0.028f;
+constexpr float kWakePositionDelta = 0.045f;
+constexpr float kWakeVerticalSpeed = 0.085f;
+
+constexpr const char *kShieldId = "minecraft:shield";
+constexpr const char *kBannerId = "minecraft:banner";
+constexpr const char *kDragonHeadId = "minecraft:dragon_head";
 
 thread_local bool gForceSingleCopy = false;
 thread_local float *gObservedModelScale = nullptr;
+
+bool isThinGroundShape(std::int32_t shape) noexcept {
+  switch (shape) {
+  case 9:
+  case 14:
+  case 15:
+  case 23:
+  case 67:
+  case 68:
+  case 69:
+  case 72:
+  case 73:
+  case 80:
+  case 96:
+  case 99:
+  case 114:
+  case 126:
+  case 135:
+  case 136:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool isTorchGroundShape(std::int32_t shape) noexcept {
+  switch (shape) {
+  case 1:
+  case 2:
+  case 90:
+  case 101:
+  case 155:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool isShapedGroundShape(std::int32_t shape) noexcept {
+  switch (shape) {
+  case 7:
+  case 8:
+  case 10:
+  case 11:
+  case 12:
+  case 13:
+  case 18:
+  case 19:
+  case 20:
+  case 21:
+  case 22:
+  case 25:
+  case 26:
+  case 28:
+  case 31:
+  case 32:
+  case 40:
+  case 42:
+  case 43:
+  case 44:
+  case 70:
+  case 71:
+  case 74:
+  case 76:
+  case 77:
+  case 78:
+  case 79:
+  case 81:
+  case 84:
+  case 87:
+  case 89:
+  case 100:
+  case 102:
+  case 107:
+  case 108:
+  case 110:
+  case 111:
+  case 112:
+  case 113:
+  case 115:
+  case 116:
+  case 119:
+  case 123:
+  case 133:
+    return true;
+  default:
+    return false;
+  }
+}
 
 class MatrixPushScope {
 public:
@@ -137,6 +250,27 @@ bool ItemPhysicsRuntime::verifyProfile(const ResolvedVirtual &resolved,
        matchesFingerprint(resolved.module,
                           base + profile::kGetBlockTypeForRenderingRva,
                           profile::kGetBlockTypeForRenderingFingerprint)},
+      {base + profile::kGetPosDeltaRva, "Actor::getPosDelta",
+       matchesFingerprint(resolved.module, base + profile::kGetPosDeltaRva,
+                          profile::kGetPosDeltaFingerprint)},
+      {base + profile::kBlockGraphicsGetForBlockTypeRva,
+       "BlockGraphics::getForBlock(BlockType)",
+       matchesFingerprint(resolved.module,
+                          base + profile::kBlockGraphicsGetForBlockTypeRva,
+                          profile::kBlockGraphicsGetForBlockTypeFingerprint)},
+      {base + profile::kBlockGraphicsGetForBlockRva,
+       "BlockGraphics::getForBlock(Block)",
+       matchesFingerprint(resolved.module,
+                          base + profile::kBlockGraphicsGetForBlockRva,
+                          profile::kBlockGraphicsGetForBlockFingerprint)},
+      {base + profile::kBlockGraphicsGetBlockShapeRva,
+       "BlockGraphics::getBlockShape",
+       matchesFingerprint(resolved.module,
+                          base + profile::kBlockGraphicsGetBlockShapeRva,
+                          profile::kBlockGraphicsGetBlockShapeFingerprint)},
+      {base + profile::kIsBlockShape3DRva, "BlockGraphics::isBlockShape3D",
+       matchesFingerprint(resolved.module, base + profile::kIsBlockShape3DRva,
+                          profile::kIsBlockShape3DFingerprint)},
   };
 
   for (const auto &check : checks) {
@@ -146,6 +280,7 @@ bool ItemPhysicsRuntime::verifyProfile(const ResolvedVirtual &resolved,
       return false;
     }
   }
+
   return true;
 }
 
@@ -180,6 +315,17 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
       mMinecraftBase + profile::kMatrixStackRefDtorRva);
   mGetBlockTypeForRendering = reinterpret_cast<GetBlockTypeForRenderingFn>(
       mMinecraftBase + profile::kGetBlockTypeForRenderingRva);
+  mGetPosDelta = reinterpret_cast<GetPosDeltaFn>(
+      mMinecraftBase + profile::kGetPosDeltaRva);
+  mGetBlockGraphicsForBlockType =
+      reinterpret_cast<BlockGraphicsGetForBlockTypeFn>(
+          mMinecraftBase + profile::kBlockGraphicsGetForBlockTypeRva);
+  mGetBlockGraphicsForBlock = reinterpret_cast<BlockGraphicsGetForBlockFn>(
+      mMinecraftBase + profile::kBlockGraphicsGetForBlockRva);
+  mGetBlockGraphicsShape = reinterpret_cast<BlockGraphicsGetBlockShapeFn>(
+      mMinecraftBase + profile::kBlockGraphicsGetBlockShapeRva);
+  mIsBlockShape3D = reinterpret_cast<IsBlockShape3DFn>(
+      mMinecraftBase + profile::kIsBlockShape3DRva);
 
   sInstance = this;
   mHook = std::make_unique<pl::memory::HookHandle>(
@@ -234,7 +380,12 @@ void ItemPhysicsRuntime::uninstall() {
   mGetPartialTick = nullptr;
   mMatrixPush = nullptr;
   mMatrixRefDtor = nullptr;
+  mGetPosDelta = nullptr;
   mGetBlockTypeForRendering = nullptr;
+  mGetBlockGraphicsForBlockType = nullptr;
+  mGetBlockGraphicsForBlock = nullptr;
+  mGetBlockGraphicsShape = nullptr;
+  mIsBlockShape3D = nullptr;
   mMinecraftBase = 0;
   mRenderTarget = 0;
   mRenderItemGroupTarget = 0;
@@ -342,36 +493,170 @@ bool ItemPhysicsRuntime::findPackedEntity(void *storage, std::uint32_t entity,
   return (packed ^ (entity & 0xFFFC0000u)) <= 0x3FFFEu;
 }
 
-bool ItemPhysicsRuntime::hasOnGroundComponent(void *actor) const noexcept {
+bool ItemPhysicsRuntime::hasComponent(void *actor,
+                                      std::uint32_t hash) const noexcept {
   if (!actor)
     return false;
   const auto address = reinterpret_cast<std::uintptr_t>(actor);
   const auto entity = *reinterpret_cast<const std::uint32_t *>(
       address + profile::kActorEntityIdOffset);
   std::uint32_t packed{};
-  return findPackedEntity(
-      findComponentStorage(actor, profile::kOnGroundFlagComponentHash), entity,
-      packed);
+  return findPackedEntity(findComponentStorage(actor, hash), entity, packed);
 }
 
-bool ItemPhysicsRuntime::isBlockItem(std::uintptr_t actor) const noexcept {
-  if (!actor)
+bool ItemPhysicsRuntime::hasOnGroundComponent(void *actor) const noexcept {
+  return hasComponent(actor, profile::kOnGroundFlagComponentHash);
+}
+
+bool ItemPhysicsRuntime::itemIdentifierEquals(std::uintptr_t actor,
+                                              const char *wanted) const noexcept {
+  if (!actor || !wanted)
     return false;
 
-  if (*reinterpret_cast<void *const *>(actor + profile::kBlockPtrOffset))
-    return true;
-  if (!mGetBlockTypeForRendering)
+  const auto handle = *reinterpret_cast<const std::uintptr_t *>(
+      actor + profile::kItemHandleOffset);
+  if (!handle)
+    return false;
+  const auto item = *reinterpret_cast<const std::uintptr_t *>(handle);
+  if (!item)
+    return false;
+
+  const auto *raw = reinterpret_cast<const std::uint8_t *>(
+      item + profile::kItemIdentifierOffset);
+  const std::uint8_t flag = raw[0];
+  const char *data = nullptr;
+  std::size_t length = 0;
+  if ((flag & 1u) == 0) {
+    length = static_cast<std::size_t>(flag >> 1);
+    data = reinterpret_cast<const char *>(raw + 1);
+  } else {
+    length = *reinterpret_cast<const std::size_t *>(raw + 8);
+    data = *reinterpret_cast<const char *const *>(raw + 16);
+  }
+
+  const auto wantedLength = std::strlen(wanted);
+  return data && length == wantedLength &&
+         std::memcmp(data, wanted, wantedLength) == 0;
+}
+
+bool ItemPhysicsRuntime::tryGetRenderBlockShape(
+    std::uintptr_t actor, std::int32_t &shape) const noexcept {
+  shape = -1;
+  if (!actor || !mGetBlockTypeForRendering ||
+      !mGetBlockGraphicsForBlockType || !mGetBlockGraphicsShape)
     return false;
 
   const void *weak = mGetBlockTypeForRendering(
       reinterpret_cast<const void *>(actor + profile::kItemStackBaseOffset));
   if (!weak)
     return false;
-  const auto control =
-      *reinterpret_cast<const std::uintptr_t *>(weak);
+  const auto control = *reinterpret_cast<const std::uintptr_t *>(weak);
   if (!control)
     return false;
-  return *reinterpret_cast<const std::uintptr_t *>(control) != 0;
+  const auto type = *reinterpret_cast<const std::uintptr_t *>(control);
+  if (!type)
+    return false;
+  const void *graphics = mGetBlockGraphicsForBlockType(
+      reinterpret_cast<const void *>(type));
+  if (!graphics)
+    return false;
+  shape = mGetBlockGraphicsShape(graphics);
+  return true;
+}
+
+bool ItemPhysicsRuntime::buildBlockRenderInfo(
+    const void *block, BlockRenderInfo &info) const noexcept {
+  info = {};
+  info.blockShape = -1;
+  if (!block)
+    return false;
+
+  if (mGetBlockGraphicsForBlock && mGetBlockGraphicsShape) {
+    if (const void *graphics = mGetBlockGraphicsForBlock(block))
+      info.blockShape = mGetBlockGraphicsShape(graphics);
+  }
+
+  const auto blockAddress = reinterpret_cast<std::uintptr_t>(block);
+  auto *type = *reinterpret_cast<void *const *>(
+      blockAddress + profile::kBlockTypeOffset);
+  if (type) {
+    auto **vtable = *reinterpret_cast<void ***>(type);
+    if (vtable) {
+      constexpr std::size_t slot =
+          profile::kBlockTypeGetVisualShapeVtableOffset / sizeof(void *);
+      const auto getVisualShape =
+          reinterpret_cast<GetVisualShapeFn>(vtable[slot]);
+      if (getVisualShape) {
+        AabbAbi scratch{};
+        if (const AabbAbi *box = getVisualShape(type, block, &scratch)) {
+          const float dx = box->maxX - box->minX;
+          const float dy = box->maxY - box->minY;
+          const float dz = box->maxZ - box->minZ;
+          if (std::isfinite(dx) && std::isfinite(dy) && std::isfinite(dz) &&
+              dx > kExtentEpsilon && dy > kExtentEpsilon &&
+              dz > kExtentEpsilon) {
+            const float horizontalMin = std::min(dx, dz);
+            const float horizontalMax = std::max(dx, dz);
+            info.keepHorizontal = dy <= horizontalMin * kThinYRatio;
+            info.verticalPlane =
+                dy > 0.55f && horizontalMin <= 0.34f &&
+                horizontalMax >= 0.68f;
+            info.rodLike = dy > 0.55f && horizontalMax <= 0.60f;
+          }
+        }
+      }
+    }
+  }
+
+  if (info.blockShape == kSkullShape)
+    info.keepHorizontal = false;
+  return true;
+}
+
+ItemPhysicsRuntime::ItemRenderTraits
+ItemPhysicsRuntime::classifyItem(std::uintptr_t actor) const noexcept {
+  ItemRenderTraits traits{};
+  if (!actor)
+    return traits;
+
+  std::int32_t renderShape = -1;
+  const bool hasRenderShape = tryGetRenderBlockShape(actor, renderShape);
+  const auto *block = *reinterpret_cast<const void *const *>(
+      actor + profile::kBlockPtrOffset);
+
+  if (!block && !hasRenderShape) {
+    traits.valid = true;
+    traits.block = false;
+    traits.height =
+        itemIdentifierEquals(actor, kShieldId) ||
+                itemIdentifierEquals(actor, kBannerId)
+            ? HeightClass::Special
+            : HeightClass::FlatItem;
+    return traits;
+  }
+
+  traits.valid = true;
+  traits.block = true;
+  BlockRenderInfo info{};
+  if (block)
+    (void)buildBlockRenderInfo(block, info);
+  if (info.blockShape < 0 && hasRenderShape)
+    info.blockShape = renderShape;
+  const std::int32_t shape = hasRenderShape ? renderShape : info.blockShape;
+
+  if (shape == kSkullShape) {
+    traits.height = HeightClass::Head;
+    traits.dragonHead = itemIdentifierEquals(actor, kDragonHeadId);
+  } else if (info.keepHorizontal || isThinGroundShape(shape)) {
+    traits.height = HeightClass::HorizontalThin;
+  } else if (info.verticalPlane || info.rodLike ||
+             isTorchGroundShape(shape) || isShapedGroundShape(shape) ||
+             (shape >= 0 && mIsBlockShape3D && !mIsBlockShape3D(shape))) {
+    traits.height = HeightClass::ShapedBlock;
+  } else {
+    traits.height = HeightClass::FullBlock;
+  }
+  return traits;
 }
 
 ItemPhysicsRuntime::VisualState &
@@ -418,6 +703,77 @@ ItemPhysicsRuntime::stateFor(std::uint32_t entity, std::int32_t age,
   return state;
 }
 
+bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
+                                         std::int32_t age,
+                                         float worldY) const noexcept {
+  const bool nativeGrounded = hasOnGroundComponent(actor);
+  const bool verticalCollision = hasComponent(
+      actor, profile::kVerticalCollisionFlagComponentHash);
+
+  float verticalSpeed = 0.0f;
+  bool hasMotion = false;
+  if (mGetPosDelta) {
+    if (const auto *motion = mGetPosDelta(actor);
+        motion && std::isfinite(motion->x) && std::isfinite(motion->y) &&
+        std::isfinite(motion->z)) {
+      verticalSpeed = motion->y;
+      hasMotion = true;
+    }
+  }
+
+  if (nativeGrounded) {
+    state.groundedLatched = true;
+    state.stableContactTicks = 2;
+    state.movingTicks = 0;
+  }
+
+  // Render may be called many times per game tick. The fallback deliberately
+  // samples only when ItemActor::age advances, so FPS cannot make an airborne
+  // item appear stable. VerticalCollision alone is also insufficient (it can
+  // mean a ceiling): two distinct stable tick samples are required.
+  if (age != state.lastProbeAge && std::isfinite(worldY)) {
+    const bool hasPositionDelta = state.positionSampled;
+    const float positionDelta =
+        hasPositionDelta ? worldY - state.lastWorldY : 0.0f;
+    const bool stable =
+        hasPositionDelta && hasMotion &&
+        std::abs(positionDelta) <= kStablePositionEpsilon &&
+        std::abs(verticalSpeed) <= kStableVerticalSpeed;
+    const bool moving =
+        hasPositionDelta && hasMotion &&
+        (std::abs(positionDelta) >= kWakePositionDelta ||
+         std::abs(verticalSpeed) >= kWakeVerticalSpeed);
+
+    if (!nativeGrounded) {
+      if (!state.groundedLatched) {
+        state.stableContactTicks =
+            verticalCollision && stable
+                ? static_cast<std::uint8_t>(
+                      std::min<unsigned>(state.stableContactTicks + 1u, 2u))
+                : 0;
+        if (state.stableContactTicks >= 2)
+          state.groundedLatched = true;
+      } else {
+        state.movingTicks =
+            moving && !verticalCollision
+                ? static_cast<std::uint8_t>(
+                      std::min<unsigned>(state.movingTicks + 1u, 2u))
+                : 0;
+        if (state.movingTicks >= 2) {
+          state.groundedLatched = false;
+          state.stableContactTicks = 0;
+          state.movingTicks = 0;
+        }
+      }
+    }
+
+    state.lastProbeAge = age;
+    state.lastWorldY = worldY;
+    state.positionSampled = true;
+  }
+  return nativeGrounded || state.groundedLatched;
+}
+
 void ItemPhysicsRuntime::updateRotation(VisualState &state, bool block,
                                         bool grounded, std::int32_t age,
                                         float sample) noexcept {
@@ -446,6 +802,37 @@ void ItemPhysicsRuntime::updateRotation(VisualState &state, bool block,
     state.xRot += delta * kRotationPerTick * 2.0f * kDefaultRotationSpeed;
   // With Java's default oldRotation=false, block items freeze at their exact
   // airborne angle after contact. They are not spring-aligned to a face.
+}
+
+float ItemPhysicsRuntime::heightOffset(const ItemRenderTraits &traits,
+                                       bool grounded,
+                                       float xRot) noexcept {
+  if (traits.height == HeightClass::FlatItem)
+    return kFlatItemY;
+  if (!grounded)
+    return 0.0f;
+
+  switch (traits.height) {
+  case HeightClass::FullBlock:
+    return kFullBlockGroundY;
+  case HeightClass::ShapedBlock:
+    return kShapedBlockGroundY;
+  case HeightClass::HorizontalThin:
+    return kHorizontalThinGroundY;
+  case HeightClass::Head:
+    // Dragon Head is much longer than the other skull models. Preserve its
+    // exact frozen landing angle, but lift the render origin by the projected
+    // tilt so the lower jaw cannot be driven through the ground plane.
+    return traits.dragonHead
+               ? kDragonHeadBaseLiftY +
+                     kDragonHeadTiltLiftY * std::abs(std::sin(xRot))
+               : kHeadGroundY;
+  case HeightClass::Special:
+    return kSpecialGroundY;
+  case HeightClass::FlatItem:
+    return kFlatItemY;
+  }
+  return 0.0f;
 }
 
 std::uint32_t ItemPhysicsRuntime::javaCopyCount(std::uint32_t count) noexcept {
@@ -477,6 +864,10 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
     original(self, ctx, renderData);
     return;
   }
+  if (!mEnabled.load(std::memory_order_relaxed)) {
+    original(self, ctx, renderData);
+    return;
+  }
 
   const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
   const auto entity = *reinterpret_cast<const std::uint32_t *>(
@@ -486,18 +877,26 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
   const auto age = std::max(rawAge, 0);
   const auto bobOffset = *reinterpret_cast<const float *>(
       actorAddress + profile::kItemBobOffset);
+  const auto traits = classifyItem(actorAddress);
+  if (!traits.valid) {
+    original(self, ctx, renderData);
+    return;
+  }
+
+  auto *position = reinterpret_cast<float *>(
+      renderAddress + profile::kRenderDataPositionOffset);
+  const float originalWorldY = position[1];
 
   float partial = mGetPartialTick ? mGetPartialTick(ctx) : 0.0f;
   if (!std::isfinite(partial))
     partial = 0.0f;
   partial = std::clamp(partial, 0.0f, 1.0f);
   const float sample = static_cast<float>(age) + partial;
-  const bool grounded = hasOnGroundComponent(actor);
-  const bool block = isBlockItem(actorAddress);
 
   ++mRenderCounter;
   auto &state = stateFor(entity, age, bobOffset, sample);
-  updateRotation(state, block, grounded, age, sample);
+  const bool grounded = resolveGrounded(state, actor, age, originalWorldY);
+  updateRotation(state, traits.block, grounded, age, sample);
 
   // Java keeps the first tick vanilla, but calculateRotation has already run.
   // This warm-up also learns Bedrock's route-specific model scale.
@@ -518,11 +917,11 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
   const auto oldFrameFlag = frameFlag;
   frameFlag = 1;
 
-  const auto *position = reinterpret_cast<const float *>(
-      renderAddress + profile::kRenderDataPositionOffset);
   const float worldX = position[0];
-  const float worldY = position[1];
+  const float worldY =
+      originalWorldY + heightOffset(traits, grounded, state.xRot);
   const float worldZ = position[2];
+  position[1] = worldY;
 
   JavaRandom random(entity);
   bool rendered = false;
@@ -533,11 +932,11 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
 
     const float routeScale =
         state.modelScale > 0.0f ? state.modelScale : kDefaultBlockScale;
-    if (block && copy > 0) {
+    if (traits.block && copy > 0) {
       copyX = (random.nextFloat() * 2.0f - 1.0f) * routeScale;
       copyY = (random.nextFloat() * 2.0f - 1.0f) * routeScale;
       copyZ = (random.nextFloat() * 2.0f - 1.0f) * routeScale;
-    } else if (!block) {
+    } else if (!traits.block) {
       copyZ = -kFlatCopyCenterStep * static_cast<float>(copies - 1) * 0.5f +
               kFlatCopyCenterStep * kFlatModelScale *
                   static_cast<float>(copy);
@@ -556,7 +955,7 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
     postRotateX(*matrix, kHalfPi);
     postRotateZ(*matrix, state.yRot);
 
-    if (block) {
+    if (traits.block) {
       postTranslate(*matrix, 0.0f, kBlockOffsetY, kBlockOffsetZ);
       postTranslate(*matrix, 0.0f, routeScale, 0.0f);
       postRotateY(*matrix, state.xRot);
@@ -580,6 +979,7 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
   }
 
   frameFlag = oldFrameFlag;
+  position[1] = originalWorldY;
 }
 
 } // namespace itemphysics
