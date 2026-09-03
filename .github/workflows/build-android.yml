@@ -142,6 +142,14 @@ jobs:
           echo
           echo "Shared library found successfully."
 
+          SO_BYTES="$(wc -c < "${SO_PATH}")"
+          MAX_SO_BYTES=614400
+          echo "Shared library size: ${SO_BYTES} bytes"
+          if [ "${SO_BYTES}" -gt "${MAX_SO_BYTES}" ]; then
+            echo "ERROR: .so exceeds the ${MAX_SO_BYTES}-byte hard limit."
+            exit 1
+          fi
+
           echo
           echo "========================================"
           echo "File information"
