@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.8.5
+# Implementation notes: universal visual core 0.8.6
 
 ## Source behavior reproduced
 
@@ -23,7 +23,8 @@ The Bedrock implementation follows the same boundary:
    takes its corrected contact pose after—not before—contact. Horizontal block
    models preserve their native world-up thin axis. No visual-AABB centre
    subtraction is applied because Bedrock's rendered block-item origin is not
-   the AABB centre; applying it pushed slabs and trapdoors below the floor.
+   the AABB centre; applying it pushed slabs and trapdoors below the floor. The
+   same world-up pose is selected while `WasInWaterFlagComponent` is active.
 5. Push the world matrix, apply the Java pose around render position, submit one
    native model, and pop the matrix.
 6. Repeat submission using Java's model-count thresholds, but place copies in a
@@ -54,7 +55,17 @@ retained local-Z anti-orbit pivot after the Java X+90 basis. Second,
 `max(0, abs(sin(xRot)) + abs(cos(xRot)) - 1)` accounts for the larger projected
 support at diagonal angles. This replaces the old `abs(sin(xRot))` heuristic,
 which lifted 90-degree angles unnecessarily and under-corrected 45-degree
-angles.
+angles. With pivot movement removed, the original empirically correct contact
+baselines (`-0.095` normal, `-0.105` Dragon) can be reused consistently instead
+of lowering every angle to compensate for only the worst old case.
+
+Bedrock's water-state position leaves the custom item model approximately half
+an ItemActor height below the desired visible line. A uniform `+0.125` render-Y
+correction is therefore applied to every item class while the native water flag
+is live. It changes neither actor position nor velocity and composes after any
+real ground correction. Horizontal-thin items select the same world-up basis
+for `(grounded || inWater)`, while their complete dry-air transform remains
+unchanged.
 
 ## Analyzed target
 

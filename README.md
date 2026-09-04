@@ -1,11 +1,10 @@
 # Levi Item Physics
 
 ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.45.1`.
-Version `0.8.5` keeps the device-approved airborne/full-block/decorated-pot
-path intact while correcting water roll, horizontal-thin support, and
-angle-dependent head height.
+Version `0.8.6` keeps the device-approved airborne/full-block/decorated-pot
+path intact while correcting the final head baseline and water-surface pose.
 
-## Implemented in 0.8.5
+## Implemented in 0.8.6
 
 - One `ItemRenderer::render` hook covers every dropped `ItemActor`, regardless
   of whether it came from Q, a dead mob, a broken container, a block drop,
@@ -31,11 +30,16 @@ angle-dependent head height.
   displacement is cancelled exactly with `pivotZ * (1 - cos(xRot))`, then the
   diagonal footprint receives `abs(sin) + abs(cos) - 1` corner clearance.
   This keeps equivalent axis angles at one height while retaining Dragon Head
-  jaw clearance and the non-orbiting pivot.
+  jaw clearance and the non-orbiting pivot. The contact baselines are restored
+  to `-0.095` for normal heads and `-0.105` for Dragon Head; the old floating
+  variation cannot return because its pivot displacement is now cancelled.
 - `WasInWaterFlagComponent` is sampled once per ItemActor tick. A floating item
   remains airborne, never enters the stable-Y ground fallback, freezes its last
-  roll angle, and receives no ground-only height correction. Only Bedrock's
-  native vertical surface float/bob remains; there is no custom water spin.
+  roll angle, and receives a class-independent `+0.125` visual surface lift.
+  Only Bedrock's native vertical float/bob remains; there is no custom water
+  spin. Naturally horizontal block items also use their world-up pose in water,
+  so slabs, trapdoors, carpets, rails, and pressure plates cannot stand upright
+  at the surface.
 - Java stack-copy thresholds are used: `1 / 2 / 3 / 4 / 5` models at
   `1 / 2 / 17 / 33 / 49` items.
 - The first tick remains vanilla, matching Java ItemPhysic's warm-up rule.
@@ -102,5 +106,8 @@ pre-contact alignment. Merge equal drops and test counts `1, 2, 16, 17, 32,
 toggle `Single Model` and `Hide Item Shadow` both ways while items are visible,
 then sneak/stand repeatedly while already-grounded items remain in view. Drop
 flat, block, head, slab, and trapdoor items into still and flowing water: they
-must keep their last roll angle and show only vertical surface motion. They must
-not acquire a ground offset until they actually touch a solid floor.
+must keep their last roll angle, show only vertical surface motion, and sit
+visibly higher by the same amount. Slabs/trapdoors/carpets must remain
+horizontal. They must not acquire a ground offset until they touch a solid
+floor. Test normal, Creeper, Wither Skeleton, Piglin, Player, and Dragon heads
+at axis and diagonal landing angles; none may enter the floor or hover.
