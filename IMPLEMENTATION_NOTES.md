@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.8.4
+# Implementation notes: universal visual core 0.8.5
 
 ## Source behavior reproduced
 
@@ -15,12 +15,15 @@ The Bedrock implementation follows the same boundary:
    ItemActor vertical velocity can release it; camera sneak cannot. A live or
    four-tick-grace `WasInWaterFlagComponent` explicitly excludes stable surface
    Y from this ground fallback.
-3. Advance one scalar rotation from `age + partialTick`.
+3. Advance one scalar rotation from `age + partialTick` only while airborne and
+   outside water. In water, retain the last scalar angle and leave vertical
+   float/bob to Bedrock's ItemActor position.
 4. Choose block or flat pivot; never choose a separate airborne motion family.
    Classification controls ground height and whether a thin structural model
    takes its corrected contact pose after—not before—contact. Horizontal block
-   models preserve their native world-up thin axis and use their cached visual
-   AABB to keep the same support plane.
+   models preserve their native world-up thin axis. No visual-AABB centre
+   subtraction is applied because Bedrock's rendered block-item origin is not
+   the AABB centre; applying it pushed slabs and trapdoors below the floor.
 5. Push the world matrix, apply the Java pose around render position, submit one
    native model, and pop the matrix.
 6. Repeat submission using Java's model-count thresholds, but place copies in a
@@ -38,11 +41,20 @@ stops naturally while game time is paused, and avoids wall-clock catch-up after
 world changes. A discontinuity above ten ticks resets the baseline.
 
 Java's bytecode applies `realtimeDeltaTicks * 0.25 * rotateSpeed`, doubles that
-step while airborne, and divides it by `1 + viscosity` in fluid. Water has a
-viscosity multiplier of one, so this implementation advances one base step in
-water and two in air. Grounded full block models freeze their exact angle;
-grounded flat models take the zero-roll pose. Ground-only Y corrections are
+step while airborne, and divides it by `1 + viscosity` in fluid. CreativeCore's
+Fabric implementation returns `fluid.getTickDelay(level) / 5`, which is one for
+water. The Bedrock adaptation keeps the exact doubled air step but intentionally
+freezes custom roll while `WasInWaterFlagComponent` is active, matching the
+required surface animation: vertical float only. Ground-only Y corrections are
 never applied while airborne or floating.
+
+Head height uses two separate corrections. First,
+`pivotZ * (1 - cos(xRot))` cancels the vertical translation introduced by the
+retained local-Z anti-orbit pivot after the Java X+90 basis. Second,
+`max(0, abs(sin(xRot)) + abs(cos(xRot)) - 1)` accounts for the larger projected
+support at diagonal angles. This replaces the old `abs(sin(xRot))` heuristic,
+which lifted 90-degree angles unnecessarily and under-corrected 45-degree
+angles.
 
 ## Analyzed target
 

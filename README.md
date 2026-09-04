@@ -1,20 +1,22 @@
 # Levi Item Physics
 
 ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.45.1`.
-Version `0.8.4` keeps the device-approved full-block/decorated-pot path intact
-while correcting horizontal-thin contact, head height, and water contact.
+Version `0.8.5` keeps the device-approved airborne/full-block/decorated-pot
+path intact while correcting water roll, horizontal-thin support, and
+angle-dependent head height.
 
-## Implemented in 0.8.4
+## Implemented in 0.8.5
 
 - One `ItemRenderer::render` hook covers every dropped `ItemActor`, regardless
   of whether it came from Q, a dead mob, a broken container, a block drop,
   player death, a dispenser, or a network spawn.
-- Every model uses the same Java `xRot` law. Model classification selects only
-  the Java block/flat pivot and a render-origin height correction; it never
-  selects a different animation.
+- Every model uses the same Java `xRot` law in dry air. Model classification
+  selects only the Java block/flat pivot and a render-origin height correction;
+  it never selects a different airborne animation.
 - There is no quaternion impulse, landing spring, shaped-block pre-alignment,
   head animation, or special shield/banner animation.
-- Airborne rotation is `realtimeDeltaTicks * 0.25 * 2`.
+- Dry-air rotation is `realtimeDeltaTicks * 0.25 * 2`; water freezes the last
+  angle and retains only native vertical movement.
 - Flat items snap to their ground pose on native `OnGroundFlagComponent`.
   A conservative fallback handles mob drops that omit that flag: stable world
   Y across distinct ItemActor age ticks is required, while vertical collision
@@ -25,14 +27,15 @@ while correcting horizontal-thin contact, head height, and water contact.
   carpets, and other naturally horizontal block models keep their native
   world-up axis at contact; their complete airborne transform is unchanged.
 - Ground offsets are tuned independently for flat, thin, shaped, head, special,
-  and full-block models. Heads retain their frozen angle and receive
-  tilt-dependent support clearance. Head rotation uses a model-specific local-Z
-  pivot so the model spins around itself instead of orbiting the actor origin.
+  and full-block models. Heads retain their frozen angle. Their local-Z pivot
+  displacement is cancelled exactly with `pivotZ * (1 - cos(xRot))`, then the
+  diagonal footprint receives `abs(sin) + abs(cos) - 1` corner clearance.
+  This keeps equivalent axis angles at one height while retaining Dragon Head
+  jaw clearance and the non-orbiting pivot.
 - `WasInWaterFlagComponent` is sampled once per ItemActor tick. A floating item
-  remains airborne, never enters the stable-Y ground fallback, keeps rotating
-  at ItemPhysic's water-viscosity rate, and receives no ground-only height
-  correction. This keeps its rendered model at the Bedrock water surface
-  instead of artificially pushing it deeper.
+  remains airborne, never enters the stable-Y ground fallback, freezes its last
+  roll angle, and receives no ground-only height correction. Only Bedrock's
+  native vertical surface float/bob remains; there is no custom water spin.
 - Java stack-copy thresholds are used: `1 / 2 / 3 / 4 / 5` models at
   `1 / 2 / 17 / 33 / 49` items.
 - The first tick remains vanilla, matching Java ItemPhysic's warm-up rule.
@@ -42,9 +45,9 @@ while correcting horizontal-thin contact, head height, and water contact.
 - Stack copies are centered in a deterministic horizontal row in world XZ, so
   merging items cannot create a copy above the base model.
 - `Single Model` and `Hide Item Shadow` are available as Mod Menu toggles.
-- Per-entity traits and thin-shape support distances are cached, state lookup
-  probes at most eight slots, contact ECS queries run once per game tick, and
-  shadow storage is touched only when its requested state changes.
+- Per-entity traits are cached, state lookup probes at most eight slots, contact
+  ECS queries run once per game tick, and shadow storage is touched only when
+  its requested state changes.
 - The lightweight `item_physics.main` entry is registered in Levi Mod Menu;
   toggling it changes only the render path and does not reinstall hooks.
 
@@ -99,5 +102,5 @@ pre-contact alignment. Merge equal drops and test counts `1, 2, 16, 17, 32,
 toggle `Single Model` and `Hide Item Shadow` both ways while items are visible,
 then sneak/stand repeatedly while already-grounded items remain in view. Drop
 flat, block, head, slab, and trapdoor items into still and flowing water: they
-must continue the slower fluid roll at the visible surface and must not acquire
-a ground offset until they actually touch a solid floor.
+must keep their last roll angle and show only vertical surface motion. They must
+not acquire a ground offset until they actually touch a solid floor.
