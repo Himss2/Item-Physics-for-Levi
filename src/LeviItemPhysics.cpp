@@ -33,7 +33,7 @@ public:
 
   bool load() {
     mSelf.getLogger().info(
-        "Levi Item Physics 0.8.7: centered head flip/fast render path loaded");
+        "Levi Item Physics 0.8.8: asymmetric head contact support loaded");
     return true;
   }
 

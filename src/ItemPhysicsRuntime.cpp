@@ -24,7 +24,16 @@ constexpr float kHeadBaseLiftY = -0.095f;
 constexpr float kDragonHeadBaseLiftY = -0.105f;
 constexpr float kSqrtTwoMinusOne = 0.41421356237309504880f;
 constexpr float kHeadCornerSupportY = 0.045f / kSqrtTwoMinusOne;
-constexpr float kDragonHeadCornerSupportY = 0.070f / kSqrtTwoMinusOne;
+// The Dragon Head is not centred along model Z: its jaw/snout reaches twice
+// as far in negative Z as the back of the cranium reaches in positive Z.
+// Keep these as projected world-space supports rather than a rotation pivot;
+// a pivot would move the whole model around the ItemActor while airborne.
+constexpr float kDragonHeadSideSupportY =
+    0.070f / kSqrtTwoMinusOne;
+constexpr float kDragonHeadPositiveDepthSupportY =
+    kDragonHeadSideSupportY;
+constexpr float kDragonHeadNegativeDepthSupportY =
+    kDragonHeadPositiveDepthSupportY * 2.0f;
 constexpr float kWaterSurfaceLiftY = 0.125f;
 constexpr std::int32_t kSkullShape = 83;
 constexpr float kExtentEpsilon = 0.0005f;
@@ -1001,19 +1010,30 @@ float ItemPhysicsRuntime::heightOffset(const ItemRenderTraits &traits,
     return kHorizontalThinGroundY;
   case HeightClass::Head:
     // Java applies the ordinary block rotation to skulls; it has no head-only
-    // pivot. The projected footprint still needs periodic diagonal clearance,
-    // but it must never translate the model around the ItemActor.
+    // pivot. Ground clearance is therefore a world-Y support calculation and
+    // must never translate the model around the ItemActor in XZ.
     {
       const float sine = std::abs(xRotSine);
+      if (traits.dragonHead) {
+        // After Java's X+90 basis, model-space X/Z project onto world Y as
+        // sin(xRot) * X - cos(xRot) * Z. Unlike an ordinary skull, Dragon
+        // Head has an elongated negative-Z jaw. A sign-aware support function
+        // is required: abs(cos) incorrectly treats the front and back as the
+        // same depth, which made only one half of final angles clear the floor.
+        const float depthSupport =
+            xRotCosine >= 0.0f
+                ? xRotCosine * kDragonHeadPositiveDepthSupportY
+                : -xRotCosine * kDragonHeadNegativeDepthSupportY;
+        const float projectedSupport =
+            sine * kDragonHeadSideSupportY + depthSupport;
+        return kDragonHeadBaseLiftY +
+               projectedSupport - kDragonHeadPositiveDepthSupportY;
+      }
+
       const float cosine = std::abs(xRotCosine);
       const float cornerProjection =
           std::max(0.0f, sine + cosine - 1.0f);
-      const float baseY =
-          traits.dragonHead ? kDragonHeadBaseLiftY : kHeadBaseLiftY;
-      const float cornerSupport = traits.dragonHead
-                                      ? kDragonHeadCornerSupportY
-                                      : kHeadCornerSupportY;
-      return baseY + cornerSupport * cornerProjection;
+      return kHeadBaseLiftY + kHeadCornerSupportY * cornerProjection;
     }
   case HeightClass::Special:
     return kSpecialGroundY;
