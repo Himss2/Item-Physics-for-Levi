@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.8.3
+# Implementation notes: universal visual core 0.8.4
 
 ## Source behavior reproduced
 
@@ -12,11 +12,15 @@ The Bedrock implementation follows the same boundary:
 2. Read `OnGroundFlagComponent` from the actor ECS registry. If a mob-drop path
    omits it, require stable world Y on four ItemActor age ticks, or two when
    `VerticalCollisionFlagComponent` confirms contact. Once latched, only actual
-   ItemActor vertical velocity can release it; camera sneak cannot.
+   ItemActor vertical velocity can release it; camera sneak cannot. A live or
+   four-tick-grace `WasInWaterFlagComponent` explicitly excludes stable surface
+   Y from this ground fallback.
 3. Advance one scalar rotation from `age + partialTick`.
 4. Choose block or flat pivot; never choose a separate airborne motion family.
    Classification controls ground height and whether a thin structural model
-   takes the flat contact pose after—not before—contact.
+   takes its corrected contact pose after—not before—contact. Horizontal block
+   models preserve their native world-up thin axis and use their cached visual
+   AABB to keep the same support plane.
 5. Push the world matrix, apply the Java pose around render position, submit one
    native model, and pop the matrix.
 6. Repeat submission using Java's model-count thresholds, but place copies in a
@@ -33,6 +37,13 @@ Using `age + partialTick` prevents double updates during multiple render passes,
 stops naturally while game time is paused, and avoids wall-clock catch-up after
 world changes. A discontinuity above ten ticks resets the baseline.
 
+Java's bytecode applies `realtimeDeltaTicks * 0.25 * rotateSpeed`, doubles that
+step while airborne, and divides it by `1 + viscosity` in fluid. Water has a
+viscosity multiplier of one, so this implementation advances one base step in
+water and two in air. Grounded full block models freeze their exact angle;
+grounded flat models take the zero-roll pose. Ground-only Y corrections are
+never applied while airborne or floating.
+
 ## Analyzed target
 
 - Minecraft: `1.26.45.1`, ARM64
@@ -47,6 +58,7 @@ world changes. A discontinuity above ten ticks resets the baseline.
 - ItemStackBase block-render query: `0xF642ADC`
 - On-ground component hash: `0xC29078A0`
 - Vertical-collision component hash: `0xC6A02A9A`
+- Was-in-water component hash: `0x78E89F39`
 - Actor position delta: `0xEC82A68`
 - BlockGraphics helpers: `0xA2189DC`, `0xA2189F0`, `0xA219718`, `0xA280E68`
 - Relative-shadow storage/emplace: `0xE96A7E4` / `0xE96B68C`
