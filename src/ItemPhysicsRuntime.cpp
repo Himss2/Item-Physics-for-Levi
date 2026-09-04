@@ -22,11 +22,12 @@ constexpr float kBlockStackScaleStep = 0.32f;
 constexpr float kMaxContinuousDeltaTicks = 10.0f;
 constexpr float kHeadPivotZ = -0.035f;
 constexpr float kDragonHeadPivotZ = -0.12f;
-constexpr float kHeadBaseLiftY = -0.165f;
-constexpr float kDragonHeadBaseLiftY = -0.180f;
+constexpr float kHeadBaseLiftY = -0.095f;
+constexpr float kDragonHeadBaseLiftY = -0.105f;
 constexpr float kSqrtTwoMinusOne = 0.41421356237309504880f;
 constexpr float kHeadCornerSupportY = 0.045f / kSqrtTwoMinusOne;
 constexpr float kDragonHeadCornerSupportY = 0.070f / kSqrtTwoMinusOne;
+constexpr float kWaterSurfaceLiftY = 0.125f;
 constexpr std::int32_t kSkullShape = 83;
 constexpr float kExtentEpsilon = 0.0005f;
 constexpr float kThinYRatio = 0.70f;
@@ -1056,8 +1057,13 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
   frameFlag = 1;
 
   const float worldX = position[0];
-  const float worldY =
-      originalWorldY + heightOffset(traits, grounded, state.xRot);
+  // Bedrock keeps the ItemActor centre approximately half of its 0.25-block
+  // height below the visible water line. Apply one class-independent visual
+  // lift while its native water component is live; do not alter actor motion.
+  const float waterSurfaceLift = state.inWater ? kWaterSurfaceLiftY : 0.0f;
+  const float worldY = originalWorldY +
+                       heightOffset(traits, grounded, state.xRot) +
+                       waterSurfaceLift;
   const float worldZ = position[2];
   position[1] = worldY;
 
@@ -1093,16 +1099,19 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
     // stacking or a floating copy.
     postTranslate(*matrix, worldX + copyWorldX, worldY,
                   worldZ + copyWorldZ);
-    const bool horizontalContact =
-        grounded && traits.height == HeightClass::HorizontalThin;
-    if (horizontalContact) {
+    const bool horizontalSurfacePose =
+        (grounded || state.inWater) &&
+        traits.height == HeightClass::HorizontalThin;
+    if (horizontalSurfacePose) {
       // A slab/trapdoor/carpet is already horizontal in its native block
       // model. Java's universal X+90 pose turns that thin axis vertical, and
-      // changing xRot cannot undo it. At real contact only, preserve the
-      // Java block translation in world space and retain only a harmless
-      // surface yaw. Do not apply an AABB centre drop here: Bedrock's block
+      // changing xRot cannot undo it. At solid contact or while floating,
+      // preserve the Java block translation in world space and retain only a
+      // harmless surface yaw. Do not apply an AABB centre drop here: Bedrock's
       // item origin is not the visual AABB centre, and that extra subtraction
-      // is what pushed slabs/trapdoors/carpets through the ground.
+      // is what pushed slabs/trapdoors/carpets through the ground. The same
+      // world-up basis is used while floating so these models cannot become
+      // vertical at the water surface.
       postTranslate(*matrix, kBlockOffsetY * -std::sin(state.yRot),
                     -kBlockOffsetZ,
                     kBlockOffsetY * std::cos(state.yRot));
@@ -1112,7 +1121,7 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
       postRotateZ(*matrix, state.yRot);
     }
 
-    if (!horizontalContact) {
+    if (!horizontalSurfacePose) {
       if (traits.block) {
         postTranslate(*matrix, 0.0f, kBlockOffsetY, kBlockOffsetZ);
         if (traits.height == HeightClass::Head) {
