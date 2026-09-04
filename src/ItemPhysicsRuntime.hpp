@@ -78,7 +78,6 @@ private:
     bool keepHorizontal{};
     bool verticalPlane{};
     bool rodLike{};
-    float horizontalSupportDrop{0.32f};
     std::int32_t blockShape{-1};
   };
 
@@ -87,7 +86,6 @@ private:
     bool block{};
     bool groundFlat{};
     bool dragonHead{};
-    float horizontalSupportDrop{0.32f};
     HeightClass height{HeightClass::FlatItem};
   };
 

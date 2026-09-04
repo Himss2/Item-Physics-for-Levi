@@ -24,6 +24,9 @@ constexpr float kHeadPivotZ = -0.035f;
 constexpr float kDragonHeadPivotZ = -0.12f;
 constexpr float kHeadBaseLiftY = -0.165f;
 constexpr float kDragonHeadBaseLiftY = -0.180f;
+constexpr float kSqrtTwoMinusOne = 0.41421356237309504880f;
+constexpr float kHeadCornerSupportY = 0.045f / kSqrtTwoMinusOne;
+constexpr float kDragonHeadCornerSupportY = 0.070f / kSqrtTwoMinusOne;
 constexpr std::int32_t kSkullShape = 83;
 constexpr float kExtentEpsilon = 0.0005f;
 constexpr float kThinYRatio = 0.70f;
@@ -37,8 +40,6 @@ constexpr float kFlatItemY = -0.125f;
 constexpr float kHorizontalThinGroundY = -0.145f;
 constexpr float kShapedBlockGroundY = -0.135f;
 constexpr float kSpecialGroundY = -0.14f;
-constexpr float kHeadTiltLiftY = 0.045f;
-constexpr float kDragonHeadTiltLiftY = 0.070f;
 
 constexpr float kStablePositionEpsilon = 0.012f;
 constexpr float kCollisionPositionEpsilon = 0.025f;
@@ -645,8 +646,6 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
             const float horizontalMin = std::min(dx, dz);
             const float horizontalMax = std::max(dx, dz);
             info.keepHorizontal = dy <= horizontalMin * kThinYRatio;
-            info.horizontalSupportDrop =
-                std::max(0.0f, horizontalMax - dy) * 0.5f;
             info.verticalPlane =
                 dy > 0.55f && horizontalMin <= 0.34f &&
                 horizontalMax >= 0.68f;
@@ -716,11 +715,9 @@ ItemPhysicsRuntime::classifyItem(std::uintptr_t actor) const noexcept {
   } else if (horizontalSurface) {
     traits.height = HeightClass::HorizontalThin;
     traits.groundFlat = true;
-    traits.horizontalSupportDrop = info.horizontalSupportDrop;
   } else if (info.keepHorizontal || isThinGroundShape(shape)) {
     traits.height = HeightClass::HorizontalThin;
     traits.groundFlat = true;
-    traits.horizontalSupportDrop = info.horizontalSupportDrop;
   } else if (info.verticalPlane || info.rodLike ||
              isTorchGroundShape(shape) || isShapedGroundShape(shape) ||
              (shape >= 0 && mIsBlockShape3D && !mIsBlockShape3D(shape))) {
@@ -904,13 +901,10 @@ void ItemPhysicsRuntime::updateRotation(VisualState &state,
     return;
   }
 
-  if (!grounded) {
-    // ItemPhysic doubles the base step in air, then divides it by
-    // (1 + viscosity) in fluid. Water's multiplier is 1, so its exact net
-    // factor is one base step instead of two.
-    const float mediumMultiplier = inWater ? 1.0f : 2.0f;
-    state.xRot += delta * kRotationPerTick * mediumMultiplier *
-                  kDefaultRotationSpeed;
+  if (!grounded && !inWater) {
+    // Keep the Java airborne tumble exact. Once Bedrock reports water, freeze
+    // the last roll and let only the actor's native vertical float/bob remain.
+    state.xRot += delta * kRotationPerTick * 2.0f * kDefaultRotationSpeed;
   }
   // Full 3D blocks and heads freeze at their exact airborne angle after
   // contact. They are not spring-aligned to a face.
@@ -930,13 +924,27 @@ float ItemPhysicsRuntime::heightOffset(const ItemRenderTraits &traits,
   case HeightClass::HorizontalThin:
     return kHorizontalThinGroundY;
   case HeightClass::Head:
-    // Preserve the exact frozen angle, then compensate its projected support
-    // height. Dragon Head needs extra clearance for its longer lower jaw.
-    return traits.dragonHead
-               ? kDragonHeadBaseLiftY +
-                     kDragonHeadTiltLiftY * std::abs(std::sin(xRot))
-               : kHeadBaseLiftY +
-                     kHeadTiltLiftY * std::abs(std::sin(xRot));
+    // The local-Z pivot prevents a Bedrock head model from orbiting the actor,
+    // but after Java's X+90 basis it also creates a deterministic vertical
+    // shift: -pivotZ * (1 - cos(angle)). Cancel that shift exactly. Then lift
+    // only the extra projected corner support of the rotated footprint. This
+    // makes axis-equivalent angles share one ground height while preserving
+    // the exact frozen landing orientation and Dragon Head jaw clearance.
+    {
+      const float sine = std::abs(std::sin(xRot));
+      const float cosine = std::abs(std::cos(xRot));
+      const float cornerProjection =
+          std::max(0.0f, sine + cosine - 1.0f);
+      const float pivotZ =
+          traits.dragonHead ? kDragonHeadPivotZ : kHeadPivotZ;
+      const float baseY =
+          traits.dragonHead ? kDragonHeadBaseLiftY : kHeadBaseLiftY;
+      const float cornerSupport = traits.dragonHead
+                                      ? kDragonHeadCornerSupportY
+                                      : kHeadCornerSupportY;
+      return baseY + pivotZ * (1.0f - std::cos(xRot)) +
+             cornerSupport * cornerProjection;
+    }
   case HeightClass::Special:
     return kSpecialGroundY;
   case HeightClass::FlatItem:
@@ -1091,11 +1099,12 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
       // A slab/trapdoor/carpet is already horizontal in its native block
       // model. Java's universal X+90 pose turns that thin axis vertical, and
       // changing xRot cannot undo it. At real contact only, preserve the
-      // Java block translation in world space, lower the centre by the cached
-      // shape support delta, and retain only a harmless surface yaw.
+      // Java block translation in world space and retain only a harmless
+      // surface yaw. Do not apply an AABB centre drop here: Bedrock's block
+      // item origin is not the visual AABB centre, and that extra subtraction
+      // is what pushed slabs/trapdoors/carpets through the ground.
       postTranslate(*matrix, kBlockOffsetY * -std::sin(state.yRot),
-                    -kBlockOffsetZ -
-                        traits.horizontalSupportDrop * routeScale,
+                    -kBlockOffsetZ,
                     kBlockOffsetY * std::cos(state.yRot));
       postRotateY(*matrix, state.yRot);
     } else {

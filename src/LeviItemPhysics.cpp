@@ -33,7 +33,7 @@ public:
 
   bool load() {
     mSelf.getLogger().info(
-        "Levi Item Physics 0.8.4: Java air/water/contact profile loaded");
+        "Levi Item Physics 0.8.5: stable water/contact profile loaded");
     return true;
   }
 
