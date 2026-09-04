@@ -33,7 +33,7 @@ public:
 
   bool load() {
     mSelf.getLogger().info(
-        "Levi Item Physics 0.8.6: water surface/head profile loaded");
+        "Levi Item Physics 0.8.7: centered head flip/fast render path loaded");
     return true;
   }
 

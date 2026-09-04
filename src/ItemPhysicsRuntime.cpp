@@ -4,12 +4,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 
 namespace itemphysics {
 namespace {
 
-constexpr float kHalfPi = 1.57079632679489661923f;
 constexpr float kRotationPerTick = 0.25f;
 constexpr float kDefaultRotationSpeed = 1.0f;
 constexpr float kBlockOffsetY = -0.20f;
@@ -20,8 +20,6 @@ constexpr float kDefaultBlockScale = 0.25f;
 constexpr float kFlatStackWorldStep = 0.055f;
 constexpr float kBlockStackScaleStep = 0.32f;
 constexpr float kMaxContinuousDeltaTicks = 10.0f;
-constexpr float kHeadPivotZ = -0.035f;
-constexpr float kDragonHeadPivotZ = -0.12f;
 constexpr float kHeadBaseLiftY = -0.095f;
 constexpr float kDragonHeadBaseLiftY = -0.105f;
 constexpr float kSqrtTwoMinusOne = 0.41421356237309504880f;
@@ -52,6 +50,45 @@ constexpr const char *kDragonHeadId = "minecraft:dragon_head";
 
 thread_local bool gForceSingleCopy = false;
 thread_local float *gObservedModelScale = nullptr;
+
+// Item stacks may submit as many as five copies. The old path evaluated the
+// same trigonometric functions again for every copy. These helpers consume one
+// sine/cosine pair calculated for the ItemActor and keep the matrix equations
+// identical to MatrixMath.hpp.
+inline void postRotateXQuarter(Mat4 &matrix) noexcept {
+  float c1[4];
+  float c2[4];
+  std::memcpy(c1, &matrix.m[4], sizeof(c1));
+  std::memcpy(c2, &matrix.m[8], sizeof(c2));
+  for (int row = 0; row < 4; ++row) {
+    matrix.m[4 + row] = c2[row];
+    matrix.m[8 + row] = -c1[row];
+  }
+}
+
+inline void postRotateYKnown(Mat4 &matrix, float sine,
+                             float cosine) noexcept {
+  float c0[4];
+  float c2[4];
+  std::memcpy(c0, &matrix.m[0], sizeof(c0));
+  std::memcpy(c2, &matrix.m[8], sizeof(c2));
+  for (int row = 0; row < 4; ++row) {
+    matrix.m[row] = cosine * c0[row] - sine * c2[row];
+    matrix.m[8 + row] = sine * c0[row] + cosine * c2[row];
+  }
+}
+
+inline void postRotateZKnown(Mat4 &matrix, float sine,
+                             float cosine) noexcept {
+  float c0[4];
+  float c1[4];
+  std::memcpy(c0, &matrix.m[0], sizeof(c0));
+  std::memcpy(c1, &matrix.m[4], sizeof(c1));
+  for (int row = 0; row < 4; ++row) {
+    matrix.m[row] = cosine * c0[row] + sine * c1[row];
+    matrix.m[4 + row] = -sine * c0[row] + cosine * c1[row];
+  }
+}
 
 bool isThinGroundShape(std::int32_t shape) noexcept {
   switch (shape) {
@@ -396,6 +433,7 @@ void ItemPhysicsRuntime::uninstall() {
 
 void ItemPhysicsRuntime::clearStates() noexcept {
   mStates = {};
+  mComponentStorageCache = {};
   mRenderCounter = 0;
 }
 
@@ -448,6 +486,37 @@ void *ItemPhysicsRuntime::findComponentStorage(void *actor,
   if (!begin || !end || end <= begin || !nodes)
     return nullptr;
 
+  auto &cache = mComponentStorageCache;
+  if (cache.registry != registry || cache.begin != begin || cache.end != end ||
+      cache.nodes != nodes || cache.sentinel != sentinel) {
+    cache = {};
+    cache.registry = registry;
+    cache.begin = begin;
+    cache.end = end;
+    cache.nodes = nodes;
+    cache.sentinel = sentinel;
+  }
+
+  void **cached = nullptr;
+  switch (hash) {
+  case profile::kOnGroundFlagComponentHash:
+    cached = &cache.onGround;
+    break;
+  case profile::kVerticalCollisionFlagComponentHash:
+    cached = &cache.verticalCollision;
+    break;
+  case kWasInWaterFlagComponentHash:
+    cached = &cache.inWater;
+    break;
+  case profile::kRelativeShadowOffsetComponentHash:
+    cached = &cache.relativeShadow;
+    break;
+  default:
+    break;
+  }
+  if (cached && *cached)
+    return *cached;
+
   const auto bytes = end - begin;
   if (bytes % sizeof(std::uintptr_t))
     return nullptr;
@@ -461,8 +530,13 @@ void *ItemPhysicsRuntime::findComponentStorage(void *actor,
     const auto node = nodes + static_cast<std::uintptr_t>(index) * 32u;
     if (node == sentinel)
       return nullptr;
-    if (*reinterpret_cast<const std::uint32_t *>(node + 8) == hash)
-      return *reinterpret_cast<void *const *>(node + 0x10);
+    if (*reinterpret_cast<const std::uint32_t *>(node + 8) == hash) {
+      void *const storage =
+          *reinterpret_cast<void *const *>(node + 0x10);
+      if (cached)
+        *cached = storage;
+      return storage;
+    }
     index = *reinterpret_cast<const std::int64_t *>(node);
   }
   return nullptr;
@@ -913,7 +987,8 @@ void ItemPhysicsRuntime::updateRotation(VisualState &state,
 
 float ItemPhysicsRuntime::heightOffset(const ItemRenderTraits &traits,
                                        bool grounded,
-                                       float xRot) noexcept {
+                                       float xRotSine,
+                                       float xRotCosine) noexcept {
   if (!grounded)
     return 0.0f;
 
@@ -925,26 +1000,20 @@ float ItemPhysicsRuntime::heightOffset(const ItemRenderTraits &traits,
   case HeightClass::HorizontalThin:
     return kHorizontalThinGroundY;
   case HeightClass::Head:
-    // The local-Z pivot prevents a Bedrock head model from orbiting the actor,
-    // but after Java's X+90 basis it also creates a deterministic vertical
-    // shift: -pivotZ * (1 - cos(angle)). Cancel that shift exactly. Then lift
-    // only the extra projected corner support of the rotated footprint. This
-    // makes axis-equivalent angles share one ground height while preserving
-    // the exact frozen landing orientation and Dragon Head jaw clearance.
+    // Java applies the ordinary block rotation to skulls; it has no head-only
+    // pivot. The projected footprint still needs periodic diagonal clearance,
+    // but it must never translate the model around the ItemActor.
     {
-      const float sine = std::abs(std::sin(xRot));
-      const float cosine = std::abs(std::cos(xRot));
+      const float sine = std::abs(xRotSine);
+      const float cosine = std::abs(xRotCosine);
       const float cornerProjection =
           std::max(0.0f, sine + cosine - 1.0f);
-      const float pivotZ =
-          traits.dragonHead ? kDragonHeadPivotZ : kHeadPivotZ;
       const float baseY =
           traits.dragonHead ? kDragonHeadBaseLiftY : kHeadBaseLiftY;
       const float cornerSupport = traits.dragonHead
                                       ? kDragonHeadCornerSupportY
                                       : kHeadCornerSupportY;
-      return baseY + pivotZ * (1.0f - std::cos(xRot)) +
-             cornerSupport * cornerProjection;
+      return baseY + cornerSupport * cornerProjection;
     }
   case HeightClass::Special:
     return kSpecialGroundY;
@@ -1045,6 +1114,13 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
     return;
   }
 
+  // Evaluate each changing angle once per ItemActor render. Multi-copy stacks
+  // reuse these values rather than calling libm two to ten extra times.
+  const float xRotSine = std::sin(state.xRot);
+  const float xRotCosine = std::cos(state.xRot);
+  const float yRotSine = std::sin(state.yRot);
+  const float yRotCosine = std::cos(state.yRot);
+
   const auto count = static_cast<std::uint32_t>(
       *reinterpret_cast<const std::uint8_t *>(actorAddress +
                                              profile::kItemCountOffset));
@@ -1062,7 +1138,8 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
   // lift while its native water component is live; do not alter actor motion.
   const float waterSurfaceLift = state.inWater ? kWaterSurfaceLiftY : 0.0f;
   const float worldY = originalWorldY +
-                       heightOffset(traits, grounded, state.xRot) +
+                       heightOffset(traits, grounded, xRotSine,
+                                    xRotCosine) +
                        waterSurfaceLift;
   const float worldZ = position[2];
   position[1] = worldY;
@@ -1074,8 +1151,8 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
           ? std::max(kFlatStackWorldStep,
                      routeScale * kBlockStackScaleStep)
           : kFlatStackWorldStep;
-  const float stackDirectionX = std::cos(state.yRot);
-  const float stackDirectionZ = std::sin(state.yRot);
+  const float stackDirectionX = yRotCosine;
+  const float stackDirectionZ = yRotSine;
   bool rendered = false;
   for (std::uint32_t copy = 0; copy < copies; ++copy) {
     const float centeredCopy =
@@ -1112,34 +1189,27 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
       // is what pushed slabs/trapdoors/carpets through the ground. The same
       // world-up basis is used while floating so these models cannot become
       // vertical at the water surface.
-      postTranslate(*matrix, kBlockOffsetY * -std::sin(state.yRot),
+      postTranslate(*matrix, kBlockOffsetY * -yRotSine,
                     -kBlockOffsetZ,
-                    kBlockOffsetY * std::cos(state.yRot));
-      postRotateY(*matrix, state.yRot);
+                    kBlockOffsetY * yRotCosine);
+      postRotateYKnown(*matrix, yRotSine, yRotCosine);
     } else {
-      postRotateX(*matrix, kHalfPi);
-      postRotateZ(*matrix, state.yRot);
+      postRotateXQuarter(*matrix);
+      postRotateZKnown(*matrix, yRotSine, yRotCosine);
     }
 
     if (!horizontalSurfacePose) {
       if (traits.block) {
         postTranslate(*matrix, 0.0f, kBlockOffsetY, kBlockOffsetZ);
-        if (traits.height == HeightClass::Head) {
-          const float pivotZ =
-              traits.dragonHead ? kDragonHeadPivotZ : kHeadPivotZ;
-          postTranslate(*matrix, 0.0f, routeScale, pivotZ);
-          postRotateY(*matrix, state.xRot);
-          postTranslate(*matrix, 0.0f, -routeScale, -pivotZ);
-        } else {
-          // Keep the device-approved full/shaped block transform exact.
-          postTranslate(*matrix, 0.0f, routeScale, 0.0f);
-          postRotateY(*matrix, state.xRot);
-          postTranslate(*matrix, 0.0f, -routeScale, 0.0f);
-        }
+        // Java has one block transform, including for every skull and Dragon
+        // Head. A head-only local-Z pivot causes a visible horizontal orbit.
+        postTranslate(*matrix, 0.0f, routeScale, 0.0f);
+        postRotateYKnown(*matrix, xRotSine, xRotCosine);
+        postTranslate(*matrix, 0.0f, -routeScale, 0.0f);
       } else {
         postTranslate(*matrix, 0.0f, 0.0f,
                       kFlatOffsetZ - bobOffset * kBobOffsetScale);
-        postRotateY(*matrix, state.xRot);
+        postRotateYKnown(*matrix, xRotSine, xRotCosine);
       }
     }
     postTranslate(*matrix, -worldX, -worldY, -worldZ);

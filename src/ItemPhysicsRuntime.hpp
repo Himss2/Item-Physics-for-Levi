@@ -114,6 +114,18 @@ private:
     bool shadowGrounded{};
   };
 
+  struct ComponentStorageCache {
+    std::uintptr_t registry{};
+    std::uintptr_t begin{};
+    std::uintptr_t end{};
+    std::uintptr_t nodes{};
+    std::uintptr_t sentinel{};
+    void *onGround{};
+    void *verticalCollision{};
+    void *inWater{};
+    void *relativeShadow{};
+  };
+
   using GetPosDeltaFn = const Vec3Abi *(*)(const void *);
   using GetBlockTypeForRenderingFn = const void *(*)(const void *);
   using BlockGraphicsGetForBlockTypeFn = void *(*)(const void *);
@@ -162,7 +174,8 @@ private:
                                      float) const noexcept;
   static void updateRotation(VisualState &, bool, bool, bool, std::int32_t,
                              float) noexcept;
-  static float heightOffset(const ItemRenderTraits &, bool, float) noexcept;
+  static float heightOffset(const ItemRenderTraits &, bool, float,
+                            float) noexcept;
   static std::uint32_t javaCopyCount(std::uint32_t) noexcept;
 
   std::atomic_bool mEnabled{true};
@@ -191,6 +204,7 @@ private:
   std::unique_ptr<pl::memory::HookHandle> mHook;
   std::unique_ptr<pl::memory::HookHandle> mRenderItemGroupHook;
   std::array<VisualState, kStateCapacity> mStates{};
+  mutable ComponentStorageCache mComponentStorageCache{};
   std::uint32_t mRenderCounter{};
 };
 
