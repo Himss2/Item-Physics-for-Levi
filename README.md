@@ -1,10 +1,11 @@
 # Levi Item Physics
 
 ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.45.1`.
-Version `0.8.6` keeps the device-approved airborne/full-block/decorated-pot
-path intact while correcting the final head baseline and water-surface pose.
+Version `0.8.7` keeps the device-approved airborne/full-block/decorated-pot,
+water, and contact paths intact while centering every head flip and reducing
+render-thread work.
 
-## Implemented in 0.8.6
+## Implemented in 0.8.7
 
 - One `ItemRenderer::render` hook covers every dropped `ItemActor`, regardless
   of whether it came from Q, a dead mob, a broken container, a block drop,
@@ -26,13 +27,14 @@ path intact while correcting the final head baseline and water-surface pose.
   carpets, and other naturally horizontal block models keep their native
   world-up axis at contact; their complete airborne transform is unchanged.
 - Ground offsets are tuned independently for flat, thin, shaped, head, special,
-  and full-block models. Heads retain their frozen angle. Their local-Z pivot
-  displacement is cancelled exactly with `pivotZ * (1 - cos(xRot))`, then the
-  diagonal footprint receives `abs(sin) + abs(cos) - 1` corner clearance.
-  This keeps equivalent axis angles at one height while retaining Dragon Head
-  jaw clearance and the non-orbiting pivot. The contact baselines are restored
-  to `-0.095` for normal heads and `-0.105` for Dragon Head; the old floating
-  variation cannot return because its pivot displacement is now cancelled.
+  and full-block models. Heads retain their frozen angle and now use the exact
+  same centered block transform as Java ItemPhysic. The former head-only
+  local-Z pivot was removed because it translated a Dragon Head horizontally
+  by up to `0.12 * sin(xRot)`, producing an orbit around the ItemActor. The
+  ground baselines remain `-0.095` for normal heads and `-0.105` for Dragon
+  Head, and only the periodic `abs(sin) + abs(cos) - 1` diagonal-clearance term
+  remains. Therefore this change removes airborne and landed XZ displacement
+  without changing the already-tuned vertical contact result.
 - `WasInWaterFlagComponent` is sampled once per ItemActor tick. A floating item
   remains airborne, never enters the stable-Y ground fallback, freezes its last
   roll angle, and receives a class-independent `+0.125` visual surface lift.
@@ -51,7 +53,12 @@ path intact while correcting the final head baseline and water-surface pose.
 - `Single Model` and `Hide Item Shadow` are available as Mod Menu toggles.
 - Per-entity traits are cached, state lookup probes at most eight slots, contact
   ECS queries run once per game tick, and shadow storage is touched only when
-  its requested state changes.
+  its requested state changes. Known ECS storage pointers are reused while the
+  registry signature remains valid. Rotation sine/cosine pairs are evaluated
+  once per ItemActor render and shared by all stack copies instead of being
+  recomputed inside the copy loop. Release builds use `-O2` plus LTO, section
+  GC, ICF, and stripping: runtime speed is prioritized while the existing
+  600-KiB hard package limit remains enforced.
 - The lightweight `item_physics.main` entry is registered in Levi Mod Menu;
   toggling it changes only the render path and does not reinstall hooks.
 

@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.8.6
+# Implementation notes: universal visual core 0.8.7
 
 ## Source behavior reproduced
 
@@ -49,15 +49,28 @@ freezes custom roll while `WasInWaterFlagComponent` is active, matching the
 required surface animation: vertical float only. Ground-only Y corrections are
 never applied while airborne or floating.
 
-Head height uses two separate corrections. First,
-`pivotZ * (1 - cos(xRot))` cancels the vertical translation introduced by the
-retained local-Z anti-orbit pivot after the Java X+90 basis. Second,
-`max(0, abs(sin(xRot)) + abs(cos(xRot)) - 1)` accounts for the larger projected
-support at diagonal angles. This replaces the old `abs(sin(xRot))` heuristic,
-which lifted 90-degree angles unnecessarily and under-corrected 45-degree
-angles. With pivot movement removed, the original empirically correct contact
-baselines (`-0.095` normal, `-0.105` Dragon) can be reused consistently instead
-of lowering every angle to compensate for only the worst old case.
+Java bytecode applies no skull- or Dragon-Head-specific pivot: every
+`usesBlockLight()` model follows the same block transform. The former Bedrock
+adapter added a local-Z pivot of `-0.035` for ordinary heads and `-0.12` for a
+Dragon Head. After the Java X+90 basis, that pivot produced a horizontal
+translation proportional to `pivotZ * sin(xRot)`, so the model visibly orbited
+the ItemActor and could move over a hole or into adjacent terrain. Version
+0.8.7 removes that divergent pivot and routes heads through the universal Java
+block matrix. The ground formula retains only
+`max(0, abs(sin(xRot)) + abs(cos(xRot)) - 1)` for projected diagonal support.
+Consequently, the effective vertical contact positions from 0.8.6 are retained
+(`-0.095` normal, `-0.105` Dragon, plus diagonal clearance), while the XZ centre
+is invariant for the complete airborne flip and every frozen landing angle.
+
+The render hot path also reuses component-storage addresses for the current ECS
+registry. The cache is discarded whenever the registry or any of its bucket,
+node, or sentinel pointers changes, and missing storages are retried rather
+than cached as permanent misses. Each actor's X/Y rotation sine and cosine are
+computed once outside the model-copy loop. This removes repeated registry-chain
+walks and up to several redundant trigonometric evaluations without changing
+state timing, copy count, or transforms. Release compilation uses `-O2`; LTO,
+dead-section collection, identical-code folding, external `c++_shared`, and
+full stripping continue to keep the native library well under the build cap.
 
 Bedrock's water-state position leaves the custom item model approximately half
 an ItemActor height below the desired visible line. A uniform `+0.125` render-Y

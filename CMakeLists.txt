@@ -74,7 +74,9 @@ target_compile_options(
   -Wall
   -Wextra
   -Wpedantic
-  -Oz
+  # This renderer runs on the frame thread. O2 keeps the small stripped binary
+  # far below the package cap while avoiding Oz's speed-for-size trade-offs.
+  -O2
   -ffunction-sections
   -fdata-sections
   -fvisibility=hidden
