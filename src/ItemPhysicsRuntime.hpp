@@ -78,6 +78,7 @@ private:
     bool keepHorizontal{};
     bool verticalPlane{};
     bool rodLike{};
+    float horizontalSupportDrop{0.32f};
     std::int32_t blockShape{-1};
   };
 
@@ -86,6 +87,7 @@ private:
     bool block{};
     bool groundFlat{};
     bool dragonHead{};
+    float horizontalSupportDrop{0.32f};
     HeightClass height{HeightClass::FlatItem};
   };
 
@@ -102,11 +104,13 @@ private:
     std::int32_t lastProbeAge{-1};
     std::uint8_t stableContactTicks{};
     std::uint8_t movingTicks{};
+    std::uint8_t waterMissTicks{};
     bool used{};
     bool sampled{};
     bool traitsSampled{};
     bool positionSampled{};
     bool groundedLatched{};
+    bool inWater{};
     bool shadowInitialized{};
     bool shadowHidden{};
     bool shadowGrounded{};
@@ -158,7 +162,7 @@ private:
   VisualState &stateFor(std::uint32_t, std::int32_t, float, float) noexcept;
   [[nodiscard]] bool resolveGrounded(VisualState &, void *, std::int32_t,
                                      float) const noexcept;
-  static void updateRotation(VisualState &, bool, bool, std::int32_t,
+  static void updateRotation(VisualState &, bool, bool, bool, std::int32_t,
                              float) noexcept;
   static float heightOffset(const ItemRenderTraits &, bool, float) noexcept;
   static std::uint32_t javaCopyCount(std::uint32_t) noexcept;

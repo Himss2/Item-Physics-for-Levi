@@ -22,9 +22,13 @@ constexpr float kBlockStackScaleStep = 0.32f;
 constexpr float kMaxContinuousDeltaTicks = 10.0f;
 constexpr float kHeadPivotZ = -0.035f;
 constexpr float kDragonHeadPivotZ = -0.12f;
+constexpr float kHeadBaseLiftY = -0.165f;
+constexpr float kDragonHeadBaseLiftY = -0.180f;
 constexpr std::int32_t kSkullShape = 83;
 constexpr float kExtentEpsilon = 0.0005f;
 constexpr float kThinYRatio = 0.70f;
+constexpr std::uint32_t kWasInWaterFlagComponentHash = 0x78E89F39u;
+constexpr std::uint8_t kWaterContactGraceTicks = 4u;
 
 // These are render-origin corrections only. They never select or alter an
 // animation law; every dropped item still uses the Java xRot path below.
@@ -33,9 +37,7 @@ constexpr float kFlatItemY = -0.125f;
 constexpr float kHorizontalThinGroundY = -0.145f;
 constexpr float kShapedBlockGroundY = -0.135f;
 constexpr float kSpecialGroundY = -0.14f;
-constexpr float kHeadBaseLiftY = -0.095f;
 constexpr float kHeadTiltLiftY = 0.045f;
-constexpr float kDragonHeadBaseLiftY = -0.105f;
 constexpr float kDragonHeadTiltLiftY = 0.070f;
 
 constexpr float kStablePositionEpsilon = 0.012f;
@@ -643,6 +645,8 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
             const float horizontalMin = std::min(dx, dz);
             const float horizontalMax = std::max(dx, dz);
             info.keepHorizontal = dy <= horizontalMin * kThinYRatio;
+            info.horizontalSupportDrop =
+                std::max(0.0f, horizontalMax - dy) * 0.5f;
             info.verticalPlane =
                 dy > 0.55f && horizontalMin <= 0.34f &&
                 horizontalMax >= 0.68f;
@@ -712,9 +716,11 @@ ItemPhysicsRuntime::classifyItem(std::uintptr_t actor) const noexcept {
   } else if (horizontalSurface) {
     traits.height = HeightClass::HorizontalThin;
     traits.groundFlat = true;
+    traits.horizontalSupportDrop = info.horizontalSupportDrop;
   } else if (info.keepHorizontal || isThinGroundShape(shape)) {
     traits.height = HeightClass::HorizontalThin;
     traits.groundFlat = true;
+    traits.horizontalSupportDrop = info.horizontalSupportDrop;
   } else if (info.verticalPlane || info.rodLike ||
              isTorchGroundShape(shape) || isShapedGroundShape(shape) ||
              (shape >= 0 && mIsBlockShape3D && !mIsBlockShape3D(shape))) {
@@ -781,6 +787,19 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
   const bool nativeGrounded = hasOnGroundComponent(actor);
   const bool verticalCollision = hasComponent(
       actor, profile::kVerticalCollisionFlagComponentHash);
+  const bool nativeInWater =
+      hasComponent(actor, kWasInWaterFlagComponentHash);
+
+  if (nativeInWater) {
+    state.inWater = true;
+    state.waterMissTicks = 0;
+  } else if (state.inWater &&
+             state.waterMissTicks < kWaterContactGraceTicks) {
+    ++state.waterMissTicks;
+  } else {
+    state.inWater = false;
+    state.waterMissTicks = 0;
+  }
 
   float verticalSpeed = 0.0f;
   bool hasMotion = false;
@@ -796,6 +815,12 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
   if (nativeGrounded) {
     state.groundedLatched = true;
     state.stableContactTicks = 4;
+    state.movingTicks = 0;
+  } else if (state.inWater) {
+    // Java's calculateFluid path keeps a floating item airborne. A stable
+    // water-surface Y must never enter the mob-drop ground fallback.
+    state.groundedLatched = false;
+    state.stableContactTicks = 0;
     state.movingTicks = 0;
   }
 
@@ -821,7 +846,7 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
     const bool moving =
         hasMotion && std::abs(verticalSpeed) >= kWakeVerticalSpeed;
 
-    if (!nativeGrounded) {
+    if (!nativeGrounded && !state.inWater) {
       if (!state.groundedLatched) {
         state.stableContactTicks = stableCollision || stablePosition
                                        ? static_cast<std::uint8_t>(
@@ -855,7 +880,8 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
 
 void ItemPhysicsRuntime::updateRotation(VisualState &state,
                                         bool keepsLandingAngle,
-                                        bool grounded, std::int32_t age,
+                                        bool grounded, bool inWater,
+                                        std::int32_t age,
                                         float sample) noexcept {
   if (!std::isfinite(sample))
     return;
@@ -878,8 +904,14 @@ void ItemPhysicsRuntime::updateRotation(VisualState &state,
     return;
   }
 
-  if (!grounded)
-    state.xRot += delta * kRotationPerTick * 2.0f * kDefaultRotationSpeed;
+  if (!grounded) {
+    // ItemPhysic doubles the base step in air, then divides it by
+    // (1 + viscosity) in fluid. Water's multiplier is 1, so its exact net
+    // factor is one base step instead of two.
+    const float mediumMultiplier = inWater ? 1.0f : 2.0f;
+    state.xRot += delta * kRotationPerTick * mediumMultiplier *
+                  kDefaultRotationSpeed;
+  }
   // Full 3D blocks and heads freeze at their exact airborne angle after
   // contact. They are not spring-aligned to a face.
 }
@@ -887,8 +919,6 @@ void ItemPhysicsRuntime::updateRotation(VisualState &state,
 float ItemPhysicsRuntime::heightOffset(const ItemRenderTraits &traits,
                                        bool grounded,
                                        float xRot) noexcept {
-  if (traits.height == HeightClass::FlatItem)
-    return kFlatItemY;
   if (!grounded)
     return 0.0f;
 
@@ -993,8 +1023,8 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
     state.traitsSampled = true;
   }
   const auto &traits = state.traits;
-  updateRotation(state, traits.block && !traits.groundFlat, grounded, age,
-                 sample);
+  updateRotation(state, traits.block && !traits.groundFlat, grounded,
+                 state.inWater, age, sample);
 
   // Java keeps the first tick vanilla, but calculateRotation has already run.
   // This warm-up also learns Bedrock's route-specific model scale.
@@ -1055,27 +1085,44 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
     // stacking or a floating copy.
     postTranslate(*matrix, worldX + copyWorldX, worldY,
                   worldZ + copyWorldZ);
-    postRotateX(*matrix, kHalfPi);
-    postRotateZ(*matrix, state.yRot);
-
-    if (traits.block) {
-      postTranslate(*matrix, 0.0f, kBlockOffsetY, kBlockOffsetZ);
-      if (traits.height == HeightClass::Head) {
-        const float pivotZ =
-            traits.dragonHead ? kDragonHeadPivotZ : kHeadPivotZ;
-        postTranslate(*matrix, 0.0f, routeScale, pivotZ);
-        postRotateY(*matrix, state.xRot);
-        postTranslate(*matrix, 0.0f, -routeScale, -pivotZ);
-      } else {
-        // Keep the already device-approved full/shaped block transform exact.
-        postTranslate(*matrix, 0.0f, routeScale, 0.0f);
-        postRotateY(*matrix, state.xRot);
-        postTranslate(*matrix, 0.0f, -routeScale, 0.0f);
-      }
+    const bool horizontalContact =
+        grounded && traits.height == HeightClass::HorizontalThin;
+    if (horizontalContact) {
+      // A slab/trapdoor/carpet is already horizontal in its native block
+      // model. Java's universal X+90 pose turns that thin axis vertical, and
+      // changing xRot cannot undo it. At real contact only, preserve the
+      // Java block translation in world space, lower the centre by the cached
+      // shape support delta, and retain only a harmless surface yaw.
+      postTranslate(*matrix, kBlockOffsetY * -std::sin(state.yRot),
+                    -kBlockOffsetZ -
+                        traits.horizontalSupportDrop * routeScale,
+                    kBlockOffsetY * std::cos(state.yRot));
+      postRotateY(*matrix, state.yRot);
     } else {
-      postTranslate(*matrix, 0.0f, 0.0f,
-                    kFlatOffsetZ - bobOffset * kBobOffsetScale);
-      postRotateY(*matrix, state.xRot);
+      postRotateX(*matrix, kHalfPi);
+      postRotateZ(*matrix, state.yRot);
+    }
+
+    if (!horizontalContact) {
+      if (traits.block) {
+        postTranslate(*matrix, 0.0f, kBlockOffsetY, kBlockOffsetZ);
+        if (traits.height == HeightClass::Head) {
+          const float pivotZ =
+              traits.dragonHead ? kDragonHeadPivotZ : kHeadPivotZ;
+          postTranslate(*matrix, 0.0f, routeScale, pivotZ);
+          postRotateY(*matrix, state.xRot);
+          postTranslate(*matrix, 0.0f, -routeScale, -pivotZ);
+        } else {
+          // Keep the device-approved full/shaped block transform exact.
+          postTranslate(*matrix, 0.0f, routeScale, 0.0f);
+          postRotateY(*matrix, state.xRot);
+          postTranslate(*matrix, 0.0f, -routeScale, 0.0f);
+        }
+      } else {
+        postTranslate(*matrix, 0.0f, 0.0f,
+                      kFlatOffsetZ - bobOffset * kBobOffsetScale);
+        postRotateY(*matrix, state.xRot);
+      }
     }
     postTranslate(*matrix, -worldX, -worldY, -worldZ);
 
