@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.8.7
+# Implementation notes: universal visual core 0.8.8
 
 ## Source behavior reproduced
 
@@ -55,12 +55,24 @@ adapter added a local-Z pivot of `-0.035` for ordinary heads and `-0.12` for a
 Dragon Head. After the Java X+90 basis, that pivot produced a horizontal
 translation proportional to `pivotZ * sin(xRot)`, so the model visibly orbited
 the ItemActor and could move over a hole or into adjacent terrain. Version
-0.8.7 removes that divergent pivot and routes heads through the universal Java
-block matrix. The ground formula retains only
-`max(0, abs(sin(xRot)) + abs(cos(xRot)) - 1)` for projected diagonal support.
-Consequently, the effective vertical contact positions from 0.8.6 are retained
-(`-0.095` normal, `-0.105` Dragon, plus diagonal clearance), while the XZ centre
-is invariant for the complete airborne flip and every frozen landing angle.
+0.8.7 removed that divergent pivot and routed heads through the universal Java
+block matrix, making the XZ centre invariant for the complete airborne flip and
+every frozen landing angle. Its remaining absolute-value ground formula still
+assumed that Dragon Head was symmetric along model Z, however, so opposite
+final angles received the same clearance even though the elongated jaw/snout
+exists only on the negative-Z side.
+
+Version 0.8.8 keeps the centred Java matrix unchanged and replaces only Dragon
+Head's grounded world-Y correction with the support function of its asymmetric
+XZ bounds. After the Java X+90 basis, a point's vertical projection is
+`sin(xRot) * X - cos(xRot) * Z`. Side support and positive-Z depth use the
+existing calibrated `0.070 / (sqrt(2) - 1)` extent; negative-Z jaw depth is
+twice that extent. The resulting correction is continuous and sign-aware: the
+already-correct 0-degree and positive-Z diagonal contacts are unchanged, while
+the opposite half-turn receives the exact additional support needed by the
+jaw. It is applied only after native/fallback ground contact, contains no XZ
+translation, and adds no trigonometric work to the render path because it
+reuses the actor's precomputed sine and cosine.
 
 The render hot path also reuses component-storage addresses for the current ECS
 registry. The cache is discarded whenever the registry or any of its bucket,
