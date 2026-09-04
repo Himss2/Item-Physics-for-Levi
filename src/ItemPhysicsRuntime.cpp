@@ -20,6 +20,8 @@ constexpr float kDefaultBlockScale = 0.25f;
 constexpr float kFlatStackWorldStep = 0.055f;
 constexpr float kBlockStackScaleStep = 0.32f;
 constexpr float kMaxContinuousDeltaTicks = 10.0f;
+constexpr float kHeadPivotZ = -0.035f;
+constexpr float kDragonHeadPivotZ = -0.12f;
 constexpr std::int32_t kSkullShape = 83;
 constexpr float kExtentEpsilon = 0.0005f;
 constexpr float kThinYRatio = 0.70f;
@@ -31,14 +33,13 @@ constexpr float kFlatItemY = -0.125f;
 constexpr float kHorizontalThinGroundY = -0.145f;
 constexpr float kShapedBlockGroundY = -0.135f;
 constexpr float kSpecialGroundY = -0.14f;
-constexpr float kHeadBaseLiftY = 0.020f;
-constexpr float kHeadTiltLiftY = 0.080f;
-constexpr float kDragonHeadBaseLiftY = 0.055f;
-constexpr float kDragonHeadTiltLiftY = 0.10f;
+constexpr float kHeadBaseLiftY = -0.095f;
+constexpr float kHeadTiltLiftY = 0.045f;
+constexpr float kDragonHeadBaseLiftY = -0.105f;
+constexpr float kDragonHeadTiltLiftY = 0.070f;
 
 constexpr float kStablePositionEpsilon = 0.012f;
 constexpr float kCollisionPositionEpsilon = 0.025f;
-constexpr float kWakePositionDelta = 0.045f;
 constexpr float kWakeVerticalSpeed = 0.085f;
 
 constexpr const char *kShieldId = "minecraft:shield";
@@ -505,10 +506,10 @@ bool ItemPhysicsRuntime::hasOnGroundComponent(void *actor) const noexcept {
   return hasComponent(actor, profile::kOnGroundFlagComponentHash);
 }
 
-void ItemPhysicsRuntime::updateItemShadowComponent(void *actor, bool grounded,
+bool ItemPhysicsRuntime::updateItemShadowComponent(void *actor, bool grounded,
                                                    bool hide) const noexcept {
   if (!actor || !mGetRelativeShadowStorage || !mEmplaceRelativeShadow)
-    return;
+    return false;
 
   const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
   auto *registry = *reinterpret_cast<void **>(
@@ -516,7 +517,7 @@ void ItemPhysicsRuntime::updateItemShadowComponent(void *actor, bool grounded,
   const auto entity = *reinterpret_cast<const std::uint32_t *>(
       actorAddress + profile::kActorEntityIdOffset);
   if (!registry)
-    return;
+    return false;
 
   void *storage = findComponentStorage(
       actor, profile::kRelativeShadowOffsetComponentHash);
@@ -525,7 +526,7 @@ void ItemPhysicsRuntime::updateItemShadowComponent(void *actor, bool grounded,
         registry, profile::kRelativeShadowOffsetComponentHash);
   }
   if (!storage)
-    return;
+    return false;
 
   const float wanted = hide ? std::numeric_limits<float>::max()
                             : (grounded ? 0.0f : -0.5f);
@@ -533,7 +534,7 @@ void ItemPhysicsRuntime::updateItemShadowComponent(void *actor, bool grounded,
   if (!findPackedEntity(storage, entity, packed)) {
     const std::uint32_t entityCopy = entity;
     (void)mEmplaceRelativeShadow(storage, &entityCopy, false, &wanted);
-    return;
+    return true;
   }
 
   const auto dense = packed & 0x3FFFFu;
@@ -541,14 +542,15 @@ void ItemPhysicsRuntime::updateItemShadowComponent(void *actor, bool grounded,
   const auto pages = *reinterpret_cast<const std::uintptr_t *>(
       storageAddress + 0x50);
   if (!pages)
-    return;
+    return false;
   const auto page = *reinterpret_cast<const std::uintptr_t *>(
       pages + (dense >> 7) * sizeof(std::uintptr_t));
   if (!page)
-    return;
+    return false;
   *reinterpret_cast<float *>(
       page + static_cast<std::uintptr_t>(dense & 0x7Fu) * sizeof(float)) =
       wanted;
+  return true;
 }
 
 std::string_view
@@ -690,12 +692,25 @@ ItemPhysicsRuntime::classifyItem(std::uintptr_t actor) const noexcept {
   const bool structuralFlat =
       id == "minecraft:ladder" || id.ends_with("_fence") ||
       id.ends_with("_bars") || id.ends_with("_pane");
+  const bool horizontalSurface =
+      id == "minecraft:slab" || id.find("_slab") != std::string_view::npos ||
+      id == "minecraft:trapdoor" || id.ends_with("_trapdoor") ||
+      id == "minecraft:carpet" || id.ends_with("_carpet") ||
+      id == "minecraft:pressure_plate" ||
+      id.ends_with("_pressure_plate") ||
+      id == "minecraft:rail" || id.ends_with("_rail") ||
+      id == "minecraft:snow_layer" || id == "minecraft:lily_pad" ||
+      id == "minecraft:waterlily" ||
+      id.starts_with("minecraft:daylight_detector");
 
   if (shape == kSkullShape) {
     traits.height = HeightClass::Head;
     traits.dragonHead = id == kDragonHeadId;
   } else if (structuralFlat) {
     traits.height = HeightClass::ShapedBlock;
+    traits.groundFlat = true;
+  } else if (horizontalSurface) {
+    traits.height = HeightClass::HorizontalThin;
     traits.groundFlat = true;
   } else if (info.keepHorizontal || isThinGroundShape(shape)) {
     traits.height = HeightClass::HorizontalThin;
@@ -718,50 +733,51 @@ ItemPhysicsRuntime::classifyItem(std::uintptr_t actor) const noexcept {
 ItemPhysicsRuntime::VisualState &
 ItemPhysicsRuntime::stateFor(std::uint32_t entity, std::int32_t age,
                              float bobOffset, float sample) noexcept {
-  VisualState *freeSlot = nullptr;
-  VisualState *oldest = &mStates[0];
+  static_assert((kStateCapacity & (kStateCapacity - 1u)) == 0u);
+  const auto initialize = [&](VisualState &state) -> VisualState & {
+    state = {};
+    state.entity = entity;
+    state.lastSeen = mRenderCounter;
+    state.lastAge = age;
+    state.yRot = std::isfinite(bobOffset) ? bobOffset : 0.0f;
+    state.lastSample = sample;
+    state.used = true;
+    state.sampled = true;
+    return state;
+  };
+
+  const std::size_t first =
+      (static_cast<std::size_t>(entity) * 2654435761u) &
+      (kStateCapacity - 1u);
+  VisualState *oldest = &mStates[first];
   std::uint32_t oldestDistance = 0;
 
-  for (auto &state : mStates) {
+  for (std::size_t probe = 0; probe < kStateProbeCount; ++probe) {
+    auto &state = mStates[(first + probe) & (kStateCapacity - 1u)];
     if (state.used && state.entity == entity) {
-      if (age < state.lastAge) {
-        state = {};
-        state.entity = entity;
-        state.yRot = std::isfinite(bobOffset) ? bobOffset : 0.0f;
-        state.lastAge = age;
-        state.lastSample = sample;
-        state.used = true;
-        state.sampled = true;
-      }
+      if (age < state.lastAge)
+        return initialize(state);
       state.lastSeen = mRenderCounter;
       return state;
     }
-    if (!state.used && !freeSlot)
-      freeSlot = &state;
-    if (state.used) {
-      const auto distance = mRenderCounter - state.lastSeen;
-      if (distance >= oldestDistance) {
-        oldestDistance = distance;
-        oldest = &state;
-      }
+    if (!state.used)
+      return initialize(state);
+
+    const auto distance = mRenderCounter - state.lastSeen;
+    if (distance >= oldestDistance) {
+      oldestDistance = distance;
+      oldest = &state;
     }
   }
-
-  auto &state = *(freeSlot ? freeSlot : oldest);
-  state = {};
-  state.entity = entity;
-  state.lastSeen = mRenderCounter;
-  state.lastAge = age;
-  state.yRot = std::isfinite(bobOffset) ? bobOffset : 0.0f;
-  state.lastSample = sample;
-  state.used = true;
-  state.sampled = true;
-  return state;
+  return initialize(*oldest);
 }
 
 bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
                                          std::int32_t age,
                                          float worldY) const noexcept {
+  if (age == state.lastProbeAge)
+    return state.groundedLatched;
+
   const bool nativeGrounded = hasOnGroundComponent(actor);
   const bool verticalCollision = hasComponent(
       actor, profile::kVerticalCollisionFlagComponentHash);
@@ -799,10 +815,11 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
     const bool stableCollision =
         hasPositionDelta && verticalCollision &&
         std::abs(positionDelta) <= kCollisionPositionEpsilon;
+    // Camera crouch changes render-space Y, but it does not change the
+    // ItemActor velocity. Only actor motion may release an established ground
+    // latch; this prevents sneak from restarting the tumble.
     const bool moving =
-        hasPositionDelta && hasMotion &&
-        (std::abs(positionDelta) >= kWakePositionDelta ||
-         std::abs(verticalSpeed) >= kWakeVerticalSpeed);
+        hasMotion && std::abs(verticalSpeed) >= kWakeVerticalSpeed;
 
     if (!nativeGrounded) {
       if (!state.groundedLatched) {
@@ -950,19 +967,32 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
   auto &state = stateFor(entity, age, bobOffset, sample);
   const bool grounded = resolveGrounded(state, actor, age, originalWorldY);
   const bool enabled = mEnabled.load(std::memory_order_relaxed);
-  updateItemShadowComponent(
-      actor, grounded,
-      enabled && mHideItemShadow.load(std::memory_order_relaxed));
+  const bool hideShadow =
+      enabled && mHideItemShadow.load(std::memory_order_relaxed);
+  const bool shadowChanged =
+      !state.shadowInitialized || state.shadowHidden != hideShadow ||
+      (!hideShadow && state.shadowGrounded != grounded);
+  if (shadowChanged &&
+      updateItemShadowComponent(actor, grounded, hideShadow)) {
+    state.shadowInitialized = true;
+    state.shadowHidden = hideShadow;
+    state.shadowGrounded = grounded;
+  }
   if (!enabled) {
     original(self, ctx, renderData);
     return;
   }
 
-  const auto traits = classifyItem(actorAddress);
-  if (!traits.valid) {
-    original(self, ctx, renderData);
-    return;
+  if (!state.traitsSampled) {
+    const auto classified = classifyItem(actorAddress);
+    if (!classified.valid) {
+      original(self, ctx, renderData);
+      return;
+    }
+    state.traits = classified;
+    state.traitsSampled = true;
   }
+  const auto &traits = state.traits;
   updateRotation(state, traits.block && !traits.groundFlat, grounded, age,
                  sample);
 
@@ -1030,9 +1060,18 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
 
     if (traits.block) {
       postTranslate(*matrix, 0.0f, kBlockOffsetY, kBlockOffsetZ);
-      postTranslate(*matrix, 0.0f, routeScale, 0.0f);
-      postRotateY(*matrix, state.xRot);
-      postTranslate(*matrix, 0.0f, -routeScale, 0.0f);
+      if (traits.height == HeightClass::Head) {
+        const float pivotZ =
+            traits.dragonHead ? kDragonHeadPivotZ : kHeadPivotZ;
+        postTranslate(*matrix, 0.0f, routeScale, pivotZ);
+        postRotateY(*matrix, state.xRot);
+        postTranslate(*matrix, 0.0f, -routeScale, -pivotZ);
+      } else {
+        // Keep the already device-approved full/shaped block transform exact.
+        postTranslate(*matrix, 0.0f, routeScale, 0.0f);
+        postRotateY(*matrix, state.xRot);
+        postTranslate(*matrix, 0.0f, -routeScale, 0.0f);
+      }
     } else {
       postTranslate(*matrix, 0.0f, 0.0f,
                     kFlatOffsetZ - bobOffset * kBobOffsetScale);
