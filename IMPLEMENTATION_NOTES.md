@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.9.0
+# Implementation notes: universal visual core 0.9.1
 
 ## Source behavior reproduced
 
@@ -84,22 +84,27 @@ internally animated jaw. Those internal transforms are not represented by the
 block visual AABB available at the current hook boundary. Raising every angle
 enough for the worst case would merely replace clipping with visible hovering.
 
-Version 0.9.0 therefore keeps the exact Java scalar flip for every airborne
-head but stops preserving an arbitrary roll after contact. On the first
-confirmed ground frame, the render state is set to `+pi/2` or `-pi/2`; ItemActor
-entity-ID parity selects the sign deterministically and keeps it stable for the
-actor lifetime. Both angles place the head on the same side support, so normal
-heads use fixed ground Y `-0.095` and Dragon Head uses the already-tested v0.8.9
-side value `-0.0691`. There is no pre-contact change, interpolation through
-unsafe angles, local pivot, horizontal orbit, or per-frame bounds work. If the
-actor genuinely becomes airborne again, normal Java rotation resumes from the
-selected side angle.
+Version 0.9.0 therefore kept the exact Java scalar flip for every airborne head
+but stopped preserving an arbitrary roll after contact. It initially selected
+`+pi/2` or `-pi/2` from ItemActor entity-ID parity. Device testing then showed
+that the private Bedrock skull transform exposes those two outer-matrix signs
+as undesirable opposite-facing results rather than a useful visual variation.
+
+Version 0.9.1 keeps the same contact boundary but replaces that parity branch
+with one fixed grounded `xRot = 0` prone pose. The actor's native `yRot` remains
+unchanged, preserving varied horizontal direction. Normal heads use ground Y
+`-0.105` and Dragon Head uses `-0.0791`, both lowered by `0.010` from 0.9.0.
+There is no pre-contact change, interpolation through unsafe angles, local
+pivot, horizontal orbit, or per-frame bounds work. If the actor genuinely
+becomes airborne again, normal Java rotation resumes from the selected prone
+angle.
 
 This is an intentional Bedrock-only compatibility exception: full blocks still
 freeze at their exact contact angle, while only `HeightClass::Head` receives a
-deterministic rest pose. The slight flat-2D ground gap reported during device
-testing is documented in README and intentionally left unchanged for an
-isolated later calibration pass.
+deterministic rest pose. The isolated 0.9.1 calibration also lowers
+`HeightClass::FlatItem` from `-0.125` to `-0.140` and
+`HeightClass::ShapedBlock` from `-0.135` to `-0.155`. No other height class,
+water correction, classification rule, or animation path changed.
 
 The render hot path also reuses component-storage addresses for the current ECS
 registry. The cache is discarded whenever the registry or any of its bucket,

@@ -1,11 +1,11 @@
 # Levi Item Physics
 
 ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.45.1`.
-Version `0.9.0` keeps the device-approved airborne/full-block/decorated-pot,
-water, contact, and fast render paths intact while giving every head a stable,
-deterministic landing pose.
+Version `0.9.1` keeps the device-approved airborne/full-block/decorated-pot,
+water, contact, and fast render paths intact while lowering flat/shaped items
+and giving every head one stable prone landing pose.
 
-## Implemented in 0.9.0
+## Implemented in 0.9.1
 
 - One `ItemRenderer::render` hook covers every dropped `ItemActor`, regardless
   of whether it came from Q, a dead mob, a broken container, a block drop,
@@ -13,7 +13,7 @@ deterministic landing pose.
 - Every model uses the same Java `xRot` law in dry air. Model classification
   selects only the Java block/flat pivot and a render-origin height correction;
   it never selects a different airborne animation. Heads are the only contact
-  exception: after actual ground contact they use a deterministic side pose.
+  exception: after actual ground contact they use one deterministic prone pose.
 - There is no quaternion impulse, landing spring, pre-contact alignment, or
   special shield/banner animation.
 - Dry-air rotation is `realtimeDeltaTicks * 0.25 * 2`; water freezes the last
@@ -31,11 +31,14 @@ deterministic landing pose.
 - Ground offsets are tuned independently for flat, thin, shaped, head, special,
   and full-block models. All heads keep the centred Java block transform and
   complete Java flip while airborne. On the first confirmed ground frame they
-  switch to `+90` or `-90` degrees, selected deterministically from the
-  ItemActor entity ID. Both are the same safe side-rest pose with mirrored
-  direction, so the skull/Dragon Head renderer can no longer freeze at an
-  angle that places hidden model parts below the floor. Normal heads use
-  ground Y `-0.095`; Dragon Head uses its already-tested side height `-0.0691`.
+  switch to fixed `xRot = 0`. Their native per-actor yaw remains untouched, so
+  they can point in different horizontal directions without selecting an
+  up/down-facing rest alternative. Normal heads use ground Y `-0.105`; Dragon
+  Head uses `-0.0791`.
+- The isolated ground calibration lowers only flat 2D items from `-0.125` to
+  `-0.140` and shaped block items from `-0.135` to `-0.155`. Full blocks,
+  horizontal-thin items, special items, water lift, and all motion laws are
+  unchanged.
 - `WasInWaterFlagComponent` is sampled once per ItemActor tick. A floating item
   remains airborne, never enters the stable-Y ground fallback, freezes its last
   roll angle, and receives a class-independent `+0.125` visual surface lift.
@@ -66,14 +69,8 @@ deterministic landing pose.
 This stage changes rendering only. Java gameplay physics, fluids, charged-Q,
 damage/fire rules, and pickup behavior belong to later device-tested stages.
 
-## Known issues carried into the feature stage
+## Known compatibility exception
 
-- Some flat 2D item models can appear a few pixels above a full solid-block
-  surface on the tested Bedrock renderer. Version 0.9.0 deliberately does not
-  retune `kFlatItemY`, because the head-only change must not disturb tools,
-  armor, shields, banners, stacking, water height, or the item classes already
-  approved on device. This small visual offset remains scheduled for a later
-  isolated calibration pass.
 - Grounded heads intentionally no longer retain an arbitrary final airborne
   roll angle. This is a documented Bedrock-only compatibility exception to
   Java ItemPhysic, chosen to eliminate the severe renderer-origin clipping.
@@ -130,5 +127,7 @@ must keep their last roll angle, show only vertical surface motion, and sit
 visibly higher by the same amount. Slabs/trapdoors/carpets must remain
 horizontal. They must not acquire a ground offset until they touch a solid
 floor. Test normal, Creeper, Wither Skeleton, Piglin, Player, and Dragon heads.
-Their airborne flip must remain unchanged; on contact each must choose one of
-the two mirrored side poses and remain fully above the floor.
+Their airborne flip must remain unchanged; on contact each must use the same
+prone roll pose, retain its own horizontal yaw, and remain fully above the
+floor. Compare flat 2D and shaped items at eye level: both should touch the
+surface without clipping.
