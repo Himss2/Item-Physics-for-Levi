@@ -33,7 +33,7 @@ public:
 
   bool load() {
     mSelf.getLogger().info(
-        "Levi Item Physics 0.9.0: deterministic head landing pose loaded");
+        "Levi Item Physics 0.9.1: lower flat contact and prone heads loaded");
     return true;
   }
 
