@@ -1,11 +1,11 @@
 # Levi Item Physics
 
 ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.45.1`.
-Version `0.8.8` keeps the device-approved airborne/full-block/decorated-pot,
-water, contact, and fast render paths intact while making Dragon Head ground
-contact correct for every frozen flip angle.
+Version `0.8.9` keeps the device-approved airborne/full-block/decorated-pot,
+water, contact, and fast render paths intact while using Dragon Head's complete
+asymmetric model profile for every frozen flip angle.
 
-## Implemented in 0.8.8
+## Implemented in 0.8.9
 
 - One `ItemRenderer::render` hook covers every dropped `ItemActor`, regardless
   of whether it came from Q, a dead mob, a broken container, a block drop,
@@ -34,10 +34,11 @@ contact correct for every frozen flip angle.
   ground baselines remain `-0.095` for normal heads and `-0.105` for Dragon
   Head. Ordinary symmetric heads retain the periodic diagonal-clearance term.
   Dragon Head instead uses a sign-aware support projection for its asymmetric
-  shape: the negative-Z jaw/snout is represented as twice the positive-Z head
-  depth. This raises only final angles whose elongated jaw points toward the
-  floor, while keeping the flip centre fixed and preserving the previously
-  correct angles.
+  canonical bounds: `X = [-8,+8]` and `Z = [-24,+6]`. The resulting
+  `8:6:24` side/back/jaw profile raises only final angles whose elongated jaw
+  points toward the floor, while keeping the flip centre fixed. Its scale is
+  normalized so the already-approved positive-Z 45-degree contact remains
+  exactly unchanged at `+0.070`.
 - `WasInWaterFlagComponent` is sampled once per ItemActor tick. A floating item
   remains airborne, never enters the stable-Y ground fallback, freezes its last
   roll angle, and receives a class-independent `+0.125` visual surface lift.

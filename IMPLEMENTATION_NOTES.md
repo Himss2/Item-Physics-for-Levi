@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.8.8
+# Implementation notes: universal visual core 0.8.9
 
 ## Source behavior reproduced
 
@@ -62,17 +62,20 @@ assumed that Dragon Head was symmetric along model Z, however, so opposite
 final angles received the same clearance even though the elongated jaw/snout
 exists only on the negative-Z side.
 
-Version 0.8.8 keeps the centred Java matrix unchanged and replaces only Dragon
-Head's grounded world-Y correction with the support function of its asymmetric
-XZ bounds. After the Java X+90 basis, a point's vertical projection is
-`sin(xRot) * X - cos(xRot) * Z`. Side support and positive-Z depth use the
-existing calibrated `0.070 / (sqrt(2) - 1)` extent; negative-Z jaw depth is
-twice that extent. The resulting correction is continuous and sign-aware: the
-already-correct 0-degree and positive-Z diagonal contacts are unchanged, while
-the opposite half-turn receives the exact additional support needed by the
-jaw. It is applied only after native/fallback ground contact, contains no XZ
-translation, and adds no trigonometric work to the render path because it
-reuses the actor's precomputed sine and cosine.
+Version 0.8.8 kept the centred Java matrix unchanged and introduced a
+sign-aware support function, but approximated the negative-Z jaw as only twice
+the positive-Z depth. That was still too symmetric. The canonical Dragon Head
+geometry spans `X = [-8,+8]` and `Z = [-24,+6]`: side radius 8, positive-Z
+cranium depth 6, and negative-Z jaw/snout depth 24.
+
+Version 0.8.9 therefore uses the complete `8:6:24` support ratio. After the
+Java X+90 basis, a point's vertical projection remains
+`sin(xRot) * X - cos(xRot) * Z`. The world-space scale is solved from the
+previously approved positive-Z 45-degree clearance, so that angle remains
+exactly `+0.070` while the deficient jaw-facing half of the rotation receives
+the missing support. The correction is continuous, applied only after
+native/fallback ground contact, contains no XZ translation, and adds no
+trigonometric work because it reuses the actor's precomputed sine and cosine.
 
 The render hot path also reuses component-storage addresses for the current ECS
 registry. The cache is discarded whenever the registry or any of its bucket,

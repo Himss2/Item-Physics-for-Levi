@@ -2,7 +2,7 @@
   "type": "preload-native",
   "name": "Levi Item Physics",
   "author": "Himss2",
-  "version": "0.8.8",
+  "version": "0.8.9",
   "entry": "liblevi_item_physics.so",
   "minecraft_versions": ["1.26.45.1"]
 }
