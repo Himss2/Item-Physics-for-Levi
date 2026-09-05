@@ -1,44 +1,41 @@
 # Levi Item Physics
 
 ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.45.1`.
-Version `0.8.9` keeps the device-approved airborne/full-block/decorated-pot,
-water, contact, and fast render paths intact while using Dragon Head's complete
-asymmetric model profile for every frozen flip angle.
+Version `0.9.0` keeps the device-approved airborne/full-block/decorated-pot,
+water, contact, and fast render paths intact while giving every head a stable,
+deterministic landing pose.
 
-## Implemented in 0.8.9
+## Implemented in 0.9.0
 
 - One `ItemRenderer::render` hook covers every dropped `ItemActor`, regardless
   of whether it came from Q, a dead mob, a broken container, a block drop,
   player death, a dispenser, or a network spawn.
 - Every model uses the same Java `xRot` law in dry air. Model classification
   selects only the Java block/flat pivot and a render-origin height correction;
-  it never selects a different airborne animation.
-- There is no quaternion impulse, landing spring, shaped-block pre-alignment,
-  head animation, or special shield/banner animation.
+  it never selects a different airborne animation. Heads are the only contact
+  exception: after actual ground contact they use a deterministic side pose.
+- There is no quaternion impulse, landing spring, pre-contact alignment, or
+  special shield/banner animation.
 - Dry-air rotation is `realtimeDeltaTicks * 0.25 * 2`; water freezes the last
   angle and retains only native vertical movement.
 - Flat items snap to their ground pose on native `OnGroundFlagComponent`.
   A conservative fallback handles mob drops that omit that flag: stable world
   Y across distinct ItemActor age ticks is required, while vertical collision
   shortens confirmation from four samples to two. It never predicts contact.
-- Full 3D blocks keep the exact contact angle. Thin structural models such as
-  fences, ladders, bars, panes, slabs, trapdoors, carpets, pressure plates, and
-  rails use a corrected contact pose only after landing. Slabs, trapdoors,
-  carpets, and other naturally horizontal block models keep their native
-  world-up axis at contact; their complete airborne transform is unchanged.
+- Full 3D blocks except heads keep the exact contact angle. Thin structural
+  models such as fences, ladders, bars, panes, slabs, trapdoors, carpets,
+  pressure plates, and rails use a corrected contact pose only after landing.
+  Slabs, trapdoors, carpets, and other naturally horizontal block models keep
+  their native world-up axis at contact; their complete airborne transform is
+  unchanged.
 - Ground offsets are tuned independently for flat, thin, shaped, head, special,
-  and full-block models. Heads retain their frozen angle and now use the exact
-  same centered block transform as Java ItemPhysic. The former head-only
-  local-Z pivot was removed because it translated a Dragon Head horizontally
-  by up to `0.12 * sin(xRot)`, producing an orbit around the ItemActor. The
-  ground baselines remain `-0.095` for normal heads and `-0.105` for Dragon
-  Head. Ordinary symmetric heads retain the periodic diagonal-clearance term.
-  Dragon Head instead uses a sign-aware support projection for its asymmetric
-  canonical bounds: `X = [-8,+8]` and `Z = [-24,+6]`. The resulting
-  `8:6:24` side/back/jaw profile raises only final angles whose elongated jaw
-  points toward the floor, while keeping the flip centre fixed. Its scale is
-  normalized so the already-approved positive-Z 45-degree contact remains
-  exactly unchanged at `+0.070`.
+  and full-block models. All heads keep the centred Java block transform and
+  complete Java flip while airborne. On the first confirmed ground frame they
+  switch to `+90` or `-90` degrees, selected deterministically from the
+  ItemActor entity ID. Both are the same safe side-rest pose with mirrored
+  direction, so the skull/Dragon Head renderer can no longer freeze at an
+  angle that places hidden model parts below the floor. Normal heads use
+  ground Y `-0.095`; Dragon Head uses its already-tested side height `-0.0691`.
 - `WasInWaterFlagComponent` is sampled once per ItemActor tick. A floating item
   remains airborne, never enters the stable-Y ground fallback, freezes its last
   roll angle, and receives a class-independent `+0.125` visual surface lift.
@@ -68,6 +65,18 @@ asymmetric model profile for every frozen flip angle.
 
 This stage changes rendering only. Java gameplay physics, fluids, charged-Q,
 damage/fire rules, and pickup behavior belong to later device-tested stages.
+
+## Known issues carried into the feature stage
+
+- Some flat 2D item models can appear a few pixels above a full solid-block
+  surface on the tested Bedrock renderer. Version 0.9.0 deliberately does not
+  retune `kFlatItemY`, because the head-only change must not disturb tools,
+  armor, shields, banners, stacking, water height, or the item classes already
+  approved on device. This small visual offset remains scheduled for a later
+  isolated calibration pass.
+- Grounded heads intentionally no longer retain an arbitrary final airborne
+  roll angle. This is a documented Bedrock-only compatibility exception to
+  Java ItemPhysic, chosen to eliminate the severe renderer-origin clipping.
 
 ## Strict binary guard
 
@@ -120,5 +129,6 @@ flat, block, head, slab, and trapdoor items into still and flowing water: they
 must keep their last roll angle, show only vertical surface motion, and sit
 visibly higher by the same amount. Slabs/trapdoors/carpets must remain
 horizontal. They must not acquire a ground offset until they touch a solid
-floor. Test normal, Creeper, Wither Skeleton, Piglin, Player, and Dragon heads
-at axis and diagonal landing angles; none may enter the floor or hover.
+floor. Test normal, Creeper, Wither Skeleton, Piglin, Player, and Dragon heads.
+Their airborne flip must remain unchanged; on contact each must choose one of
+the two mirrored side poses and remain fully above the floor.

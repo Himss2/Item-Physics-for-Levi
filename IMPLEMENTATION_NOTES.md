@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.8.9
+# Implementation notes: universal visual core 0.9.0
 
 ## Source behavior reproduced
 
@@ -76,6 +76,30 @@ exactly `+0.070` while the deficient jaw-facing half of the rotation receives
 the missing support. The correction is continuous, applied only after
 native/fallback ground contact, contains no XZ translation, and adds no
 trigonometric work because it reuses the actor's precomputed sine and cosine.
+
+Device testing showed that even the complete external support profile could
+not make arbitrary grounded head angles reliable. `SkullBlockRenderer` applies
+private model transforms after the ItemActor matrix, and Dragon Head adds an
+internally animated jaw. Those internal transforms are not represented by the
+block visual AABB available at the current hook boundary. Raising every angle
+enough for the worst case would merely replace clipping with visible hovering.
+
+Version 0.9.0 therefore keeps the exact Java scalar flip for every airborne
+head but stops preserving an arbitrary roll after contact. On the first
+confirmed ground frame, the render state is set to `+pi/2` or `-pi/2`; ItemActor
+entity-ID parity selects the sign deterministically and keeps it stable for the
+actor lifetime. Both angles place the head on the same side support, so normal
+heads use fixed ground Y `-0.095` and Dragon Head uses the already-tested v0.8.9
+side value `-0.0691`. There is no pre-contact change, interpolation through
+unsafe angles, local pivot, horizontal orbit, or per-frame bounds work. If the
+actor genuinely becomes airborne again, normal Java rotation resumes from the
+selected side angle.
+
+This is an intentional Bedrock-only compatibility exception: full blocks still
+freeze at their exact contact angle, while only `HeightClass::Head` receives a
+deterministic rest pose. The slight flat-2D ground gap reported during device
+testing is documented in README and intentionally left unchanged for an
+isolated later calibration pass.
 
 The render hot path also reuses component-storage addresses for the current ECS
 registry. The cache is discarded whenever the registry or any of its bucket,
