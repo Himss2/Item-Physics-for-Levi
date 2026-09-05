@@ -174,8 +174,7 @@ private:
                                      float) const noexcept;
   static void updateRotation(VisualState &, bool, bool, bool, std::int32_t,
                              float) noexcept;
-  static float heightOffset(const ItemRenderTraits &, bool, float,
-                            float) noexcept;
+  static float heightOffset(const ItemRenderTraits &, bool) noexcept;
   static std::uint32_t javaCopyCount(std::uint32_t) noexcept;
 
   std::atomic_bool mEnabled{true};

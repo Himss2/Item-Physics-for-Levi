@@ -33,7 +33,7 @@ public:
 
   bool load() {
     mSelf.getLogger().info(
-        "Levi Item Physics 0.8.9: exact Dragon Head support profile loaded");
+        "Levi Item Physics 0.9.0: deterministic head landing pose loaded");
     return true;
   }
 

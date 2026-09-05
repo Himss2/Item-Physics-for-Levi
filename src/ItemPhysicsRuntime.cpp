@@ -20,26 +20,12 @@ constexpr float kDefaultBlockScale = 0.25f;
 constexpr float kFlatStackWorldStep = 0.055f;
 constexpr float kBlockStackScaleStep = 0.32f;
 constexpr float kMaxContinuousDeltaTicks = 10.0f;
-constexpr float kHeadBaseLiftY = -0.095f;
-constexpr float kDragonHeadBaseLiftY = -0.105f;
-constexpr float kSqrtTwoMinusOne = 0.41421356237309504880f;
-constexpr float kHeadCornerSupportY = 0.045f / kSqrtTwoMinusOne;
-// Dragon Head's canonical model bounds are X=[-8,+8] and Z=[-24,+6].
-// Express that 8:6:24 profile in projected world-space support units. The
-// scale is chosen so the already-approved +Z 45-degree clearance remains
-// exactly 0.070; only the previously-underestimated jaw-facing angles change.
-constexpr float kInvSqrtTwo = 0.70710678118654752440f;
-constexpr float kDragonHeadPositiveDepthRatio = 6.0f / 8.0f;
-constexpr float kDragonHeadNegativeDepthRatio = 24.0f / 8.0f;
-constexpr float kDragonHeadPositiveDiagonalProjection =
-    kInvSqrtTwo * (1.0f + kDragonHeadPositiveDepthRatio) -
-    kDragonHeadPositiveDepthRatio;
-constexpr float kDragonHeadSideSupportY =
-    0.070f / kDragonHeadPositiveDiagonalProjection;
-constexpr float kDragonHeadPositiveDepthSupportY =
-    kDragonHeadSideSupportY * kDragonHeadPositiveDepthRatio;
-constexpr float kDragonHeadNegativeDepthSupportY =
-    kDragonHeadSideSupportY * kDragonHeadNegativeDepthRatio;
+constexpr float kHalfPi = 1.57079632679489661923f;
+constexpr float kHeadSideGroundY = -0.095f;
+// This is the already-tested v0.8.9 height at exactly +/-90 degrees. Grounded
+// Dragon Heads now always use that safe side pose, so no angle-dependent
+// approximation of the renderer's internal animated model bounds is needed.
+constexpr float kDragonHeadSideGroundY = -0.0691f;
 constexpr float kWaterSurfaceLiftY = 0.125f;
 constexpr std::int32_t kSkullShape = 83;
 constexpr float kExtentEpsilon = 0.0005f;
@@ -996,14 +982,13 @@ void ItemPhysicsRuntime::updateRotation(VisualState &state,
     // the last roll and let only the actor's native vertical float/bob remain.
     state.xRot += delta * kRotationPerTick * 2.0f * kDefaultRotationSpeed;
   }
-  // Full 3D blocks and heads freeze at their exact airborne angle after
-  // contact. They are not spring-aligned to a face.
+  // Full 3D blocks freeze at their exact airborne angle after contact. Heads
+  // reach this same boundary first; onRender then selects their safe side-rest
+  // pose only after confirmed contact. Nothing is pre-aligned in the air.
 }
 
 float ItemPhysicsRuntime::heightOffset(const ItemRenderTraits &traits,
-                                       bool grounded,
-                                       float xRotSine,
-                                       float xRotCosine) noexcept {
+                                       bool grounded) noexcept {
   if (!grounded)
     return 0.0f;
 
@@ -1015,32 +1000,7 @@ float ItemPhysicsRuntime::heightOffset(const ItemRenderTraits &traits,
   case HeightClass::HorizontalThin:
     return kHorizontalThinGroundY;
   case HeightClass::Head:
-    // Java applies the ordinary block rotation to skulls; it has no head-only
-    // pivot. Ground clearance is therefore a world-Y support calculation and
-    // must never translate the model around the ItemActor in XZ.
-    {
-      const float sine = std::abs(xRotSine);
-      if (traits.dragonHead) {
-        // After Java's X+90 basis, model-space X/Z project onto world Y as
-        // sin(xRot) * X - cos(xRot) * Z. Unlike an ordinary skull, Dragon
-        // Head has an elongated negative-Z jaw. A sign-aware support function
-        // is required: abs(cos) incorrectly treats the front and back as the
-        // same depth, which made only one half of final angles clear the floor.
-        const float depthSupport =
-            xRotCosine >= 0.0f
-                ? xRotCosine * kDragonHeadPositiveDepthSupportY
-                : -xRotCosine * kDragonHeadNegativeDepthSupportY;
-        const float projectedSupport =
-            sine * kDragonHeadSideSupportY + depthSupport;
-        return kDragonHeadBaseLiftY +
-               projectedSupport - kDragonHeadPositiveDepthSupportY;
-      }
-
-      const float cosine = std::abs(xRotCosine);
-      const float cornerProjection =
-          std::max(0.0f, sine + cosine - 1.0f);
-      return kHeadBaseLiftY + kHeadCornerSupportY * cornerProjection;
-    }
+    return traits.dragonHead ? kDragonHeadSideGroundY : kHeadSideGroundY;
   case HeightClass::Special:
     return kSpecialGroundY;
   case HeightClass::FlatItem:
@@ -1140,6 +1100,15 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
     return;
   }
 
+  if (grounded && traits.height == HeightClass::Head) {
+    // Bedrock's skull renderer owns extra model transforms (and Dragon Head
+    // also owns an animated jaw), so an outer support estimate cannot make
+    // every arbitrary frozen angle reliable. Preserve the complete Java flip
+    // until real contact, then use one of two mirrored, known-safe side poses.
+    // Entity parity selects the pose deterministically for the actor lifetime.
+    state.xRot = (entity & 1u) != 0u ? kHalfPi : -kHalfPi;
+  }
+
   // Evaluate each changing angle once per ItemActor render. Multi-copy stacks
   // reuse these values rather than calling libm two to ten extra times.
   const float xRotSine = std::sin(state.xRot);
@@ -1164,8 +1133,7 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
   // lift while its native water component is live; do not alter actor motion.
   const float waterSurfaceLift = state.inWater ? kWaterSurfaceLiftY : 0.0f;
   const float worldY = originalWorldY +
-                       heightOffset(traits, grounded, xRotSine,
-                                    xRotCosine) +
+                       heightOffset(traits, grounded) +
                        waterSurfaceLift;
   const float worldZ = position[2];
   position[1] = worldY;
