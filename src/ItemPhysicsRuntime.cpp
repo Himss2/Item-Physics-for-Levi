@@ -24,16 +24,22 @@ constexpr float kHeadBaseLiftY = -0.095f;
 constexpr float kDragonHeadBaseLiftY = -0.105f;
 constexpr float kSqrtTwoMinusOne = 0.41421356237309504880f;
 constexpr float kHeadCornerSupportY = 0.045f / kSqrtTwoMinusOne;
-// The Dragon Head is not centred along model Z: its jaw/snout reaches twice
-// as far in negative Z as the back of the cranium reaches in positive Z.
-// Keep these as projected world-space supports rather than a rotation pivot;
-// a pivot would move the whole model around the ItemActor while airborne.
+// Dragon Head's canonical model bounds are X=[-8,+8] and Z=[-24,+6].
+// Express that 8:6:24 profile in projected world-space support units. The
+// scale is chosen so the already-approved +Z 45-degree clearance remains
+// exactly 0.070; only the previously-underestimated jaw-facing angles change.
+constexpr float kInvSqrtTwo = 0.70710678118654752440f;
+constexpr float kDragonHeadPositiveDepthRatio = 6.0f / 8.0f;
+constexpr float kDragonHeadNegativeDepthRatio = 24.0f / 8.0f;
+constexpr float kDragonHeadPositiveDiagonalProjection =
+    kInvSqrtTwo * (1.0f + kDragonHeadPositiveDepthRatio) -
+    kDragonHeadPositiveDepthRatio;
 constexpr float kDragonHeadSideSupportY =
-    0.070f / kSqrtTwoMinusOne;
+    0.070f / kDragonHeadPositiveDiagonalProjection;
 constexpr float kDragonHeadPositiveDepthSupportY =
-    kDragonHeadSideSupportY;
+    kDragonHeadSideSupportY * kDragonHeadPositiveDepthRatio;
 constexpr float kDragonHeadNegativeDepthSupportY =
-    kDragonHeadPositiveDepthSupportY * 2.0f;
+    kDragonHeadSideSupportY * kDragonHeadNegativeDepthRatio;
 constexpr float kWaterSurfaceLiftY = 0.125f;
 constexpr std::int32_t kSkullShape = 83;
 constexpr float kExtentEpsilon = 0.0005f;

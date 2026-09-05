@@ -33,7 +33,7 @@ public:
 
   bool load() {
     mSelf.getLogger().info(
-        "Levi Item Physics 0.8.8: asymmetric head contact support loaded");
+        "Levi Item Physics 0.8.9: exact Dragon Head support profile loaded");
     return true;
   }
 
