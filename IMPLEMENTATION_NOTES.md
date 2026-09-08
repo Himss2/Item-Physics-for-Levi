@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.10.0
+# Implementation notes: universal visual core 0.11.0
 
 ## Source behavior reproduced
 
@@ -45,10 +45,10 @@ Java's bytecode applies `realtimeDeltaTicks * 0.25 * rotateSpeed`, doubles that
 step while airborne, and divides it by `1 + viscosity` in fluid. CreativeCore's
 Fabric implementation returns `fluid.getTickDelay(level) / 5`, which is one for
 water. The Bedrock adaptation keeps the exact doubled air step but intentionally
-freezes custom roll while `WasInWaterFlagComponent` is active. Version 0.10.0
-adds only a vertical render wave: `sin((age + partialTick) * 0.10 * speed +
-phase) * 0.025`. Speed is `sliderPercent / 100`, clamped to `0..3`; zero returns
-no extra offset. Ground-only Y corrections are never applied while airborne or
+freezes custom roll while `WasInWaterFlagComponent` is active. The vertical
+render wave is `sin((age + partialTick) * 0.08 + phase) * 0.025`; its rate is
+fixed because Bedrock's native Y motion visually masked the former independent
+speed control. Ground-only Y corrections are never applied while airborne or
 floating.
 
 Java bytecode applies no skull- or Dragon-Head-specific pivot: every
@@ -116,6 +116,25 @@ updates only the selected family. Normal skull and Dragon Head stay separate.
 No config change clears visual states or touches rotation, contact, stack,
 classification, or water detection.
 
+Version 0.11.0 bakes the device-measured final values for the completed
+families: FlatItem `-0.206`, generic ShapedBlock `-0.205`, FullBlock `-0.087`,
+HorizontalThin `-0.178`, normal Head `+0.165`, and Dragon Head `+0.203`.
+Only Shield, Banner, Fence/Gate, and Scaffolding retain relaxed-atomic live
+calibration, initially `+0.001`, `+0.001`, `-0.205`, and `-0.205`.
+
+Those four cases are selected by a `GroundCalibration` subtype stored beside
+the existing `HeightClass`. The subtype is consulted only by `heightOffset`;
+it does not participate in ground-pose selection, Java airborne rotation,
+contact detection, stack layout, water logic, or shadow handling. Shield and
+Banner are exact/suffix item identifiers, fence-family matching includes both
+`_fence` and `_fence_gate`, and Scaffolding is exact. Consequently the new
+sliders cannot regress generic shaped items or alter their animation.
+
+The ineffective water-speed setting is removed. The render-only wave is fixed
+at `sin((age + partialTick) * 0.08 + phase) * 0.025`, 20 percent slower than
+0.10. Bedrock's native ItemActor Y remains unmodified because replacing or
+filtering it would change the already-approved surface rise and water height.
+
 This is an intentional Bedrock-only compatibility exception: full blocks still
 freeze at their exact contact angle, while only `HeightClass::Head` receives a
 deterministic rest pose. The isolated 0.9.1 calibration also lowers
@@ -136,11 +155,11 @@ full stripping continue to keep the native library well under the build cap.
 Bedrock's water-state position leaves the custom item model approximately half
 an ItemActor height below the desired visible line. A uniform `+0.125` render-Y
 correction is therefore applied to every item class while the native water flag
-is live. Version 0.10.0 adds the bounded `+/-0.025` vertical wave after that
-lift. Its phase uses the existing per-actor `yRot` seed, so nearby items do not
-move in lockstep. The wave adds one sine only for actors currently in water;
-dry actors pay no trigonometric cost for it. Both speed and heights are read
-with relaxed atomics, with no locks or string parsing in the render loop. These
+is live. The bounded `+/-0.025` vertical wave is added after that lift. Its
+phase uses the existing per-actor `yRot` seed, so nearby items do not move in
+lockstep. The wave adds one sine only for actors currently in water; dry actors
+pay no trigonometric cost for it. The four unfinished height subtypes use
+relaxed atomics, with no locks or string parsing in the render loop. These
 visual offsets change neither actor position nor velocity. Horizontal-thin
 items select the same world-up basis for `(grounded || inWater)`, while their
 complete dry-air transform remains unchanged.

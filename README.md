@@ -1,11 +1,11 @@
 # Levi Item Physics
 
 ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.45.1`.
-Version `0.10.0` keeps the device-approved airborne/full-block/decorated-pot,
-water-contact, stack, and fast render paths intact while adding live visual
-calibration for each ground model family and the water up/down speed.
+Version `0.11.0` keeps the device-approved airborne/full-block/decorated-pot,
+water-contact, stack, and fast render paths intact, bakes the measured ground
+heights, and retains live calibration only for the four unfinished families.
 
-## Implemented in 0.10.0
+## Implemented in 0.11.0
 
 - One `ItemRenderer::render` hook covers every dropped `ItemActor`, regardless
   of whether it came from Q, a dead mob, a broken container, a block drop,
@@ -29,25 +29,30 @@ calibration for each ground model family and the water up/down speed.
   their native world-up axis at contact; their complete airborne transform is
   unchanged.
 - Ground offsets are independent for flat, thin, shaped, head, special, and
-  full-block models. All heads keep the centred Java block transform and
+  full-block models. The device-approved fixed values are `-0.206` for 2D,
+  `-0.205` for generic shaped, `-0.087` for full block, `-0.178` for slab/thin,
+  `+0.165` for normal skull, and `+0.203` for Dragon Head. All heads keep the
+  centred Java block transform and
   complete Java flip while airborne. On the first confirmed ground frame they
   switch to fixed `xRot = 0`. Their native per-actor yaw remains untouched, so
   they can point in different horizontal directions without selecting an
   up/down-facing rest alternative. Normal skulls and Dragon Head deliberately
   use separate render-origin corrections.
-- Seven integer sliders expose those ground corrections in milliblocks
-  (`slider value / 1000` block): `2D Item`, `Shaped Item`, `Full Block`,
-  `Slab/Thin`, `Shield/Banner`, `Normal Skull`, and `Dragon Head`. Defaults are
-  `-150`, `-165`, `-35`, `-145`, `-140`, `+15`, and `-15`; every range is
-  `-300..+300`. A more-negative value lowers only that grounded model family;
-  a more-positive value raises it. Airborne transforms are never adjusted.
+- Four integer sliders remain in milliblocks (`slider value / 1000` block):
+  `Shield`, `Banner`, `Fence/Gate`, and `Scaffolding`. Their initial defaults
+  are `+1`, `+1`, `-205`, and `-205`; every range is `-300..+300`. These are
+  render-height subtypes only: they do not change the existing pose,
+  classification, airborne transform, or landing behavior. Fence detection
+  covers fence gates and Nether Brick Fence; scaffolding is isolated from all
+  other shaped items.
 - `WasInWaterFlagComponent` is sampled once per ItemActor tick. A floating item
   remains airborne, never enters the stable-Y ground fallback, freezes its last
   roll angle, and receives a class-independent `+0.125` visual surface lift.
-  A render-only sine adds at most `0.025` block of vertical motion; `Water Bob
-  Speed (%)` controls its rate from `0` (extra wave disabled) through `100`
-  (default) to `300` (3x). It never rotates an item or changes native velocity,
-  buoyancy, pickup, or networking. Naturally horizontal block items also use
+  A render-only sine adds at most `0.025` block of vertical motion at a fixed
+  `0.08` radians per tick, 20% slower than 0.10. The former speed slider was
+  removed because native ItemActor Y movement visually masks that separate
+  render wave. The mod never filters or overrides native Y, velocity, buoyancy,
+  pickup, or networking. Naturally horizontal block items also use
   their world-up pose in water, so slabs, trapdoors, carpets, rails, and
   pressure plates cannot stand upright at the surface.
 - Java stack-copy thresholds are used: `1 / 2 / 3 / 4 / 5` models at
@@ -58,26 +63,26 @@ calibration for each ground model family and the water up/down speed.
   model per custom submission.
 - Stack copies are centered in a deterministic horizontal row in world XZ, so
   merging items cannot create a copy above the base model.
-- `Single Model`, `Hide Item Shadow`, all seven ground-height controls, and
-  `Water Bob Speed (%)` are available in the same Mod Menu entry and apply
-  immediately.
+- `Single Model`, `Hide Item Shadow`, and the four unfinished ground-height
+  controls are available in the same Mod Menu entry and apply immediately.
 - Per-entity traits are cached, state lookup probes at most eight slots, contact
   ECS queries run once per game tick, and shadow storage is touched only when
   its requested state changes. Known ECS storage pointers are reused while the
   registry signature remains valid. Rotation sine/cosine pairs are evaluated
   once per ItemActor render and shared by all stack copies instead of being
-  recomputed inside the copy loop. Calibration uses relaxed atomics with no
-  locks or render-time parsing; the one additional sine is evaluated only for
-  an item currently in water. Release builds use `-O2` plus LTO, section GC,
+  recomputed inside the copy loop. Only four calibration values remain as
+  relaxed atomics, with no locks or render-time parsing; the one additional
+  sine is evaluated only for an item currently in water. Release builds use
+  `-O2` plus LTO, section GC,
   ICF, and stripping: runtime speed is prioritized while the existing 600-KiB
   hard package limit remains enforced.
 - The lightweight `item_physics.main` entry is registered in Levi Mod Menu;
   toggling it changes only the render path and does not reinstall hooks.
 
-The ground sliders in this calibration release intentionally reset to the
-compiled defaults when the native module is re-enabled/reloaded. Record or
-screenshot the final eight values; they can then replace the compiled defaults
-in the next release without retaining calibration-only persistence code.
+The four remaining ground sliders intentionally reset to their compiled
+defaults when the native module is re-enabled/reloaded. Record or screenshot
+their final values; they can then replace the compiled defaults in the next
+release without retaining calibration-only persistence code.
 
 This stage changes rendering only. Java gameplay physics, fluids, charged-Q,
 damage/fire rules, and pickup behavior belong to later device-tested stages.
@@ -137,11 +142,12 @@ toggle `Single Model` and `Hide Item Shadow` both ways while items are visible,
 then sneak/stand repeatedly while already-grounded items remain in view. Drop
 flat, block, head, slab, and trapdoor items into still and flowing water: they
 must keep their last roll angle, show only vertical surface motion, and sit
-visibly higher by the same amount. Check water speeds `0`, `100`, and `300`;
-none may add rotation. Slabs/trapdoors/carpets must remain horizontal. They must
+  visibly higher by the same amount. Confirm the fixed slower water wave adds
+  no rotation. Slabs/trapdoors/carpets must remain horizontal. They must
 not acquire a ground offset until they touch a solid floor. Test normal,
 Creeper, Wither Skeleton, Piglin, Player, and Dragon heads.
 Their airborne flip must remain unchanged; on contact each must use the same
 prone roll pose, retain its own horizontal yaw, and remain fully above the
-floor. Adjust one ground slider at a time while viewing its matching family at
-eye level, then screenshot or record all final slider values.
+floor. Adjust the Shield, Banner, Fence/Gate, and Scaffolding sliders one at a
+time while viewing the matching family at eye level, then screenshot or record
+all four final values.
