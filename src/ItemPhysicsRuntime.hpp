@@ -33,14 +33,10 @@ public:
   void setHideItemShadow(bool enabled) noexcept {
     mHideItemShadow.store(enabled, std::memory_order_relaxed);
   }
-  void setFlatGroundHeight(float height) noexcept;
-  void setShapedGroundHeight(float height) noexcept;
-  void setFullBlockGroundHeight(float height) noexcept;
-  void setHorizontalThinGroundHeight(float height) noexcept;
-  void setSpecialGroundHeight(float height) noexcept;
-  void setNormalHeadGroundHeight(float height) noexcept;
-  void setDragonHeadGroundHeight(float height) noexcept;
-  void setWaterBobSpeed(float multiplier) noexcept;
+  void setShieldGroundHeight(float height) noexcept;
+  void setBannerGroundHeight(float height) noexcept;
+  void setFenceGroundHeight(float height) noexcept;
+  void setScaffoldingGroundHeight(float height) noexcept;
 
   [[nodiscard]] bool profileSupported() const noexcept {
     return mProfileSupported.load(std::memory_order_relaxed);
@@ -82,6 +78,14 @@ private:
     Special
   };
 
+  enum class GroundCalibration : std::uint8_t {
+    Default,
+    Shield,
+    Banner,
+    FenceFamily,
+    Scaffolding
+  };
+
   struct BlockRenderInfo {
     bool keepHorizontal{};
     bool verticalPlane{};
@@ -95,6 +99,7 @@ private:
     bool groundFlat{};
     bool dragonHead{};
     HeightClass height{HeightClass::FlatItem};
+    GroundCalibration calibration{GroundCalibration::Default};
   };
 
   struct VisualState {
@@ -163,6 +168,8 @@ private:
   [[nodiscard]] bool verifyProfile(const ResolvedVirtual &,
                                    ll::mod::NativeMod &) const;
   [[nodiscard]] ItemRenderTraits classifyItem(std::uintptr_t) const noexcept;
+  [[nodiscard]] static GroundCalibration
+  calibrationForIdentifier(std::string_view) noexcept;
   [[nodiscard]] bool buildBlockRenderInfo(const void *,
                                           BlockRenderInfo &) const noexcept;
   [[nodiscard]] bool tryGetRenderBlockShape(std::uintptr_t,
@@ -196,14 +203,10 @@ private:
   std::atomic_bool mSingleModel{false};
   std::atomic_bool mHideItemShadow{true};
   std::atomic_bool mProfileSupported{false};
-  std::atomic<float> mFlatGroundHeight{-0.150f};
-  std::atomic<float> mShapedGroundHeight{-0.165f};
-  std::atomic<float> mFullBlockGroundHeight{-0.035f};
-  std::atomic<float> mHorizontalThinGroundHeight{-0.145f};
-  std::atomic<float> mSpecialGroundHeight{-0.140f};
-  std::atomic<float> mNormalHeadGroundHeight{0.015f};
-  std::atomic<float> mDragonHeadGroundHeight{-0.015f};
-  std::atomic<float> mWaterBobSpeed{1.0f};
+  std::atomic<float> mShieldGroundHeight{0.001f};
+  std::atomic<float> mBannerGroundHeight{0.001f};
+  std::atomic<float> mFenceGroundHeight{-0.205f};
+  std::atomic<float> mScaffoldingGroundHeight{-0.205f};
   std::uintptr_t mMinecraftBase{};
   std::uintptr_t mRenderTarget{};
   std::uintptr_t mRenderItemGroupTarget{};

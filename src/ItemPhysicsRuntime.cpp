@@ -22,10 +22,16 @@ constexpr float kBlockStackScaleStep = 0.32f;
 constexpr float kMaxContinuousDeltaTicks = 10.0f;
 constexpr float kWaterSurfaceLiftY = 0.125f;
 constexpr float kWaterBobAmplitude = 0.025f;
-constexpr float kWaterBobRadiansPerTick = 0.10f;
+constexpr float kWaterBobRadiansPerTick = 0.08f;
 constexpr float kMinGroundHeight = -0.300f;
 constexpr float kMaxGroundHeight = 0.300f;
-constexpr float kMaxWaterBobSpeed = 3.0f;
+constexpr float kFlatItemGroundY = -0.206f;
+constexpr float kShapedBlockGroundY = -0.205f;
+constexpr float kFullBlockGroundY = -0.087f;
+constexpr float kHorizontalThinGroundY = -0.178f;
+constexpr float kNormalHeadGroundY = 0.165f;
+constexpr float kDragonHeadGroundY = 0.203f;
+constexpr float kSpecialFallbackGroundY = 0.001f;
 constexpr std::int32_t kSkullShape = 83;
 constexpr float kExtentEpsilon = 0.0005f;
 constexpr float kThinYRatio = 0.70f;
@@ -436,39 +442,20 @@ void ItemPhysicsRuntime::clearStates() noexcept {
   mRenderCounter = 0;
 }
 
-void ItemPhysicsRuntime::setFlatGroundHeight(float height) noexcept {
-  storeGroundHeight(mFlatGroundHeight, height);
+void ItemPhysicsRuntime::setShieldGroundHeight(float height) noexcept {
+  storeGroundHeight(mShieldGroundHeight, height);
 }
 
-void ItemPhysicsRuntime::setShapedGroundHeight(float height) noexcept {
-  storeGroundHeight(mShapedGroundHeight, height);
+void ItemPhysicsRuntime::setBannerGroundHeight(float height) noexcept {
+  storeGroundHeight(mBannerGroundHeight, height);
 }
 
-void ItemPhysicsRuntime::setFullBlockGroundHeight(float height) noexcept {
-  storeGroundHeight(mFullBlockGroundHeight, height);
+void ItemPhysicsRuntime::setFenceGroundHeight(float height) noexcept {
+  storeGroundHeight(mFenceGroundHeight, height);
 }
 
-void ItemPhysicsRuntime::setHorizontalThinGroundHeight(float height) noexcept {
-  storeGroundHeight(mHorizontalThinGroundHeight, height);
-}
-
-void ItemPhysicsRuntime::setSpecialGroundHeight(float height) noexcept {
-  storeGroundHeight(mSpecialGroundHeight, height);
-}
-
-void ItemPhysicsRuntime::setNormalHeadGroundHeight(float height) noexcept {
-  storeGroundHeight(mNormalHeadGroundHeight, height);
-}
-
-void ItemPhysicsRuntime::setDragonHeadGroundHeight(float height) noexcept {
-  storeGroundHeight(mDragonHeadGroundHeight, height);
-}
-
-void ItemPhysicsRuntime::setWaterBobSpeed(float multiplier) noexcept {
-  if (!std::isfinite(multiplier))
-    return;
-  mWaterBobSpeed.store(std::clamp(multiplier, 0.0f, kMaxWaterBobSpeed),
-                       std::memory_order_relaxed);
+void ItemPhysicsRuntime::setScaffoldingGroundHeight(float height) noexcept {
+  storeGroundHeight(mScaffoldingGroundHeight, height);
 }
 
 void ItemPhysicsRuntime::renderDetour(void *self, void *ctx, void *renderData) {
@@ -770,6 +757,20 @@ bool ItemPhysicsRuntime::buildBlockRenderInfo(
   return true;
 }
 
+ItemPhysicsRuntime::GroundCalibration
+ItemPhysicsRuntime::calibrationForIdentifier(std::string_view id) noexcept {
+  if (id == kShieldId)
+    return GroundCalibration::Shield;
+  if (id == kBannerId || id.ends_with("_banner"))
+    return GroundCalibration::Banner;
+  if (id == "minecraft:scaffolding")
+    return GroundCalibration::Scaffolding;
+  if (id == "minecraft:fence" || id == "minecraft:fence_gate" ||
+      id.ends_with("_fence") || id.ends_with("_fence_gate"))
+    return GroundCalibration::FenceFamily;
+  return GroundCalibration::Default;
+}
+
 ItemPhysicsRuntime::ItemRenderTraits
 ItemPhysicsRuntime::classifyItem(std::uintptr_t actor) const noexcept {
   ItemRenderTraits traits{};
@@ -781,6 +782,7 @@ ItemPhysicsRuntime::classifyItem(std::uintptr_t actor) const noexcept {
   const auto *block = *reinterpret_cast<const void *const *>(
       actor + profile::kBlockPtrOffset);
   const auto id = itemIdentifier(actor);
+  traits.calibration = calibrationForIdentifier(id);
 
   if (!block && !hasRenderShape) {
     const bool banner = id == kBannerId || id.ends_with("_banner");
@@ -1025,21 +1027,32 @@ float ItemPhysicsRuntime::heightOffset(const ItemRenderTraits &traits,
   if (!grounded)
     return 0.0f;
 
+  switch (traits.calibration) {
+  case GroundCalibration::Shield:
+    return mShieldGroundHeight.load(std::memory_order_relaxed);
+  case GroundCalibration::Banner:
+    return mBannerGroundHeight.load(std::memory_order_relaxed);
+  case GroundCalibration::FenceFamily:
+    return mFenceGroundHeight.load(std::memory_order_relaxed);
+  case GroundCalibration::Scaffolding:
+    return mScaffoldingGroundHeight.load(std::memory_order_relaxed);
+  case GroundCalibration::Default:
+    break;
+  }
+
   switch (traits.height) {
   case HeightClass::FullBlock:
-    return mFullBlockGroundHeight.load(std::memory_order_relaxed);
+    return kFullBlockGroundY;
   case HeightClass::ShapedBlock:
-    return mShapedGroundHeight.load(std::memory_order_relaxed);
+    return kShapedBlockGroundY;
   case HeightClass::HorizontalThin:
-    return mHorizontalThinGroundHeight.load(std::memory_order_relaxed);
+    return kHorizontalThinGroundY;
   case HeightClass::Head:
-    return traits.dragonHead
-               ? mDragonHeadGroundHeight.load(std::memory_order_relaxed)
-               : mNormalHeadGroundHeight.load(std::memory_order_relaxed);
+    return traits.dragonHead ? kDragonHeadGroundY : kNormalHeadGroundY;
   case HeightClass::Special:
-    return mSpecialGroundHeight.load(std::memory_order_relaxed);
+    return kSpecialFallbackGroundY;
   case HeightClass::FlatItem:
-    return mFlatGroundHeight.load(std::memory_order_relaxed);
+    return kFlatItemGroundY;
   }
   return 0.0f;
 }
@@ -1048,10 +1061,7 @@ float ItemPhysicsRuntime::waterBobOffset(float sample,
                                          float phase) const noexcept {
   if (!std::isfinite(sample) || !std::isfinite(phase))
     return 0.0f;
-  const float speed = mWaterBobSpeed.load(std::memory_order_relaxed);
-  if (speed <= 0.0f)
-    return 0.0f;
-  return std::sin(sample * kWaterBobRadiansPerTick * speed + phase) *
+  return std::sin(sample * kWaterBobRadiansPerTick + phase) *
          kWaterBobAmplitude;
 }
 
