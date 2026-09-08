@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.12.0
+# Implementation notes: universal visual core 0.13.0
 
 ## Source behavior reproduced
 
@@ -179,6 +179,29 @@ string parsing in the render loop. These visual offsets change neither actor
 position nor velocity. Horizontal-thin
 items select the same world-up basis for `(grounded || inWater)`, while their
 complete dry-air transform remains unchanged.
+
+Version 0.13.0 adds the disabled-by-default `Real Item Models` Mod Menu toggle.
+The normal path keeps Java's `1/2/3/4/5` thresholds exactly. Exact mode instead
+selects the clamped ItemStack count `1..64`, while `Single Model` retains highest
+priority and always selects one. This changes only the number of model
+submissions; the ItemStack count and ItemActor remain untouched.
+
+The existing render-group detour continues to force one native model per custom
+submission. This avoids passing out-of-contract counts above five into
+Bedrock's private group helper and prevents its internal three-dimensional copy
+layout from reintroducing floating models. Exact copies use a deterministic
+square grid with at most eight columns and eight rows. Row X and grid Z are
+centred independently, then rotated into world XZ using the ItemActor's one
+precomputed yaw sine/cosine pair. There is no Y term in the layout.
+
+Exact mode allocates no per-copy state and performs no extra ECS, block-shape,
+fluid, ground, or shadow query. Traits, contact, water phase, world Y, scale,
+and all four rotation sine/cosine values are still resolved once per ItemActor
+render and shared by up to 64 copies. Geometry emission necessarily remains
+linear in the visible count, so disabling the opt-in toggle restores the former
+five-copy maximum immediately. The helper and tests are header-only and add no
+runtime dependency; the stripped binary remains subject to the same 600-KiB
+hard limit.
 
 ## Analyzed target
 

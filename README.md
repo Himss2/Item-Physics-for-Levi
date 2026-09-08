@@ -1,11 +1,11 @@
 # Levi Item Physics
 
 ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.45.1`.
-Version `0.12.0` keeps the device-approved airborne/full-block/decorated-pot,
-water-contact, stack, and fast render paths intact, bakes every measured ground
-height, and replaces per-frame water trigonometry with a compact sampled wave.
+Version `0.13.0` keeps the device-approved airborne/full-block/decorated-pot,
+water-contact, ground-height, and sampled-wave paths intact, and adds an
+optional exact visual model for every item contained by a merged stack.
 
-## Implemented in 0.12.0
+## Implemented in 0.13.0
 
 - One `ItemRenderer::render` hook covers every dropped `ItemActor`, regardless
   of whether it came from Q, a dead mob, a broken container, a block drop,
@@ -56,16 +56,27 @@ height, and replaces per-frame water trigonometry with a compact sampled wave.
   velocity, buoyancy, pickup, or networking. Naturally horizontal block items
   also use their world-up pose in water, so slabs, trapdoors, carpets, rails,
   and pressure plates cannot stand upright at the surface.
-- Java stack-copy thresholds are used: `1 / 2 / 3 / 4 / 5` models at
-  `1 / 2 / 17 / 33 / 49` items.
+- With `Real Item Models` off, Java stack-copy thresholds remain unchanged:
+  `1 / 2 / 3 / 4 / 5` models at `1 / 2 / 17 / 33 / 49` items.
+- `Real Item Models` is an optional Mod Menu toggle, disabled by default. When
+  enabled it renders exactly `1..64` models from the merged stack's actual
+  count. It is visual-only: there is still one ItemActor, one cached visual
+  state, and unchanged item count, merge, pickup, collision, buoyancy, and
+  networking behavior.
+- Exact models use a compact deterministic grid in world XZ. Every copy shares
+  the actor's approved pose and ground/water Y; no copy receives a local or
+  world Y displacement. The original Java 1..5-copy horizontal row is retained
+  when exact mode is disabled.
+- `Single Model` has explicit priority over `Real Item Models`: if both toggles
+  are enabled, only one model is submitted.
 - The first tick remains vanilla, matching Java ItemPhysic's warm-up rule.
 - Vanilla bob/spin is bypassed only while a custom copy is submitted.
 - Item count is never modified. A scoped render-group hook forces one native
   model per custom submission.
-- Stack copies are centered in a deterministic horizontal row in world XZ, so
-  merging items cannot create a copy above the base model.
-- `Single Model` and `Hide Item Shadow` remain in the same Mod Menu entry and
-  apply immediately.
+- Stack copies always remain in world XZ, so merging items cannot create a copy
+  above the base model.
+- `Single Model`, `Real Item Models`, and `Hide Item Shadow` remain in the same
+  Mod Menu entry and apply immediately.
 - Per-entity traits are cached, state lookup probes at most eight slots, contact
   ECS queries run once per game tick, and shadow storage is touched only when
   its requested state changes. Known ECS storage pointers are reused while the
@@ -77,6 +88,10 @@ height, and replaces per-frame water trigonometry with a compact sampled wave.
   builds use `-O2` plus LTO, section GC,
   ICF, and stripping: runtime speed is prioritized while the existing 600-KiB
   hard package limit remains enforced.
+- Exact rendering necessarily emits more model geometry. No per-copy physics,
+  ECS lookup, classification, water query, or trigonometry is added, but a
+  64-item stack still submits 64 visual models. Keeping the option disabled
+  preserves the previous maximum of five submissions and its performance.
 - The lightweight `item_physics.main` entry is registered in Levi Mod Menu;
   toggling it changes only the render path and does not reinstall hooks.
 
@@ -136,9 +151,12 @@ player death, dispenser, command/network spawn) with 2D items, tools, armor,
 full blocks, decorated pots, fences, ladders, bars, heads, shields, and every
 banner color. Watch the last airborne and first ground frames: there must be no
 pre-contact alignment. Merge equal drops and test counts `1, 2, 16, 17, 32,
-33, 48, 49, 64`; every visible copy must stay on one horizontal plane. Finally,
-toggle `Single Model` and `Hide Item Shadow` both ways while items are visible,
-then sneak/stand repeatedly while already-grounded items remain in view. Drop
+33, 48, 49, 64`; every visible copy must stay on one horizontal plane. Test
+those counts once with `Real Item Models` disabled and once enabled. Exact mode
+must produce the actual count in a compact XZ grid; enabling `Single Model` at
+the same time must reduce it to one. Finally, toggle `Hide Item Shadow` both
+ways while items are visible, then sneak/stand repeatedly while already-grounded
+items remain in view. Drop
 flat, block, head, slab, and trapdoor items into still and flowing water: they
 must keep their last roll angle, show only vertical surface motion, and sit
 visibly higher by the same amount. Confirm the wave pauses longer at its upper
