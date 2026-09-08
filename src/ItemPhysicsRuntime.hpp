@@ -33,6 +33,14 @@ public:
   void setHideItemShadow(bool enabled) noexcept {
     mHideItemShadow.store(enabled, std::memory_order_relaxed);
   }
+  void setFlatGroundHeight(float height) noexcept;
+  void setShapedGroundHeight(float height) noexcept;
+  void setFullBlockGroundHeight(float height) noexcept;
+  void setHorizontalThinGroundHeight(float height) noexcept;
+  void setSpecialGroundHeight(float height) noexcept;
+  void setNormalHeadGroundHeight(float height) noexcept;
+  void setDragonHeadGroundHeight(float height) noexcept;
+  void setWaterBobSpeed(float multiplier) noexcept;
 
   [[nodiscard]] bool profileSupported() const noexcept {
     return mProfileSupported.load(std::memory_order_relaxed);
@@ -174,13 +182,28 @@ private:
                                      float) const noexcept;
   static void updateRotation(VisualState &, bool, bool, bool, std::int32_t,
                              float) noexcept;
-  static float heightOffset(const ItemRenderTraits &, bool) noexcept;
+  [[nodiscard]] float heightOffset(const ItemRenderTraits &,
+                                   bool) const noexcept;
+  [[nodiscard]] float waterBobOffset(float sample,
+                                     float phase) const noexcept;
+  [[nodiscard]] float renderWorldY(float originalWorldY,
+                                   const ItemRenderTraits &, bool grounded,
+                                   bool inWater, float sample,
+                                   float phase) const noexcept;
   static std::uint32_t javaCopyCount(std::uint32_t) noexcept;
 
   std::atomic_bool mEnabled{true};
   std::atomic_bool mSingleModel{false};
   std::atomic_bool mHideItemShadow{true};
   std::atomic_bool mProfileSupported{false};
+  std::atomic<float> mFlatGroundHeight{-0.150f};
+  std::atomic<float> mShapedGroundHeight{-0.165f};
+  std::atomic<float> mFullBlockGroundHeight{-0.035f};
+  std::atomic<float> mHorizontalThinGroundHeight{-0.145f};
+  std::atomic<float> mSpecialGroundHeight{-0.140f};
+  std::atomic<float> mNormalHeadGroundHeight{0.015f};
+  std::atomic<float> mDragonHeadGroundHeight{-0.015f};
+  std::atomic<float> mWaterBobSpeed{1.0f};
   std::uintptr_t mMinecraftBase{};
   std::uintptr_t mRenderTarget{};
   std::uintptr_t mRenderItemGroupTarget{};

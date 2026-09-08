@@ -20,27 +20,17 @@ constexpr float kDefaultBlockScale = 0.25f;
 constexpr float kFlatStackWorldStep = 0.055f;
 constexpr float kBlockStackScaleStep = 0.32f;
 constexpr float kMaxContinuousDeltaTicks = 10.0f;
-// The normal skull renderer uses a substantially lower private origin in the
-// fixed prone pose than DragonHeadModel. Keep its correction independent.
-constexpr float kNormalHeadProneGroundY = 0.015f;
-// Grounded Dragon Heads share the fixed prone pose. Their larger private skull
-// model still needs a separate render-origin correction, but no angle-dependent
-// support estimate or moving pivot is involved.
-constexpr float kDragonHeadProneGroundY = -0.015f;
 constexpr float kWaterSurfaceLiftY = 0.125f;
+constexpr float kWaterBobAmplitude = 0.025f;
+constexpr float kWaterBobRadiansPerTick = 0.10f;
+constexpr float kMinGroundHeight = -0.300f;
+constexpr float kMaxGroundHeight = 0.300f;
+constexpr float kMaxWaterBobSpeed = 3.0f;
 constexpr std::int32_t kSkullShape = 83;
 constexpr float kExtentEpsilon = 0.0005f;
 constexpr float kThinYRatio = 0.70f;
 constexpr std::uint32_t kWasInWaterFlagComponentHash = 0x78E89F39u;
 constexpr std::uint8_t kWaterContactGraceTicks = 4u;
-
-// These are render-origin corrections only. They never select or alter an
-// animation law; every dropped item still uses the Java xRot path below.
-constexpr float kFullBlockGroundY = -0.035f;
-constexpr float kFlatItemY = -0.150f;
-constexpr float kHorizontalThinGroundY = -0.145f;
-constexpr float kShapedBlockGroundY = -0.165f;
-constexpr float kSpecialGroundY = -0.14f;
 
 constexpr float kStablePositionEpsilon = 0.012f;
 constexpr float kCollisionPositionEpsilon = 0.025f;
@@ -52,6 +42,13 @@ constexpr const char *kDragonHeadId = "minecraft:dragon_head";
 
 thread_local bool gForceSingleCopy = false;
 thread_local float *gObservedModelScale = nullptr;
+
+void storeGroundHeight(std::atomic<float> &target, float height) noexcept {
+  if (!std::isfinite(height))
+    return;
+  target.store(std::clamp(height, kMinGroundHeight, kMaxGroundHeight),
+               std::memory_order_relaxed);
+}
 
 // Item stacks may submit as many as five copies. The old path evaluated the
 // same trigonometric functions again for every copy. These helpers consume one
@@ -437,6 +434,41 @@ void ItemPhysicsRuntime::clearStates() noexcept {
   mStates = {};
   mComponentStorageCache = {};
   mRenderCounter = 0;
+}
+
+void ItemPhysicsRuntime::setFlatGroundHeight(float height) noexcept {
+  storeGroundHeight(mFlatGroundHeight, height);
+}
+
+void ItemPhysicsRuntime::setShapedGroundHeight(float height) noexcept {
+  storeGroundHeight(mShapedGroundHeight, height);
+}
+
+void ItemPhysicsRuntime::setFullBlockGroundHeight(float height) noexcept {
+  storeGroundHeight(mFullBlockGroundHeight, height);
+}
+
+void ItemPhysicsRuntime::setHorizontalThinGroundHeight(float height) noexcept {
+  storeGroundHeight(mHorizontalThinGroundHeight, height);
+}
+
+void ItemPhysicsRuntime::setSpecialGroundHeight(float height) noexcept {
+  storeGroundHeight(mSpecialGroundHeight, height);
+}
+
+void ItemPhysicsRuntime::setNormalHeadGroundHeight(float height) noexcept {
+  storeGroundHeight(mNormalHeadGroundHeight, height);
+}
+
+void ItemPhysicsRuntime::setDragonHeadGroundHeight(float height) noexcept {
+  storeGroundHeight(mDragonHeadGroundHeight, height);
+}
+
+void ItemPhysicsRuntime::setWaterBobSpeed(float multiplier) noexcept {
+  if (!std::isfinite(multiplier))
+    return;
+  mWaterBobSpeed.store(std::clamp(multiplier, 0.0f, kMaxWaterBobSpeed),
+                       std::memory_order_relaxed);
 }
 
 void ItemPhysicsRuntime::renderDetour(void *self, void *ctx, void *renderData) {
@@ -980,7 +1012,7 @@ void ItemPhysicsRuntime::updateRotation(VisualState &state,
 
   if (!grounded && !inWater) {
     // Keep the Java airborne tumble exact. Once Bedrock reports water, freeze
-    // the last roll and let only the actor's native vertical float/bob remain.
+    // the last roll; the render path may add vertical motion but never spin.
     state.xRot += delta * kRotationPerTick * 2.0f * kDefaultRotationSpeed;
   }
   // Full 3D blocks freeze at their exact airborne angle after contact. Heads
@@ -989,26 +1021,47 @@ void ItemPhysicsRuntime::updateRotation(VisualState &state,
 }
 
 float ItemPhysicsRuntime::heightOffset(const ItemRenderTraits &traits,
-                                       bool grounded) noexcept {
+                                       bool grounded) const noexcept {
   if (!grounded)
     return 0.0f;
 
   switch (traits.height) {
   case HeightClass::FullBlock:
-    return kFullBlockGroundY;
+    return mFullBlockGroundHeight.load(std::memory_order_relaxed);
   case HeightClass::ShapedBlock:
-    return kShapedBlockGroundY;
+    return mShapedGroundHeight.load(std::memory_order_relaxed);
   case HeightClass::HorizontalThin:
-    return kHorizontalThinGroundY;
+    return mHorizontalThinGroundHeight.load(std::memory_order_relaxed);
   case HeightClass::Head:
-    return traits.dragonHead ? kDragonHeadProneGroundY
-                             : kNormalHeadProneGroundY;
+    return traits.dragonHead
+               ? mDragonHeadGroundHeight.load(std::memory_order_relaxed)
+               : mNormalHeadGroundHeight.load(std::memory_order_relaxed);
   case HeightClass::Special:
-    return kSpecialGroundY;
+    return mSpecialGroundHeight.load(std::memory_order_relaxed);
   case HeightClass::FlatItem:
-    return kFlatItemY;
+    return mFlatGroundHeight.load(std::memory_order_relaxed);
   }
   return 0.0f;
+}
+
+float ItemPhysicsRuntime::waterBobOffset(float sample,
+                                         float phase) const noexcept {
+  if (!std::isfinite(sample) || !std::isfinite(phase))
+    return 0.0f;
+  const float speed = mWaterBobSpeed.load(std::memory_order_relaxed);
+  if (speed <= 0.0f)
+    return 0.0f;
+  return std::sin(sample * kWaterBobRadiansPerTick * speed + phase) *
+         kWaterBobAmplitude;
+}
+
+float ItemPhysicsRuntime::renderWorldY(
+    float originalWorldY, const ItemRenderTraits &traits, bool grounded,
+    bool inWater, float sample, float phase) const noexcept {
+  const float waterSurfaceLift = inWater ? kWaterSurfaceLiftY : 0.0f;
+  const float waterBob = inWater ? waterBobOffset(sample, phase) : 0.0f;
+  return originalWorldY + heightOffset(traits, grounded) + waterSurfaceLift +
+         waterBob;
 }
 
 std::uint32_t ItemPhysicsRuntime::javaCopyCount(std::uint32_t count) noexcept {
@@ -1134,10 +1187,8 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
   // Bedrock keeps the ItemActor centre approximately half of its 0.25-block
   // height below the visible water line. Apply one class-independent visual
   // lift while its native water component is live; do not alter actor motion.
-  const float waterSurfaceLift = state.inWater ? kWaterSurfaceLiftY : 0.0f;
-  const float worldY = originalWorldY +
-                       heightOffset(traits, grounded) +
-                       waterSurfaceLift;
+  const float worldY = renderWorldY(originalWorldY, traits, grounded,
+                                    state.inWater, sample, state.yRot);
   const float worldZ = position[2];
   position[1] = worldY;
 
