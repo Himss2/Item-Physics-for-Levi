@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.9.1
+# Implementation notes: universal visual core 0.10.0
 
 ## Source behavior reproduced
 
@@ -16,8 +16,8 @@ The Bedrock implementation follows the same boundary:
    four-tick-grace `WasInWaterFlagComponent` explicitly excludes stable surface
    Y from this ground fallback.
 3. Advance one scalar rotation from `age + partialTick` only while airborne and
-   outside water. In water, retain the last scalar angle and leave vertical
-   float/bob to Bedrock's ItemActor position.
+   outside water. In water, retain the last scalar angle and compose Bedrock's
+   ItemActor position with a small render-only vertical sine.
 4. Choose block or flat pivot; never choose a separate airborne motion family.
    Classification controls ground height and whether a thin structural model
    takes its corrected contact pose after—not before—contact. Horizontal block
@@ -45,9 +45,11 @@ Java's bytecode applies `realtimeDeltaTicks * 0.25 * rotateSpeed`, doubles that
 step while airborne, and divides it by `1 + viscosity` in fluid. CreativeCore's
 Fabric implementation returns `fluid.getTickDelay(level) / 5`, which is one for
 water. The Bedrock adaptation keeps the exact doubled air step but intentionally
-freezes custom roll while `WasInWaterFlagComponent` is active, matching the
-required surface animation: vertical float only. Ground-only Y corrections are
-never applied while airborne or floating.
+freezes custom roll while `WasInWaterFlagComponent` is active. Version 0.10.0
+adds only a vertical render wave: `sin((age + partialTick) * 0.10 * speed +
+phase) * 0.025`. Speed is `sliderPercent / 100`, clamped to `0..3`; zero returns
+no extra offset. Ground-only Y corrections are never applied while airborne or
+floating.
 
 Java bytecode applies no skull- or Dragon-Head-specific pivot: every
 `usesBlockLight()` model follows the same block transform. The former Bedrock
@@ -90,21 +92,36 @@ but stopped preserving an arbitrary roll after contact. It initially selected
 that the private Bedrock skull transform exposes those two outer-matrix signs
 as undesirable opposite-facing results rather than a useful visual variation.
 
-Version 0.9.1 keeps the same contact boundary but replaces that parity branch
+Version 0.9.1 kept the same contact boundary but replaced that parity branch
 with one fixed grounded `xRot = 0` prone pose. The actor's native `yRot` remains
-unchanged, preserving varied horizontal direction. Normal heads use ground Y
-`-0.105` and Dragon Head uses `-0.0791`, both lowered by `0.010` from 0.9.0.
-There is no pre-contact change, interpolation through unsafe angles, local
-pivot, horizontal orbit, or per-frame bounds work. If the actor genuinely
-becomes airborne again, normal Java rotation resumes from the selected prone
-angle.
+unchanged, preserving varied horizontal direction. Device testing of that new
+pose exposed two different private renderer origins: the normal skull was fully
+below the surface while part of DragonHeadModel remained visible.
+
+Version 0.9.2 therefore keeps the exact same pose and separates only their
+ground Y calibration. Normal skulls move from `-0.105` to `+0.015` (a `+0.120`
+lift), while Dragon Head moves from `-0.0791` to `-0.015` (a `+0.0641` lift).
+The exact `minecraft:dragon_head` identifier selects the Dragon value; all
+other block-shape-83 skulls use the normal value. There is no pre-contact
+change, interpolation through unsafe angles, local pivot, horizontal orbit, or
+per-frame bounds work. If the actor genuinely becomes airborne again, normal
+Java rotation resumes from the selected prone angle.
+
+Version 0.10.0 turns the seven class-specific ground constants into independent
+relaxed atomics, preserving their 0.9.2 values as defaults. Levi Mod Menu uses
+integer milliblocks (`-300..+300`) so Android displays and reports exact values
+without float-slider rounding. A config callback parses the complete integer
+with `from_chars`, rejects malformed/overflow input, converts by `0.001`, and
+updates only the selected family. Normal skull and Dragon Head stay separate.
+No config change clears visual states or touches rotation, contact, stack,
+classification, or water detection.
 
 This is an intentional Bedrock-only compatibility exception: full blocks still
 freeze at their exact contact angle, while only `HeightClass::Head` receives a
 deterministic rest pose. The isolated 0.9.1 calibration also lowers
-`HeightClass::FlatItem` from `-0.125` to `-0.140` and
-`HeightClass::ShapedBlock` from `-0.135` to `-0.155`. No other height class,
-water correction, classification rule, or animation path changed.
+`HeightClass::FlatItem` to `-0.150` and `HeightClass::ShapedBlock` to `-0.165`.
+The final 0.9.2 step is only another `-0.010` for each class. No other height
+class, water correction, classification rule, or animation path changed.
 
 The render hot path also reuses component-storage addresses for the current ECS
 registry. The cache is discarded whenever the registry or any of its bucket,
@@ -119,10 +136,14 @@ full stripping continue to keep the native library well under the build cap.
 Bedrock's water-state position leaves the custom item model approximately half
 an ItemActor height below the desired visible line. A uniform `+0.125` render-Y
 correction is therefore applied to every item class while the native water flag
-is live. It changes neither actor position nor velocity and composes after any
-real ground correction. Horizontal-thin items select the same world-up basis
-for `(grounded || inWater)`, while their complete dry-air transform remains
-unchanged.
+is live. Version 0.10.0 adds the bounded `+/-0.025` vertical wave after that
+lift. Its phase uses the existing per-actor `yRot` seed, so nearby items do not
+move in lockstep. The wave adds one sine only for actors currently in water;
+dry actors pay no trigonometric cost for it. Both speed and heights are read
+with relaxed atomics, with no locks or string parsing in the render loop. These
+visual offsets change neither actor position nor velocity. Horizontal-thin
+items select the same world-up basis for `(grounded || inWater)`, while their
+complete dry-air transform remains unchanged.
 
 ## Analyzed target
 
