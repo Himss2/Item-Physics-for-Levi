@@ -33,7 +33,7 @@ public:
 
   bool load() {
     mSelf.getLogger().info(
-        "Levi Item Physics 0.9.1: lower flat contact and prone heads loaded");
+        "Levi Item Physics 0.9.2: final ground-height calibration loaded");
     return true;
   }
 

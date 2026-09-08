@@ -20,11 +20,13 @@ constexpr float kDefaultBlockScale = 0.25f;
 constexpr float kFlatStackWorldStep = 0.055f;
 constexpr float kBlockStackScaleStep = 0.32f;
 constexpr float kMaxContinuousDeltaTicks = 10.0f;
-constexpr float kHeadProneGroundY = -0.105f;
+// The normal skull renderer uses a substantially lower private origin in the
+// fixed prone pose than DragonHeadModel. Keep its correction independent.
+constexpr float kNormalHeadProneGroundY = 0.015f;
 // Grounded Dragon Heads share the fixed prone pose. Their larger private skull
 // model still needs a separate render-origin correction, but no angle-dependent
 // support estimate or moving pivot is involved.
-constexpr float kDragonHeadProneGroundY = -0.0791f;
+constexpr float kDragonHeadProneGroundY = -0.015f;
 constexpr float kWaterSurfaceLiftY = 0.125f;
 constexpr std::int32_t kSkullShape = 83;
 constexpr float kExtentEpsilon = 0.0005f;
@@ -35,9 +37,9 @@ constexpr std::uint8_t kWaterContactGraceTicks = 4u;
 // These are render-origin corrections only. They never select or alter an
 // animation law; every dropped item still uses the Java xRot path below.
 constexpr float kFullBlockGroundY = -0.035f;
-constexpr float kFlatItemY = -0.140f;
+constexpr float kFlatItemY = -0.150f;
 constexpr float kHorizontalThinGroundY = -0.145f;
-constexpr float kShapedBlockGroundY = -0.155f;
+constexpr float kShapedBlockGroundY = -0.165f;
 constexpr float kSpecialGroundY = -0.14f;
 
 constexpr float kStablePositionEpsilon = 0.012f;
@@ -999,7 +1001,8 @@ float ItemPhysicsRuntime::heightOffset(const ItemRenderTraits &traits,
   case HeightClass::HorizontalThin:
     return kHorizontalThinGroundY;
   case HeightClass::Head:
-    return traits.dragonHead ? kDragonHeadProneGroundY : kHeadProneGroundY;
+    return traits.dragonHead ? kDragonHeadProneGroundY
+                             : kNormalHeadProneGroundY;
   case HeightClass::Special:
     return kSpecialGroundY;
   case HeightClass::FlatItem:
