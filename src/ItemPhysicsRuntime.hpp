@@ -33,11 +33,6 @@ public:
   void setHideItemShadow(bool enabled) noexcept {
     mHideItemShadow.store(enabled, std::memory_order_relaxed);
   }
-  void setShieldGroundHeight(float height) noexcept;
-  void setBannerGroundHeight(float height) noexcept;
-  void setFenceGroundHeight(float height) noexcept;
-  void setScaffoldingGroundHeight(float height) noexcept;
-
   [[nodiscard]] bool profileSupported() const noexcept {
     return mProfileSupported.load(std::memory_order_relaxed);
   }
@@ -116,6 +111,7 @@ private:
     std::uint8_t stableContactTicks{};
     std::uint8_t movingTicks{};
     std::uint8_t waterMissTicks{};
+    std::uint8_t waterBobPhase{};
     bool used{};
     bool sampled{};
     bool traitsSampled{};
@@ -192,21 +188,17 @@ private:
   [[nodiscard]] float heightOffset(const ItemRenderTraits &,
                                    bool) const noexcept;
   [[nodiscard]] float waterBobOffset(float sample,
-                                     float phase) const noexcept;
+                                     std::uint8_t phaseTick) const noexcept;
   [[nodiscard]] float renderWorldY(float originalWorldY,
                                    const ItemRenderTraits &, bool grounded,
                                    bool inWater, float sample,
-                                   float phase) const noexcept;
+                                   std::uint8_t phaseTick) const noexcept;
   static std::uint32_t javaCopyCount(std::uint32_t) noexcept;
 
   std::atomic_bool mEnabled{true};
   std::atomic_bool mSingleModel{false};
   std::atomic_bool mHideItemShadow{true};
   std::atomic_bool mProfileSupported{false};
-  std::atomic<float> mShieldGroundHeight{0.001f};
-  std::atomic<float> mBannerGroundHeight{0.001f};
-  std::atomic<float> mFenceGroundHeight{-0.205f};
-  std::atomic<float> mScaffoldingGroundHeight{-0.205f};
   std::uintptr_t mMinecraftBase{};
   std::uintptr_t mRenderTarget{};
   std::uintptr_t mRenderItemGroupTarget{};

@@ -21,10 +21,35 @@ constexpr float kFlatStackWorldStep = 0.055f;
 constexpr float kBlockStackScaleStep = 0.32f;
 constexpr float kMaxContinuousDeltaTicks = 10.0f;
 constexpr float kWaterSurfaceLiftY = 0.125f;
-constexpr float kWaterBobAmplitude = 0.025f;
-constexpr float kWaterBobRadiansPerTick = 0.08f;
-constexpr float kMinGroundHeight = -0.300f;
-constexpr float kMaxGroundHeight = 0.300f;
+constexpr std::uint32_t kWaterCycleTicks = 91u;
+// One-tick samples of the approved waveform: 8 ticks at the bottom, a
+// half-sine transition at approximately 0.10 radians/tick, 20 ticks at the
+// top, then the mirrored transition. Linear partial-tick interpolation keeps
+// motion smooth without a per-render libm call.
+constexpr std::array<float, kWaterCycleTicks> kWaterBobSamples{
+    -0.015000000f, -0.015000000f, -0.015000000f, -0.015000000f,
+    -0.015000000f, -0.015000000f, -0.015000000f, -0.015000000f,
+    -0.015000000f, -0.014925062f, -0.014700999f, -0.014330047f,
+    -0.013815915f, -0.013163738f, -0.012380034f, -0.011472633f,
+    -0.010450601f, -0.009324150f, -0.008104535f, -0.006803942f,
+    -0.005435366f, -0.004012482f, -0.002549507f, -0.001061058f,
+     0.000437993f,  0.001932667f,  0.003408031f,  0.004849344f,
+     0.006242203f,  0.007572692f,  0.008827517f,  0.009994140f,
+     0.011060906f,  0.012017154f,  0.012853331f,  0.013561082f,
+     0.014133335f,  0.014564372f,  0.014849887f,  0.014987027f,
+     0.015000000f,  0.015000000f,  0.015000000f,  0.015000000f,
+     0.015000000f,  0.015000000f,  0.015000000f,  0.015000000f,
+     0.015000000f,  0.015000000f,  0.015000000f,  0.015000000f,
+     0.015000000f,  0.015000000f,  0.015000000f,  0.015000000f,
+     0.015000000f,  0.015000000f,  0.015000000f,  0.015000000f,
+     0.014974422f,  0.014812197f,  0.014501973f,  0.014046850f,
+     0.013451376f,  0.012721500f,  0.011864516f,  0.010888985f,
+     0.009804654f,  0.008622359f,  0.007353912f,  0.006011988f,
+     0.004609993f,  0.003161937f,  0.001682288f,  0.000185830f,
+    -0.001312485f, -0.002797686f, -0.004254933f, -0.005669666f,
+    -0.007027750f, -0.008315615f, -0.009520393f, -0.010630047f,
+    -0.011633488f, -0.012520692f, -0.013282793f, -0.013912176f,
+    -0.014402554f, -0.014749027f, -0.014948131f};
 constexpr float kFlatItemGroundY = -0.206f;
 constexpr float kShapedBlockGroundY = -0.205f;
 constexpr float kFullBlockGroundY = -0.087f;
@@ -32,6 +57,10 @@ constexpr float kHorizontalThinGroundY = -0.178f;
 constexpr float kNormalHeadGroundY = 0.165f;
 constexpr float kDragonHeadGroundY = 0.203f;
 constexpr float kSpecialFallbackGroundY = 0.001f;
+constexpr float kShieldGroundY = -0.147f;
+constexpr float kBannerGroundY = -0.159f;
+constexpr float kFenceGroundY = -0.171f;
+constexpr float kScaffoldingGroundY = -0.081f;
 constexpr std::int32_t kSkullShape = 83;
 constexpr float kExtentEpsilon = 0.0005f;
 constexpr float kThinYRatio = 0.70f;
@@ -48,13 +77,6 @@ constexpr const char *kDragonHeadId = "minecraft:dragon_head";
 
 thread_local bool gForceSingleCopy = false;
 thread_local float *gObservedModelScale = nullptr;
-
-void storeGroundHeight(std::atomic<float> &target, float height) noexcept {
-  if (!std::isfinite(height))
-    return;
-  target.store(std::clamp(height, kMinGroundHeight, kMaxGroundHeight),
-               std::memory_order_relaxed);
-}
 
 // Item stacks may submit as many as five copies. The old path evaluated the
 // same trigonometric functions again for every copy. These helpers consume one
@@ -440,22 +462,6 @@ void ItemPhysicsRuntime::clearStates() noexcept {
   mStates = {};
   mComponentStorageCache = {};
   mRenderCounter = 0;
-}
-
-void ItemPhysicsRuntime::setShieldGroundHeight(float height) noexcept {
-  storeGroundHeight(mShieldGroundHeight, height);
-}
-
-void ItemPhysicsRuntime::setBannerGroundHeight(float height) noexcept {
-  storeGroundHeight(mBannerGroundHeight, height);
-}
-
-void ItemPhysicsRuntime::setFenceGroundHeight(float height) noexcept {
-  storeGroundHeight(mFenceGroundHeight, height);
-}
-
-void ItemPhysicsRuntime::setScaffoldingGroundHeight(float height) noexcept {
-  storeGroundHeight(mScaffoldingGroundHeight, height);
 }
 
 void ItemPhysicsRuntime::renderDetour(void *self, void *ctx, void *renderData) {
@@ -854,6 +860,8 @@ ItemPhysicsRuntime::stateFor(std::uint32_t entity, std::int32_t age,
     state.lastSeen = mRenderCounter;
     state.lastAge = age;
     state.yRot = std::isfinite(bobOffset) ? bobOffset : 0.0f;
+    state.waterBobPhase = static_cast<std::uint8_t>(
+        (entity * 2654435761u) % kWaterCycleTicks);
     state.lastSample = sample;
     state.used = true;
     state.sampled = true;
@@ -1029,13 +1037,13 @@ float ItemPhysicsRuntime::heightOffset(const ItemRenderTraits &traits,
 
   switch (traits.calibration) {
   case GroundCalibration::Shield:
-    return mShieldGroundHeight.load(std::memory_order_relaxed);
+    return kShieldGroundY;
   case GroundCalibration::Banner:
-    return mBannerGroundHeight.load(std::memory_order_relaxed);
+    return kBannerGroundY;
   case GroundCalibration::FenceFamily:
-    return mFenceGroundHeight.load(std::memory_order_relaxed);
+    return kFenceGroundY;
   case GroundCalibration::Scaffolding:
-    return mScaffoldingGroundHeight.load(std::memory_order_relaxed);
+    return kScaffoldingGroundY;
   case GroundCalibration::Default:
     break;
   }
@@ -1058,18 +1066,28 @@ float ItemPhysicsRuntime::heightOffset(const ItemRenderTraits &traits,
 }
 
 float ItemPhysicsRuntime::waterBobOffset(float sample,
-                                         float phase) const noexcept {
-  if (!std::isfinite(sample) || !std::isfinite(phase))
+                                         std::uint8_t phaseTick) const noexcept {
+  if (!std::isfinite(sample) || sample < 0.0f ||
+      sample > static_cast<float>(std::numeric_limits<std::uint32_t>::max()))
     return 0.0f;
-  return std::sin(sample * kWaterBobRadiansPerTick + phase) *
-         kWaterBobAmplitude;
+
+  const auto wholeTick = static_cast<std::uint32_t>(sample);
+  const float partial = sample - static_cast<float>(wholeTick);
+  std::uint32_t index =
+      wholeTick % kWaterCycleTicks + phaseTick % kWaterCycleTicks;
+  if (index >= kWaterCycleTicks)
+    index -= kWaterCycleTicks;
+  const std::uint32_t next =
+      index + 1u == kWaterCycleTicks ? 0u : index + 1u;
+  const float from = kWaterBobSamples[index];
+  return from + (kWaterBobSamples[next] - from) * partial;
 }
 
 float ItemPhysicsRuntime::renderWorldY(
     float originalWorldY, const ItemRenderTraits &traits, bool grounded,
-    bool inWater, float sample, float phase) const noexcept {
+    bool inWater, float sample, std::uint8_t phaseTick) const noexcept {
   const float waterSurfaceLift = inWater ? kWaterSurfaceLiftY : 0.0f;
-  const float waterBob = inWater ? waterBobOffset(sample, phase) : 0.0f;
+  const float waterBob = inWater ? waterBobOffset(sample, phaseTick) : 0.0f;
   return originalWorldY + heightOffset(traits, grounded) + waterSurfaceLift +
          waterBob;
 }
@@ -1198,7 +1216,8 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
   // height below the visible water line. Apply one class-independent visual
   // lift while its native water component is live; do not alter actor motion.
   const float worldY = renderWorldY(originalWorldY, traits, grounded,
-                                    state.inWater, sample, state.yRot);
+                                    state.inWater, sample,
+                                    state.waterBobPhase);
   const float worldZ = position[2];
   position[1] = worldY;
 
