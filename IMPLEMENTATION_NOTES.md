@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.11.0
+# Implementation notes: universal visual core 0.12.0
 
 ## Source behavior reproduced
 
@@ -17,7 +17,7 @@ The Bedrock implementation follows the same boundary:
    Y from this ground fallback.
 3. Advance one scalar rotation from `age + partialTick` only while airborne and
    outside water. In water, retain the last scalar angle and compose Bedrock's
-   ItemActor position with a small render-only vertical sine.
+   ItemActor position with a small render-only sampled vertical wave.
 4. Choose block or flat pivot; never choose a separate airborne motion family.
    Classification controls ground height and whether a thin structural model
    takes its corrected contact pose after—not before—contact. Horizontal block
@@ -46,10 +46,9 @@ step while airborne, and divides it by `1 + viscosity` in fluid. CreativeCore's
 Fabric implementation returns `fluid.getTickDelay(level) / 5`, which is one for
 water. The Bedrock adaptation keeps the exact doubled air step but intentionally
 freezes custom roll while `WasInWaterFlagComponent` is active. The vertical
-render wave is `sin((age + partialTick) * 0.08 + phase) * 0.025`; its rate is
-fixed because Bedrock's native Y motion visually masked the former independent
-speed control. Ground-only Y corrections are never applied while airborne or
-floating.
+render wave uses `+/-0.015` extrema, an eight-tick lower hold, approximately
+`0.10` radians/tick while moving, and a twenty-tick upper hold. Ground-only Y
+corrections are never applied while airborne or floating.
 
 Java bytecode applies no skull- or Dragon-Head-specific pivot: every
 `usesBlockLight()` model follows the same block transform. The former Bedrock
@@ -135,6 +134,23 @@ at `sin((age + partialTick) * 0.08 + phase) * 0.025`, 20 percent slower than
 0.10. Bedrock's native ItemActor Y remains unmodified because replacing or
 filtering it would change the already-approved surface rise and water height.
 
+Version 0.12.0 bakes the remaining device measurements: Shield `-0.147`,
+Banner `-0.159`, Fence/Gate `-0.171`, and Scaffolding `-0.081`. Their setters,
+four float atomics, integer parser, and Mod Menu sliders are deleted. The
+`GroundCalibration` subtype remains because it routes each identifier to its
+native constant without changing any pose or motion decision.
+
+The water transition returns to the former motion rate, but the timing is no
+longer a continuously slowed sine. The approved cycle holds its lower endpoint
+for about eight ticks, follows a half-sine transition, holds the upper endpoint
+for about twenty ticks, and mirrors the transition downward. Its vertical range
+shrinks from `+/-0.025` to `+/-0.015` block. Ninety-one precomputed one-tick
+samples and linear partial-tick interpolation preserve a smooth curve without
+calling `sin` or `cos` in the water render path. An entity-hash phase is stored
+once in `VisualState`, so per-render work is bounded to integer indexing, two
+table reads, and a lerp. Native ItemActor Y and the approved `+0.125` surface
+lift remain untouched.
+
 This is an intentional Bedrock-only compatibility exception: full blocks still
 freeze at their exact contact angle, while only `HeightClass::Head` receives a
 deterministic rest pose. The isolated 0.9.1 calibration also lowers
@@ -155,12 +171,12 @@ full stripping continue to keep the native library well under the build cap.
 Bedrock's water-state position leaves the custom item model approximately half
 an ItemActor height below the desired visible line. A uniform `+0.125` render-Y
 correction is therefore applied to every item class while the native water flag
-is live. The bounded `+/-0.025` vertical wave is added after that lift. Its
-phase uses the existing per-actor `yRot` seed, so nearby items do not move in
-lockstep. The wave adds one sine only for actors currently in water; dry actors
-pay no trigonometric cost for it. The four unfinished height subtypes use
-relaxed atomics, with no locks or string parsing in the render loop. These
-visual offsets change neither actor position nor velocity. Horizontal-thin
+is live. The bounded `+/-0.015` sampled wave is added after that lift. Its
+entity-derived phase keeps nearby items out of lockstep. Dry actors do not
+evaluate it, and wet actors use table interpolation with no trigonometric call.
+Ground-height selection uses compile-time constants with no float atomics or
+string parsing in the render loop. These visual offsets change neither actor
+position nor velocity. Horizontal-thin
 items select the same world-up basis for `(grounded || inWater)`, while their
 complete dry-air transform remains unchanged.
 
