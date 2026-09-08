@@ -30,6 +30,9 @@ public:
   void setSingleModel(bool enabled) noexcept {
     mSingleModel.store(enabled, std::memory_order_relaxed);
   }
+  void setRealItemModels(bool enabled) noexcept {
+    mRealItemModels.store(enabled, std::memory_order_relaxed);
+  }
   void setHideItemShadow(bool enabled) noexcept {
     mHideItemShadow.store(enabled, std::memory_order_relaxed);
   }
@@ -193,10 +196,9 @@ private:
                                    const ItemRenderTraits &, bool grounded,
                                    bool inWater, float sample,
                                    std::uint8_t phaseTick) const noexcept;
-  static std::uint32_t javaCopyCount(std::uint32_t) noexcept;
-
   std::atomic_bool mEnabled{true};
   std::atomic_bool mSingleModel{false};
+  std::atomic_bool mRealItemModels{false};
   std::atomic_bool mHideItemShadow{true};
   std::atomic_bool mProfileSupported{false};
   std::uintptr_t mMinecraftBase{};

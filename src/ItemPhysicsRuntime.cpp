@@ -1,4 +1,5 @@
 #include "ItemPhysicsRuntime.hpp"
+#include "StackVisualLayout.hpp"
 #include "TargetProfile.hpp"
 
 #include <algorithm>
@@ -78,10 +79,10 @@ constexpr const char *kDragonHeadId = "minecraft:dragon_head";
 thread_local bool gForceSingleCopy = false;
 thread_local float *gObservedModelScale = nullptr;
 
-// Item stacks may submit as many as five copies. The old path evaluated the
-// same trigonometric functions again for every copy. These helpers consume one
-// sine/cosine pair calculated for the ItemActor and keep the matrix equations
-// identical to MatrixMath.hpp.
+// Default Java-style stacks submit at most five copies; optional exact visual
+// stacks may submit up to 64. These helpers consume one sine/cosine pair
+// calculated for the ItemActor, so copy count never multiplies trigonometric
+// work and the matrix equations remain identical to MatrixMath.hpp.
 inline void postRotateXQuarter(Mat4 &matrix) noexcept {
   float c1[4];
   float c2[4];
@@ -1092,18 +1093,6 @@ float ItemPhysicsRuntime::renderWorldY(
          waterBob;
 }
 
-std::uint32_t ItemPhysicsRuntime::javaCopyCount(std::uint32_t count) noexcept {
-  if (count > 48)
-    return 5;
-  if (count > 32)
-    return 4;
-  if (count > 16)
-    return 3;
-  if (count > 1)
-    return 2;
-  return 1;
-}
-
 void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
   const auto original = mOriginal;
   if (!original)
@@ -1203,9 +1192,12 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
   const auto count = static_cast<std::uint32_t>(
       *reinterpret_cast<const std::uint8_t *>(actorAddress +
                                              profile::kItemCountOffset));
-  const auto copies = mSingleModel.load(std::memory_order_relaxed)
-                          ? 1u
-                          : javaCopyCount(count);
+  const bool singleModel = mSingleModel.load(std::memory_order_relaxed);
+  const bool realItemModels =
+      mRealItemModels.load(std::memory_order_relaxed);
+  const auto copies =
+      selectVisualCopyCount(count, singleModel, realItemModels);
+  const bool compactCopyLayout = realItemModels && !singleModel;
   auto &frameFlag = *reinterpret_cast<std::uint8_t *>(
       actorAddress + profile::kIsInItemFrameOffset);
   const auto oldFrameFlag = frameFlag;
@@ -1232,12 +1224,17 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
   const float stackDirectionZ = yRotSine;
   bool rendered = false;
   for (std::uint32_t copy = 0; copy < copies; ++copy) {
-    const float centeredCopy =
-        (static_cast<float>(copy) -
-         static_cast<float>(copies - 1u) * 0.5f) *
-        stackStep;
-    const float copyWorldX = centeredCopy * stackDirectionX;
-    const float copyWorldZ = centeredCopy * stackDirectionZ;
+    // Keep Java's approved 1..5-copy row unchanged while the optional exact
+    // mode uses a compact XZ-only grid. No copy receives a Y displacement, so
+    // visual stack count cannot reintroduce vertical stacking or floating.
+    const StackXZOffset localOffset =
+        compactCopyLayout
+            ? compactGridOffset(copy, copies, stackStep)
+            : centeredRowOffset(copy, copies, stackStep);
+    const StackXZOffset worldOffset = rotateStackOffset(
+        localOffset, stackDirectionZ, stackDirectionX);
+    const float copyWorldX = worldOffset.x;
+    const float copyWorldZ = worldOffset.z;
 
     MatrixPushScope scope(mGetWorldMatrix ? mGetWorldMatrix(ctx) : nullptr,
                           mMatrixPush, mMatrixRefDtor);

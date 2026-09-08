@@ -10,6 +10,7 @@ namespace itemphysics {
 
 constexpr std::string_view kModuleId = "item_physics.main";
 constexpr std::string_view kSingleModelKey = "singleModel";
+constexpr std::string_view kRealItemModelsKey = "realItemModels";
 constexpr std::string_view kHideItemShadowKey = "hideItemShadow";
 
 bool parseMenuBool(std::string_view value, bool fallback) noexcept {
@@ -33,7 +34,7 @@ public:
 
   bool load() {
     mSelf.getLogger().info(
-        "Levi Item Physics 0.12.0: native ground calibration loaded");
+        "Levi Item Physics 0.13.0: optional real item models loaded");
     return true;
   }
 
@@ -42,6 +43,7 @@ public:
     // performs no writes or hooks against an unknown Minecraft binary.
     mRuntime.setEnabled(true);
     mRuntime.setSingleModel(false);
+    mRuntime.setRealItemModels(false);
     mRuntime.setHideItemShadow(true);
     const bool hookActive = mRuntime.install(mSelf);
     if (!hookActive)
@@ -56,6 +58,8 @@ public:
             .defaultEnabled(true)
             .onToggle(onToggle)
             .config(std::string(kSingleModelKey), "Single Model",
+                    pl::modmenu::ConfigType::Toggle, "false")
+            .config(std::string(kRealItemModelsKey), "Real Item Models",
                     pl::modmenu::ConfigType::Toggle, "false")
             .config(std::string(kHideItemShadowKey), "Hide Item Shadow",
                     pl::modmenu::ConfigType::Toggle, "true")
@@ -96,6 +100,8 @@ private:
     auto &runtime = instance().mRuntime;
     if (key == kSingleModelKey)
       runtime.setSingleModel(parseMenuBool(value, false));
+    else if (key == kRealItemModelsKey)
+      runtime.setRealItemModels(parseMenuBool(value, false));
     else if (key == kHideItemShadowKey)
       runtime.setHideItemShadow(parseMenuBool(value, true));
   }
