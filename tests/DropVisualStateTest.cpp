@@ -31,7 +31,31 @@ int main() {
   using itemphysics::DropVisualAnchorPool;
   using itemphysics::DropVisualLineage;
   using itemphysics::DropVisualPose;
+  using itemphysics::RenderSpacePoint;
   using itemphysics::javaVisualCopyCount;
+  using itemphysics::renderOriginForWorldAnchor;
+
+  // Regression: a frozen visual is a world-space anchor, not an old
+  // ActorRenderData position. Camera-origin shifts and movement of the live
+  // merge survivor must therefore never drag the frozen source with them.
+  const RenderSpacePoint frozenWorld{100.0f, 64.0f, 100.0f};
+  const RenderSpacePoint firstOwnerWorld{101.0f, 64.0f, 100.0f};
+  const RenderSpacePoint firstOwnerRender{5.0f, 2.0f, -3.0f};
+  const auto firstFrozenRender = renderOriginForWorldAnchor(
+      frozenWorld, firstOwnerWorld, firstOwnerRender);
+  if (!closeEnough(firstFrozenRender.x, 4.0f) ||
+      !closeEnough(firstFrozenRender.y, 2.0f) ||
+      !closeEnough(firstFrozenRender.z, -3.0f))
+    return fail("world anchor was not converted into current render space");
+
+  const RenderSpacePoint movedOwnerWorld{102.0f, 64.0f, 100.0f};
+  const RenderSpacePoint movedOwnerRender{4.0f, 2.0f, -3.0f};
+  const auto secondFrozenRender = renderOriginForWorldAnchor(
+      frozenWorld, movedOwnerWorld, movedOwnerRender);
+  if (!closeEnough(secondFrozenRender.x, 2.0f) ||
+      !closeEnough(secondFrozenRender.y, 2.0f) ||
+      !closeEnough(secondFrozenRender.z, -3.0f))
+    return fail("camera or survivor movement dragged a frozen world anchor");
 
   // A stack dropped in one action remains one visual origin. It uses the
   // Java 1..5 copy rule instead of the removed exact-count grid.
