@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -35,6 +36,57 @@ int main() {
   using itemphysics::RenderSpacePoint;
   using itemphysics::javaVisualCopyCount;
   using itemphysics::renderOriginForWorldAnchor;
+
+  // Removing the lava correction strands a stationary fireproof item; applying
+  // it outside these gates changes ordinary drops or remote-server simulation.
+  using itemphysics::lavaVelocityAfterTick;
+  if (!closeEnough(lavaVelocityAfterTick(0.0f, true, true, false, true),
+                   0.06f))
+    return fail("fireproof lava item did not receive upward motion");
+  if (lavaVelocityAfterTick(-0.04f, false, true, false, true) != -0.04f ||
+      lavaVelocityAfterTick(-0.04f, true, false, false, true) != -0.04f ||
+      lavaVelocityAfterTick(-0.04f, true, true, true, true) != -0.04f ||
+      lavaVelocityAfterTick(-0.04f, true, true, false, false) != -0.04f)
+    return fail("lava correction escaped its gameplay gates");
+  if (lavaVelocityAfterTick(0.3f, true, true, false, true) != 0.3f)
+    return fail("lava correction clamped existing upward throw motion");
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  if (!std::isnan(lavaVelocityAfterTick(nan, true, true, false, true)))
+    return fail("invalid native velocity was turned into motion");
+
+  // Live fluid height must retain a world-space base just like an anchor:
+  // native buoyancy jitter is not a second oscillation added to the custom bob.
+  itemphysics::FluidVisualBase liveBase{};
+  if (!closeEnough(liveBase.update(64.0f, 10.0f, DropFluidKind::Water), 64.0f))
+    return fail("fluid entry changed the initial world height");
+  for (unsigned tick = 11; tick < 60; ++tick) {
+    const float nativeY = tick % 2 ? 63.98f : 64.0f;
+    if (!closeEnough(liveBase.update(nativeY, float(tick), DropFluidKind::Water),
+                     64.0f))
+      return fail("native bob leaked into the live visual base");
+  }
+  if (!liveBase.bobbing())
+    return fail("stable live item never entered the bob phase");
+  if (!closeEnough(liveBase.update(64.1f, 60.0f, DropFluidKind::Water), 64.04f) ||
+      liveBase.bobbing())
+    return fail("live ascent did not use the retained-anchor rise rate");
+  if (!closeEnough(liveBase.update(64.1f, 60.5f, DropFluidKind::Water), 64.06f))
+    return fail("live ascent ignored partial ticks");
+  if (!closeEnough(liveBase.update(64.1f, 60.5f, DropFluidKind::Water), 64.06f))
+    return fail("repeat render advanced fluid motion twice");
+  if (!closeEnough(liveBase.update(64.1f, 62.0f, DropFluidKind::Water), 64.1f) ||
+      !liveBase.bobbing())
+    return fail("live ascent overshot its target or failed to bob");
+  if (!closeEnough(liveBase.update(62.0f, 63.0f, DropFluidKind::Water), 62.0f))
+    return fail("large real relocation left a floating ghost behind");
+  if (!closeEnough(liveBase.update(60.0f, 64.0f, DropFluidKind::None), 60.0f) ||
+      liveBase.bobbing())
+    return fail("leaving fluid retained the old surface anchor");
+  if (!closeEnough(liveBase.update(60.0f, 65.0f, DropFluidKind::Lava), 60.0f) ||
+      !closeEnough(liveBase.update(60.1f, 66.0f, DropFluidKind::Lava), 60.02f))
+    return fail("lava live base did not use the slower rise rate");
+  if (!std::isnan(liveBase.update(nan, 67.0f, DropFluidKind::Lava)))
+    return fail("invalid visual position was not rejected");
 
   // Regression: a frozen visual is a world-space anchor, not an old
   // ActorRenderData position. Camera-origin shifts and movement of the live
