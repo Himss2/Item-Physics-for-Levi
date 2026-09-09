@@ -29,6 +29,7 @@ itemphysics::DropVisualPose pose(float x, float y, float z) {
 
 int main() {
   using itemphysics::DropVisualAnchorPool;
+  using itemphysics::DropFluidKind;
   using itemphysics::DropVisualLineage;
   using itemphysics::DropVisualPose;
   using itemphysics::RenderSpacePoint;
@@ -146,6 +147,60 @@ int main() {
   });
   if (javaVisualCopyCount(stack20.rootCount) != 3 || sourceCopies != 2)
     return fail("merged drop groups did not retain independent Java copies");
+
+  // A removed actor no longer has native buoyancy. Its retained water anchor
+  // must therefore approach the live survivor's current surface Y using game
+  // time. Five ticks at 0.04 blocks/tick move it exactly 0.20 blocks, and bob
+  // starts only after the target has actually been reached.
+  DropVisualAnchorPool<4> fluidPool;
+  DropVisualLineage waterSource{};
+  DropVisualLineage waterDestination{};
+  fluidPool.observe(waterSource, 1);
+  fluidPool.observe(waterDestination, 1);
+  DropVisualPose waterPose = pose(0.0f, 60.0f, 0.0f);
+  waterPose.fluid = DropFluidKind::Water;
+  if (!fluidPool.merge(waterSource, waterPose, 1, waterDestination, 1, 2,
+                       0.0f, 10.0f))
+    return fail("water source merge was rejected");
+  fluidPool.advanceFluidAnchors(waterDestination, 61.0f, 15.0f);
+  DropVisualPose advancedWater{};
+  fluidPool.forEach(waterDestination,
+                    [&](const auto &anchor) { advancedWater = anchor.pose; });
+  if (!closeEnough(advancedWater.baseWorldY, 60.20f) ||
+      advancedWater.fluidBobbing)
+    return fail("water anchor did not rise by tick time before bobbing");
+
+  fluidPool.advanceFluidAnchors(waterDestination, 60.22f, 15.5f);
+  fluidPool.forEach(waterDestination,
+                    [&](const auto &anchor) { advancedWater = anchor.pose; });
+  if (!closeEnough(advancedWater.baseWorldY, 60.22f) ||
+      !advancedWater.fluidBobbing)
+    return fail("water anchor overshot its surface or failed to begin bobbing");
+
+  // Lava uses the approved half-speed path: the same five game ticks move
+  // only 0.10 blocks. A lower target must never pull an anchor back down.
+  fluidPool.reset();
+  DropVisualLineage lavaSource{};
+  DropVisualLineage lavaDestination{};
+  fluidPool.observe(lavaSource, 1);
+  fluidPool.observe(lavaDestination, 1);
+  DropVisualPose lavaPose = pose(0.0f, 60.0f, 0.0f);
+  lavaPose.fluid = DropFluidKind::Lava;
+  if (!fluidPool.merge(lavaSource, lavaPose, 1, lavaDestination, 1, 2,
+                       0.0f, 10.0f))
+    return fail("lava source merge was rejected");
+  fluidPool.advanceFluidAnchors(lavaDestination, 61.0f, 15.0f);
+  DropVisualPose advancedLava{};
+  fluidPool.forEach(lavaDestination,
+                    [&](const auto &anchor) { advancedLava = anchor.pose; });
+  if (!closeEnough(advancedLava.baseWorldY, 60.10f) ||
+      advancedLava.fluidBobbing)
+    return fail("lava anchor did not rise at half water speed");
+  fluidPool.advanceFluidAnchors(lavaDestination, 59.0f, 16.0f);
+  fluidPool.forEach(lavaDestination,
+                    [&](const auto &anchor) { advancedLava = anchor.pose; });
+  if (!closeEnough(advancedLava.baseWorldY, 60.10f))
+    return fail("a lower fluid target pulled an anchor downward");
 
   // A non-merge count decrease (for example hopper/inventory transfer) must
   // remove visual source groups before leaving stale ghosts behind.
