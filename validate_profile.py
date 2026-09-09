@@ -49,6 +49,14 @@ PROFILE = {
         [0xF9400408, 0xB40000C8, 0xF9400100, 0xB4000080,
          0xF9400008, 0xF9401D01, 0xD61F0020],
     ),
+    "Actor::getPosition": (
+        0x0EC7A020,
+        [0xF9410400, 0xD65F03C0],
+    ),
+    "Actor::getPreviousPosition": (
+        0x0EC8EAAC,
+        [0xF9410408, 0x91003100, 0xD65F03C0],
+    ),
     "Actor::getPosDelta": (
         0x0EC82A68,
         [0xF9410408, 0x91006100, 0xD65F03C0],

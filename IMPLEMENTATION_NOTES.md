@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.14.0
+# Implementation notes: universal visual core 0.14.1
 
 ## Source behavior reproduced
 
@@ -185,11 +185,19 @@ contained unit at the surviving actor could not satisfy the intended behavior:
 when native merging removed the second actor, all of its copies appeared at the
 first actor and looked as if they had been attracted there.
 
-Version 0.14.0 replaces it with disabled-by-default `Separate Drop Visuals`.
+Version 0.14.0 introduced disabled-by-default `Separate Drop Visuals`.
 Native stack counts and actor lifetime remain authoritative. The new path only
 records independently spawned visual origins. Each origin continues to use
 Java's normal `1/2/3/4/5` copy thresholds for its original drop-group count;
 there is no exact-count grid and no Y component in copy placement.
+
+Version 0.14.1 corrects the coordinate lifetime of those origins. The render
+position at `ActorRenderData + 0x10` is relative to the current render origin
+and is never persisted. Actor current/previous position accessors at
+`0xEC7A020` / `0xEC8EAAC` provide an interpolated absolute position. Each
+stored world anchor is converted back through the live survivor's matching
+world/render pair on every submission, cancelling both camera-origin shifts
+and native survivor movement.
 
 Three analyzed points support the transfer. ItemActor's event-vtable slot
 `+0x228` reaches RVA `0xF12537C`, where event `0x45` updates the destination
@@ -254,6 +262,7 @@ per-copy trigonometric work. The stripped library remains subject to the same
 - Vertical-collision component hash: `0xC6A02A9A`
 - Was-in-water component hash: `0x78E89F39`
 - Actor position delta: `0xEC82A68`
+- Actor current/previous position: `0xEC7A020` / `0xEC8EAAC`
 - BlockGraphics helpers: `0xA2189DC`, `0xA2189F0`, `0xA219718`, `0xA280E68`
 - Relative-shadow storage/emplace: `0xE96A7E4` / `0xE96B68C`
 - ItemActor event handler: `0xF12537C` (vtable `+0x228`)
