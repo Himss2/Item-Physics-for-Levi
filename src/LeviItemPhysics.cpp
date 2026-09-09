@@ -34,7 +34,7 @@ public:
 
   bool load() {
     mSelf.getLogger().info(
-        "Levi Item Physics 0.15.0: fluid-aware drop visuals loaded");
+        "Levi Item Physics 0.15.1: unified fluid visuals and lava buoyancy loaded");
     return true;
   }
 

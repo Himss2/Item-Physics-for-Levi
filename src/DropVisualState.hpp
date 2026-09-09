@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -35,6 +36,66 @@ fluidRisePerTick(DropFluidKind fluid) noexcept {
     return 0.02f;
   return 0.0f;
 }
+
+// normalTick can subtract 0.04 gravity on the next tick when the native
+// shrunken lava probe misses a small item. Leave enough velocity for a 0.02
+// ascent even on that path. Native collision, removal and networking still own
+// the actor; never apply this to a remote client replica or a burning item.
+[[nodiscard]] inline float lavaVelocityAfterTick(
+    float nativeY, bool inLava, bool fireResistant, bool clientSide,
+    bool enabled) noexcept {
+  if (!enabled || clientSide || !inLava || !fireResistant ||
+      !std::isfinite(nativeY))
+    return nativeY;
+  return std::max(nativeY, 0.06f);
+}
+
+[[nodiscard]] inline float advanceFluidBase(
+    float base, float target, float delta, DropFluidKind fluid) noexcept {
+  if (!std::isfinite(base) || !std::isfinite(target) ||
+      !std::isfinite(delta) || delta <= 0.0f || delta > 10.0f ||
+      target <= base)
+    return base;
+  return std::min(base + fluidRisePerTick(fluid) * delta, target);
+}
+
+// Render-owned, absolute world-space Y. Reject the native downward part of
+// small buoyancy oscillations so the existing custom waveform is applied once.
+// Real falls/relocations and fluid exits reset the base instead of leaving a
+// model suspended at an obsolete water level. No world/block scans are needed.
+class FluidVisualBase {
+public:
+  float update(float nativeY, float sample, DropFluidKind fluid) noexcept {
+    if (!isFluid(fluid) || !std::isfinite(nativeY) ||
+        !std::isfinite(sample)) {
+      *this = {};
+      return nativeY;
+    }
+    const float delta = sample - mLastSample;
+    if (!mInitialized || fluid != mFluid || delta < 0.0f || delta > 10.0f ||
+        mTarget - nativeY > 0.25f || nativeY - mTarget > 0.5f) {
+      mBase = nativeY;
+      mTarget = nativeY;
+      mInitialized = true;
+    }
+    mTarget = std::max(mTarget, nativeY);
+    mBase = advanceFluidBase(mBase, mTarget, delta, fluid);
+    mLastSample = sample;
+    mFluid = fluid;
+    return mBase;
+  }
+
+  [[nodiscard]] bool bobbing() const noexcept {
+    return mInitialized && mBase >= mTarget - 0.0005f;
+  }
+
+private:
+  float mBase{};
+  float mTarget{};
+  float mLastSample{};
+  DropFluidKind mFluid{DropFluidKind::None};
+  bool mInitialized{};
+};
 
 [[nodiscard]] constexpr std::uint32_t
 javaVisualCopyCount(std::uint32_t count) noexcept {
@@ -222,12 +283,8 @@ public:
       if (isFluid(pose.fluid)) {
         const float delta = currentSample - pose.fluidLastSample;
         pose.fluidLastSample = currentSample;
-        if (delta > 0.0f && delta <= 10.0f &&
-            targetBaseWorldY > pose.baseWorldY) {
-          const float rise = fluidRisePerTick(pose.fluid) * delta;
-          pose.baseWorldY =
-              std::min(pose.baseWorldY + rise, targetBaseWorldY);
-        }
+        pose.baseWorldY = advanceFluidBase(
+            pose.baseWorldY, targetBaseWorldY, delta, pose.fluid);
         pose.fluidBobbing = pose.baseWorldY >= targetBaseWorldY - 0.0005f;
       }
       index = anchor.next;
