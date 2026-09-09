@@ -288,9 +288,72 @@ profile and are centralized in `TargetProfile.hpp`: age `+0x428`, bob offset
 `+0x434`, item-frame render bypass `+0x440`, stack `+0x390`, count `+0x3B2`.
 The loaded ELF GNU Build ID is checked before any hook is installed.
 
-## Intentional stage boundary
+## Version 0.15.1: live fluid base and physical lava correction
 
-This build does not hook `ItemActor::postNormalTick`, `Actor::move`, inventory
-drop, or fluid queries. Those hooks should be added only after this visual ABI
-and pivot are confirmed on-device. The next stage can then add Java trajectory
-physics without changing the renderer architecture.
+The previous live pose added the custom bob directly to the interpolated native
+Y. Retained poses instead added it to their own stable base. `FluidVisualBase`
+now rejects small downward native buoyancy oscillations and approaches upward
+targets using the same `advanceFluidBase` helper as retained origins. It stores
+absolute world Y; render-origin conversion uses the same current world/render
+pair as retained visuals. The existing 91-sample wave is unchanged. Live and
+retained poses both gate the wave on `fluidBobbing`; no ground constants or
+dry-air rotation math changed. Native fluid takes precedence over on-ground
+only while resolving fluid rendering, avoiding ground-height lowering at a
+pool bottom.
+
+Binary evidence from the supplied archive (full SHA matched):
+
+- normalTick at `0xF124154` checks `Actor::isClientSide` at `0xEC8E9D8`; the
+  client path skips the native movement branch.
+- The native lava test calls `0xEC8E428` with material `6`, AABB and SubBBs.
+  Its inset vector at `0x3146754` is `(0.1, 0.4, 0.1)`. This is a plausible
+  reason small ItemActors fail the buoyancy branch despite WasInLava; exact
+  in-game collision behavior still requires device confirmation.
+- A missed lava test can enable native gravity; at `0xF1246CC` normalTick
+  subtracts `0.04` from posDelta.y. Its movement request is `0xEC89668`.
+- `0xF63FC00` follows stack +8 -> Item handle -> `0xF6699A4`, which reads
+  bit 5 of the Item word at +0x112. The same predicate appears in the ItemActor
+  damage path at `0xF124908` and the lava branch at `0xF1242EC`. Use this native
+  fire-resistance predicate, not an item-name allowlist.
+- Actor::remove sets byte +0x251 at `0xEC90124`. A thread-local nested removal
+  watch observes calls through the existing remove hook before forwarding.
+
+The new normalTick detour calls the original exactly once. Only surviving,
+authoritative, native-fire-resistant items with current WasInLava membership
+receive `posDelta.y = max(posDelta.y, 0.06)` afterwards. Native collision and
+network simulation remain responsible for movement. There is no teleport,
+extra move call, block/surface scan, new actor or packet. The correction is
+disabled when the module is off; leaving lava gets no further velocity floor.
+The floor compensates the following native gravity tick; it is not a guarantee
+that physical ascent equals the retained visual's fixed `0.02` rate.
+
+Physics lookup uses a local component cache, never the render cache/state.
+The post-tick removal watch is active independently of Separate Drop Visuals;
+removed actors are not dereferenced after the original returns. A missing
+remove observer or optional physics fingerprint disables the physics hook.
+uninstall removes normalTick before removing the lifecycle observer.
+
+Remote-server ItemActors are intentionally not modified by a client-only mod.
+The physical correction applies to integrated singleplayer and host-side
+simulation. The visual base is not an exact fluid-surface solver: small level
+drops can retain the old base until the 0.25-block reset threshold. Tests cover
+the state math, gates, removed-actor lifetime, ground/fluid priority and camera
+coordinate conversion; they do not establish on-device behavior or FPS.
+
+No CMake source-list change is required: production changes remain in existing
+translation units and headers. The two tests/support headers are host doubles
+and are never included by the Android target. Ground calibration, native
+merging, visual removal, and existing menu toggles remain intact.
+
+Verification for this revision: DropVisualStateTest and FluidRuntimeTest pass
+with GCC C++20; both also pass with AddressSanitizer + UndefinedBehaviorSanitizer
+(leak checking disabled). Runtime fixtures exercise post-tick ordering,
+fireproof/lava/authority/enable gates, removal during tick with actual fixture
+deallocation, fluid/ground priority, all ten calibrated ground categories, and
+waveform holds/amplitude. The existing Mod Menu toggle harness also passes.
+Production translation units pass host syntax compilation with `-Wall -Wextra
+-Wpedantic -Werror`. Full SHA and all 25 profile fingerprints match the supplied
+ZIP. The older scratch visual harness targets a removed pre-0.15 header/API;
+its ground/wave checks were covered by the current runtime fixture instead.
+No Android NDK build, actual hook installation, gameplay run, release `.so`
+size measurement, or device FPS benchmark was performed in this environment.

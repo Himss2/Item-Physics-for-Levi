@@ -1,9 +1,10 @@
 # Levi Item Physics
 
 ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.45.1`.
-Version `0.15.0` preserves the device-approved Java ItemPhysic-style airborne,
-landing, ground-height, head, shadow, and water behavior, and replaces the old
-exact-count grid experiment with optional per-drop visual positions.
+Version `0.15.1` preserves the device-approved airborne, landing, ground-height,
+head and shadow behavior. Live fluid items now use a stable visual base like
+retained drops. An optional guarded native tick hook adds physical buoyancy to
+fire-resistant items in lava on the authoritative simulation.
 
 ## Implemented behavior
 
@@ -35,6 +36,17 @@ exact-count grid experiment with optional per-drop visual positions.
   smooth rise, a twenty-tick upper hold, and a mirrored fall. Its 91-sample
   table avoids an extra trigonometric call in the fluid path. Lava uses half
   the water waveform speed.
+- Live water/lava models now approach a stored world-space base at the same
+  rate as retained visuals. Small native buoyancy oscillations do not get added
+  to the custom bob; bob is withheld while the model is catching up. Large real
+  relocations or fluid exits reset the base. Ground height offsets are not
+  applied while submerged, even if the native on-ground flag is also present.
+- Fire-resistant lava items receive a post-tick upward velocity floor of `0.06`
+  blocks/tick. This leaves `0.02` after the native `0.04` gravity subtraction
+  when the small-item lava probe misses. Native collision and position updates
+  still perform the movement, so the real pickup location moves too. The
+  correction stops being applied as soon as native lava membership ends.
+  Ordinary items retain native burning/removal, and water physics is unchanged.
 - Java stack-copy thresholds remain `1 / 2 / 3 / 4 / 5` visible models at
   counts `1 / 2 / 17 / 33 / 49`. Every copy remains on one world-XZ plane.
 - `Single Model` and `Hide Item Shadow` remain immediate Mod Menu toggles.
@@ -45,11 +57,13 @@ exact-count grid experiment with optional per-drop visual positions.
 requested visual behavior without changing Minecraft's stack rules:
 
 1. Minecraft still performs its native count transfer, source removal, pickup,
-   collision, buoyancy, save, and network behavior.
+   collision, save, and network behavior. The separate physical lava correction
+   above is independent of this visual toggle.
 2. When one complete source `ItemActor` is merged into another, the renderer
    transfers a small snapshot of the source's last visible world position and
    orientation to the surviving actor.
-3. The survivor remains at its native position. The transferred visual remains
+3. The survivor follows its native physics position with the stabilized fluid
+   rendering described above. The transferred visual remains
    at the source position instead of jumping to the survivor. Chained merges
    retain the complete sequence of independent drop origins.
 4. Each origin uses Java's normal 1-to-5 copy threshold for the count originally
@@ -96,6 +110,14 @@ clears all retained origins and immediately returns to the normal renderer.
   at the one native surviving `ItemActor`, by design.
 - On a remote server, an ambiguous merge is not separated visually. This
   fail-closed rule prevents unrelated drops from being paired.
+- Physical lava correction runs in an integrated world or LAN host simulation.
+  A remote server owns its ItemActors: installing this mod only on the client
+  cannot physically lift the server's items. Client fluid rendering still works.
+- The fluid base rejects small native downward oscillations, rather than querying
+  an exact surface mesh. Flowing fluids, unusual surface geometry, and small
+  downward level changes still need device validation. It resets when native Y
+  falls more than `0.25` block below its stored target.
+- Version 0.15.1 is host-tested source, not yet validated in Android gameplay.
 
 ## Strict binary guard
 
@@ -116,11 +138,25 @@ instruction fingerprints before installing any hook. A mismatch leaves the mod
 loaded in safe inactive mode. If only an optional merge observer cannot be
 installed, the approved baseline renderer remains active and the log marks
 `Separate Drop Visuals` unavailable.
+The lava hook additionally verifies normalTick, client-side and fire-resistance
+accessors, and removal-flag instructions. If it cannot be installed, the log
+reports physical lava buoyancy unavailable and the visual core stays active.
 
 Validate a local game library with:
 
 ```bash
 python3 tools/validate_profile.py /path/to/libminecraftpe.so
+```
+
+The validator also accepts a ZIP containing `libminecraftpe.so`.
+
+Host regression tests (C++20 compiler; test support is not packaged):
+
+```bash
+g++ -std=c++20 -O2 -Isrc tests/DropVisualStateTest.cpp -o /tmp/drop-state-test
+/tmp/drop-state-test
+g++ -std=c++20 -O2 -Itests/support -Isrc tests/FluidRuntimeTest.cpp src/ItemPhysicsRuntime.cpp src/RttiResolver.cpp -ldl -o /tmp/fluid-runtime-test
+/tmp/fluid-runtime-test
 ```
 
 ## Build
@@ -157,6 +193,11 @@ partial transfers near stack limits, pickup/despawn of the survivor, water
 and lava merges at several depths, `Single Model`, toggle-off cleanup, and
 toggle-on restart. A submerged retained origin must keep X/Z fixed, rise to the
 survivor's surface height, then bob without rotation; lava must rise and bob at
-half water speed. In multiplayer,
+half water speed for retained visuals. In lava, compare a surviving fireproof
+item with an ordinary burning item: the former must physically rise (also test
+pickup location), and the latter and its retained visuals must disappear.
+Check a deep source-lava pool, a shallow pool, a ceiling, exiting lava, and mod
+disable. Compare live and retained fluid bob with Separate Drop Visuals on/off;
+move and sneak the camera to check world anchoring. In multiplayer,
 create two simultaneous same-item merges; an ambiguous pair may collapse to one
 live group but must never create a visual at an unrelated source position.
