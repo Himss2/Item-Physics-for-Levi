@@ -1,10 +1,10 @@
 # Levi Item Physics
 
 ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.45.1`.
-Version `0.15.1` preserves the device-approved airborne, landing, ground-height,
-head and shadow behavior. Live fluid items now use a stable visual base like
-retained drops. An optional guarded native tick hook adds physical buoyancy to
-fire-resistant items in lava on the authoritative simulation.
+Version `0.15.2` preserves the device-approved airborne, landing, ground-height,
+head and shadow behavior. Minecraft exclusively owns liquid entry, sinking and
+buoyant ascent; the mod begins its render-only bob only after the native actor
+has stayed at a stable surface Y for three game ticks.
 
 ## Implemented behavior
 
@@ -30,23 +30,20 @@ fire-resistant items in lava on the authoritative simulation.
   `-0.205` for generic shaped, `-0.087` for full block, `-0.178` for slab/thin,
   `+0.165` for normal skull, `+0.203` for Dragon Head, `-0.147` for Shield,
   `-0.159` for Banner, `-0.171` for Fence/Gate, and `-0.081` for Scaffolding.
-- Water and lava freeze the last roll angle and add only vertical surface
-  movement. A class-independent `+0.125` lift places items at the visible line.
+- Water and lava stop roll immediately and add only vertical surface movement.
+  Flat/shaped/special models use a `+0.085` surface lift while full blocks retain
+  the approved `+0.125` lift.
   The render-only wave has `+/-0.015` amplitude, an eight-tick lower hold, a
   smooth rise, a twenty-tick upper hold, and a mirrored fall. Its 91-sample
   table avoids an extra trigonometric call in the fluid path. Lava uses half
   the water waveform speed.
-- Live water/lava models now approach a stored world-space base at the same
-  rate as retained visuals. Small native buoyancy oscillations do not get added
-  to the custom bob; bob is withheld while the model is catching up. Large real
-  relocations or fluid exits reset the base. Ground height offsets are not
-  applied while submerged, even if the native on-ground flag is also present.
-- Fire-resistant lava items receive a post-tick upward velocity floor of `0.06`
-  blocks/tick. This leaves `0.02` after the native `0.04` gravity subtraction
-  when the small-item lava probe misses. Native collision and position updates
-  still perform the movement, so the real pickup location moves too. The
-  correction stops being applied as soon as native lava membership ends.
-  Ordinary items retain native burning/removal, and water physics is unchanged.
+- During liquid entry and ascent, render Y is the exact native interpolated Y;
+  there is no visual catch-up or velocity override. After three stable game
+  ticks, that surface base is latched and the custom bob begins. A large real
+  relocation or fluid exit resets the latch. Ground height offsets are not
+  applied while submerged, even if native on-ground is also present.
+- Lava behavior is fully native. Fire-resistant items use Minecraft's own sink,
+  ascent, collision and networking; ordinary items use native burning/removal.
 - Java stack-copy thresholds remain `1 / 2 / 3 / 4 / 5` visible models at
   counts `1 / 2 / 17 / 33 / 49`. Every copy remains on one world-XZ plane.
 - `Single Model` and `Hide Item Shadow` remain immediate Mod Menu toggles.
@@ -57,8 +54,7 @@ fire-resistant items in lava on the authoritative simulation.
 requested visual behavior without changing Minecraft's stack rules:
 
 1. Minecraft still performs its native count transfer, source removal, pickup,
-   collision, save, and network behavior. The separate physical lava correction
-   above is independent of this visual toggle.
+   collision, liquid physics, save, and network behavior.
 2. When one complete source `ItemActor` is merged into another, the renderer
    transfers a small snapshot of the source's last visible world position and
    orientation to the surviving actor.
@@ -69,11 +65,10 @@ requested visual behavior without changing Minecraft's stack rules:
 4. Each origin uses Java's normal 1-to-5 copy threshold for the count originally
    represented by that drop. `Single Model` reduces each retained origin to one
    model; it does not erase the independent origins.
-5. A retained water or lava origin first rises toward the surviving actor's
-   non-bob surface height while X/Z stay fixed. It moves at `0.04` block/tick
-   in water or `0.02` block/tick in lava, never moves downward, and begins the
-   approved vertical bob only after reaching that height. Its phase is rebased
-   at transfer so neither ownership change nor bob start causes a jump.
+5. A source is retained only after it is grounded, or after its native liquid
+   transit has completed and surface bobbing has begun. Mid-air and still-rising
+   sources collapse into the surviving live group, preventing permanent ghost
+   models. Surface origins retain their independent bob phase.
 
 Local-world merges use the exact source and destination UniqueIDs captured at
 the analyzed `ItemActor::normalTick` removal call. A remote client does not
@@ -84,8 +79,10 @@ case deliberately collapses to the surviving live group instead of showing a
 ghost at the wrong position.
 
 The tracker uses fixed arrays: no heap allocation, per-copy physics, entity
-spawn, packet, block query, or world query is added. The anchor pool is capped at 256 visual
-origins and stale states are reclaimed incrementally. With the toggle off, the
+spawn, packet, block query, or world query is added. The global anchor pool is
+capped at 96 origins, each surviving lineage at 16 origins, and at most two
+pending merges are applied in one render. Additional origins fail closed into
+the live group. Stale states are reclaimed incrementally. With the toggle off, the
 two merge observers perform only their disabled branch and the renderer stays
 on the original maximum-five-copy path. With it on, geometry cost necessarily
 scales with the number of retained independent drop origins.
@@ -110,14 +107,10 @@ clears all retained origins and immediately returns to the normal renderer.
   at the one native surviving `ItemActor`, by design.
 - On a remote server, an ambiguous merge is not separated visually. This
   fail-closed rule prevents unrelated drops from being paired.
-- Physical lava correction runs in an integrated world or LAN host simulation.
-  A remote server owns its ItemActors: installing this mod only on the client
-  cannot physically lift the server's items. Client fluid rendering still works.
-- The fluid base rejects small native downward oscillations, rather than querying
-  an exact surface mesh. Flowing fluids, unusual surface geometry, and small
-  downward level changes still need device validation. It resets when native Y
-  falls more than `0.25` block below its stored target.
-- Version 0.15.1 is host-tested source, not yet validated in Android gameplay.
+- The surface latch does not query an exact fluid mesh. It waits for native
+  vertical position and velocity to stabilize, then resets if native Y relocates
+  by more than `0.35` block. Flowing and unusual fluid geometry need device test.
+- Version 0.15.2 is host-tested source, not yet validated in Android gameplay.
 
 ## Strict binary guard
 
@@ -138,9 +131,6 @@ instruction fingerprints before installing any hook. A mismatch leaves the mod
 loaded in safe inactive mode. If only an optional merge observer cannot be
 installed, the approved baseline renderer remains active and the log marks
 `Separate Drop Visuals` unavailable.
-The lava hook additionally verifies normalTick, client-side and fire-resistance
-accessors, and removal-flag instructions. If it cannot be installed, the log
-reports physical lava buoyancy unavailable and the visual core stays active.
 
 Validate a local game library with:
 
@@ -191,13 +181,12 @@ remain at its last position and orientation instead of moving to the first
 item. Test chained `A -> B -> C` merges, separately dropped multi-item stacks,
 partial transfers near stack limits, pickup/despawn of the survivor, water
 and lava merges at several depths, `Single Model`, toggle-off cleanup, and
-toggle-on restart. A submerged retained origin must keep X/Z fixed, rise to the
-survivor's surface height, then bob without rotation; lava must rise and bob at
-half water speed for retained visuals. In lava, compare a surviving fireproof
-item with an ordinary burning item: the former must physically rise (also test
-pickup location), and the latter and its retained visuals must disappear.
-Check a deep source-lava pool, a shallow pool, a ceiling, exiting lava, and mod
-disable. Compare live and retained fluid bob with Separate Drop Visuals on/off;
+toggle-on restart. A still-sinking/rising source may safely collapse into the
+live group, but it must never leave an anchor in mid-air or underwater. In lava,
+compare a surviving fireproof item with an ordinary burning item: native physics
+must sink then raise the former, while the latter and its visuals disappear.
+Check a deep pool, shallow pool, ceiling, fluid exit, and mod disable. Compare
+live and retained fluid bob with Separate Drop Visuals on/off;
 move and sneak the camera to check world anchoring. In multiplayer,
 create two simultaneous same-item merges; an ambiguous pair may collapse to one
 live group but must never create a visual at an unrelated source position.

@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.15.0
+# Implementation notes: universal visual core 0.15.2
 
 ## Source behavior reproduced
 
@@ -357,3 +357,40 @@ ZIP. The older scratch visual harness targets a removed pre-0.15 header/API;
 its ground/wave checks were covered by the current runtime fixture instead.
 No Android NDK build, actual hook installation, gameplay run, release `.so`
 size measurement, or device FPS benchmark was performed in this environment.
+
+## Version 0.15.2: native liquid transit and bounded visual separation
+
+Device testing showed that 0.15.1's render-side upward target and physical
+`normalTick` lava velocity floor fought native Minecraft in two distinct ways:
+water ascent appeared stepped before settling, while fire-resistant lava items
+lost their normal sink phase. Both interventions are removed. Neither water nor
+lava velocity or position is written by the mod.
+
+`FluidVisualBase` is now a surface latch rather than an ascent simulator. It
+returns the exact native interpolated world Y during entry, sinking and buoyant
+ascent. It counts stability only once per `ItemActor::age`, requires three
+consecutive ticks within `0.012` block and `0.025` vertical speed, then freezes
+that base for the existing `+/-0.015` waveform. A fluid change, time rollback,
+large tick gap or `0.35`-block relocation resets acquisition. Thus frame rate
+cannot accelerate the transition and the custom wave cannot start underwater.
+
+Flat/shaped/special liquid models now use a `+0.085` render lift; full blocks
+keep `+0.125`. Non-angle-preserving models snap to their fully prone roll on
+fluid entry, while full 3D blocks retain the approved final angle. All dry
+ground constants and matrix paths are unchanged.
+
+Separate Drop Visuals now retains a source only when it is grounded, or when a
+liquid source is already surface-latched in the same fluid as its survivor.
+This deliberately collapses mid-air and still-rising merges into the live
+group instead of freezing an actor's final pre-removal frame forever. The
+global fixed pool is reduced from 256 to 96 origins, one lineage is capped at
+16, and merge application per render is reduced from eight to two. These caps
+bound matrix pushes and native model submissions; overflow remains a visual
+fallback only and never changes Minecraft item counts.
+
+The optional `ItemActor::normalTick`, client-authority and fire-resistance
+profile entries were removed with the physical hook. The remaining 20 binary
+fingerprints still match the supplied `libminecraftpe.so` SHA exactly. Host
+tests cover native-Y passthrough, tick-based surface acquisition, relocation
+reset, liquid orientation, per-class surface height, anchor eligibility and
+the 16-origin budget. Android gameplay and FPS remain the required final test.
