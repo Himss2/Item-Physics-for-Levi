@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.13.0
+# Implementation notes: universal visual core 0.14.0
 
 ## Source behavior reproduced
 
@@ -180,28 +180,63 @@ position nor velocity. Horizontal-thin
 items select the same world-up basis for `(grounded || inWater)`, while their
 complete dry-air transform remains unchanged.
 
-Version 0.13.0 adds the disabled-by-default `Real Item Models` Mod Menu toggle.
-The normal path keeps Java's `1/2/3/4/5` thresholds exactly. Exact mode instead
-selects the clamped ItemStack count `1..64`, while `Single Model` retains highest
-priority and always selects one. This changes only the number of model
-submissions; the ItemStack count and ItemActor remain untouched.
+The version 0.13.0 exact-count grid experiment is removed. Rendering every
+contained unit at the surviving actor could not satisfy the intended behavior:
+when native merging removed the second actor, all of its copies appeared at the
+first actor and looked as if they had been attracted there.
 
-The existing render-group detour continues to force one native model per custom
-submission. This avoids passing out-of-contract counts above five into
-Bedrock's private group helper and prevents its internal three-dimensional copy
-layout from reintroducing floating models. Exact copies use a deterministic
-square grid with at most eight columns and eight rows. Row X and grid Z are
-centred independently, then rotated into world XZ using the ItemActor's one
-precomputed yaw sine/cosine pair. There is no Y term in the layout.
+Version 0.14.0 replaces it with disabled-by-default `Separate Drop Visuals`.
+Native stack counts and actor lifetime remain authoritative. The new path only
+records independently spawned visual origins. Each origin continues to use
+Java's normal `1/2/3/4/5` copy thresholds for its original drop-group count;
+there is no exact-count grid and no Y component in copy placement.
 
-Exact mode allocates no per-copy state and performs no extra ECS, block-shape,
-fluid, ground, or shadow query. Traits, contact, water phase, world Y, scale,
-and all four rotation sine/cosine values are still resolved once per ItemActor
-render and shared by up to 64 copies. Geometry emission necessarily remains
-linear in the visible count, so disabling the opt-in toggle restores the former
-five-copy maximum immediately. The helper and tests are header-only and add no
-runtime dependency; the stripped binary remains subject to the same 600-KiB
-hard limit.
+Three analyzed points support the transfer. ItemActor's event-vtable slot
+`+0x228` reaches RVA `0xF12537C`, where event `0x45` updates the destination
+stack count. Actor's remove slot `+0x60` reaches RVA `0xEC8FC7C`. In
+`ItemActor::normalTick`, the merge removal returns at `0xF1245EC` with source
+in `x25` and destination in `x24`; the naked ARM64 bridge preserves incoming
+`x24` and LR before forwarding the original remove call. Actor UniqueIDs from
+RVA `0xEC8B12C` provide a stable correlation key.
+
+For an exact local observation, the render thread moves the source lineage to
+the destination lineage. It creates one fixed-size anchor containing the
+source's last fully rendered XYZ origin, frozen rotation sine/cosine pairs,
+route scale, bob offset, contact/water flags, and original source-root count.
+Any anchors already owned by the source are spliced into the same chain, so an
+`A -> B -> C` sequence retains all three independent origins. The live root
+keeps following the native destination actor.
+
+Event and remove hooks never allocate or edit renderer state. They append small
+signals into a bounded 64-entry lock-protected ring. Rendering drains those
+signals into 128 fixed pending slots. The anchor pool has 256 fixed nodes and a
+one-slot-per-render stale-state sweep reclaims lineages whose survivor has
+disappeared. Toggle-off requests a render-thread clear rather than racing the
+hook callbacks.
+
+A remote client may receive destination count event `0x45` and source removal
+without the server's exact source pointer. The fallback therefore requires one
+and only one source with matching client registry, count delta, item type,
+block pointer, spatial merge range, and a 16-event sequence window. It retries
+for eight destination renders to tolerate event ordering. Missing, ambiguous,
+or capacity-exhausted history collapses into the live destination group. This
+is deliberately fail-closed: an omitted separation is preferable to a ghost
+copied from an unrelated item.
+
+Frozen water origins retain the established vertical-only waveform. An anchor
+stores the native-Y-derived base separately from the bob and carries a sample
+bias. When a complete lineage changes owners, the bias is rebased by source
+sample minus destination sample, preserving the current vertical position and
+then advancing with the survivor's tick sample. XZ and roll remain frozen.
+
+The existing render-group detour still forces one native model per custom
+submission. `Single Model` means one submission per independent origin, not one
+origin for the complete native stack. With separate visuals disabled, the
+renderer remains on its prior maximum-five-copy path. With it enabled, model
+submission necessarily scales with retained origins, but it adds no entity,
+per-copy physics, packet, ECS lookup, block classification, water query, or
+per-copy trigonometric work. The stripped library remains subject to the same
+600-KiB hard limit.
 
 ## Analyzed target
 
@@ -221,6 +256,10 @@ hard limit.
 - Actor position delta: `0xEC82A68`
 - BlockGraphics helpers: `0xA2189DC`, `0xA2189F0`, `0xA219718`, `0xA280E68`
 - Relative-shadow storage/emplace: `0xE96A7E4` / `0xE96B68C`
+- ItemActor event handler: `0xF12537C` (vtable `+0x228`)
+- Actor remove: `0xEC8FC7C` (ItemActor vtable `+0x60`)
+- Actor UniqueID accessor: `0xEC8B12C`
+- Native merge/remove sequence: `0xF1245D8`, return `0xF1245EC`
 
 Relevant ItemActor fields are guarded indirectly by the constructor/render
 profile and are centralized in `TargetProfile.hpp`: age `+0x428`, bob offset
