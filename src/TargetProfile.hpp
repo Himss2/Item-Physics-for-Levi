@@ -42,6 +42,8 @@ inline constexpr std::uintptr_t kGetPartialTickRva = 0x0A5C678C;
 inline constexpr std::uintptr_t kMatrixStackPushRva = 0x107CBFFC;
 inline constexpr std::uintptr_t kMatrixStackRefDtorRva = 0x107CC6C0;
 inline constexpr std::uintptr_t kGetBlockTypeForRenderingRva = 0x0F642ADC;
+inline constexpr std::uintptr_t kGetActorPositionRva = 0x0EC7A020;
+inline constexpr std::uintptr_t kGetActorPreviousPositionRva = 0x0EC8EAAC;
 inline constexpr std::uintptr_t kGetPosDeltaRva = 0x0EC82A68;
 inline constexpr std::uintptr_t kBlockGraphicsGetForBlockTypeRva = 0x0A2189DC;
 inline constexpr std::uintptr_t kBlockGraphicsGetForBlockRva = 0x0A2189F0;
@@ -95,6 +97,13 @@ inline constexpr std::array<std::uint32_t, 7>
     kGetBlockTypeForRenderingFingerprint = {
         0xF9400408u, 0xB40000C8u, 0xF9400100u, 0xB4000080u,
         0xF9400008u, 0xF9401D01u, 0xD61F0020u};
+
+inline constexpr std::array<std::uint32_t, 2> kGetActorPositionFingerprint = {
+    0xF9410400u, 0xD65F03C0u};
+
+inline constexpr std::array<std::uint32_t, 3>
+    kGetActorPreviousPositionFingerprint = {
+        0xF9410408u, 0x91003100u, 0xD65F03C0u};
 
 inline constexpr std::array<std::uint32_t, 3> kGetPosDeltaFingerprint = {
     0xF9410408u, 0x91006100u, 0xD65F03C0u};

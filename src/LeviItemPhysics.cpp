@@ -34,7 +34,7 @@ public:
 
   bool load() {
     mSelf.getLogger().info(
-        "Levi Item Physics 0.14.0: separate drop visuals loaded");
+        "Levi Item Physics 0.14.1: world-anchored drop visuals loaded");
     return true;
   }
 

@@ -30,6 +30,23 @@ struct StackXZOffset {
   float z{};
 };
 
+struct RenderSpacePoint {
+  float x{};
+  float y{};
+  float z{};
+};
+
+// ActorRenderData::position is relative to the renderer's current origin.
+// Convert a persistent world-space anchor through the live owner's matching
+// world/render pair so camera-origin shifts cannot move the stored visual.
+[[nodiscard]] constexpr RenderSpacePoint renderOriginForWorldAnchor(
+    RenderSpacePoint anchorWorld, RenderSpacePoint ownerWorld,
+    RenderSpacePoint ownerRender) noexcept {
+  return {ownerRender.x + anchorWorld.x - ownerWorld.x,
+          ownerRender.y + anchorWorld.y - ownerWorld.y,
+          ownerRender.z + anchorWorld.z - ownerWorld.z};
+}
+
 [[nodiscard]] constexpr StackXZOffset
 centeredRowOffset(std::uint32_t copy, std::uint32_t copies,
                   float step) noexcept {

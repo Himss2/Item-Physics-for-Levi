@@ -335,6 +335,15 @@ bool ItemPhysicsRuntime::verifyProfile(const ResolvedVirtual &resolved,
        matchesFingerprint(resolved.module,
                           base + profile::kGetBlockTypeForRenderingRva,
                           profile::kGetBlockTypeForRenderingFingerprint)},
+      {base + profile::kGetActorPositionRva, "Actor::getPosition",
+       matchesFingerprint(resolved.module,
+                          base + profile::kGetActorPositionRva,
+                          profile::kGetActorPositionFingerprint)},
+      {base + profile::kGetActorPreviousPositionRva,
+       "Actor::getPreviousPosition",
+       matchesFingerprint(resolved.module,
+                          base + profile::kGetActorPreviousPositionRva,
+                          profile::kGetActorPreviousPositionFingerprint)},
       {base + profile::kGetPosDeltaRva, "Actor::getPosDelta",
        matchesFingerprint(resolved.module, base + profile::kGetPosDeltaRva,
                           profile::kGetPosDeltaFingerprint)},
@@ -1755,7 +1764,7 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
 
   const float currentWaterBob =
       state.inWater ? waterBobOffset(sample, state.waterBobPhase) : 0.0f;
-  const DropVisualPose livePose{
+  const DropVisualPose liveRenderPose{
       .worldX = worldX,
       .baseWorldY = worldY - currentWaterBob,
       .worldZ = worldZ,
@@ -1770,6 +1779,35 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
       .inWater = state.inWater,
   };
 
+  // ActorRenderData::position is expressed relative to the current render
+  // origin. It is safe for this call, but persisting it makes an old visual
+  // follow the camera. Sample the actor's interpolated world position only
+  // for the optional separate-drop path; the default renderer pays no extra
+  // accessor cost.
+  RenderSpacePoint ownerWorldPosition{};
+  bool ownerWorldPositionSampled = false;
+  if (separateDropVisuals) {
+    using GetActorPositionFn = const Vec3Abi *(*)(const void *);
+    const auto getPosition = reinterpret_cast<GetActorPositionFn>(
+        mMinecraftBase + profile::kGetActorPositionRva);
+    const auto getPreviousPosition = reinterpret_cast<GetActorPositionFn>(
+        mMinecraftBase + profile::kGetActorPreviousPositionRva);
+    const auto *current = getPosition(actor);
+    const auto *previous = getPreviousPosition(actor);
+    if (current && previous) {
+      ownerWorldPosition = {
+          previous->x + (current->x - previous->x) * partial,
+          previous->y + (current->y - previous->y) * partial,
+          previous->z + (current->z - previous->z) * partial,
+      };
+      ownerWorldPositionSampled =
+          std::isfinite(ownerWorldPosition.x) &&
+          std::isfinite(ownerWorldPosition.y) &&
+          std::isfinite(ownerWorldPosition.z);
+    }
+  }
+  const RenderSpacePoint ownerRenderPosition{worldX, originalWorldY, worldZ};
+
   std::uint32_t liveGroupCount = count;
   if (separateDropVisuals) {
     if (!state.dropIdentitySampled) {
@@ -1781,8 +1819,15 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
           actorAddress + profile::kBlockPtrOffset);
       state.dropIdentitySampled = state.uniqueId != 0 && state.registry != 0;
     }
-    state.dropPose = livePose;
-    state.dropPoseSampled = state.dropIdentitySampled;
+    if (ownerWorldPositionSampled) {
+      state.dropPose = liveRenderPose;
+      state.dropPose.worldX = ownerWorldPosition.x;
+      state.dropPose.baseWorldY =
+          ownerWorldPosition.y + liveRenderPose.baseWorldY - originalWorldY;
+      state.dropPose.worldZ = ownerWorldPosition.z;
+    }
+    state.dropPoseSampled =
+        state.dropIdentitySampled && ownerWorldPositionSampled;
 
     if (state.dropPoseSampled) {
       processPendingMerges(state, sample);
@@ -1800,7 +1845,8 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
   bool rendered = false;
   bool renderFailed = false;
   const auto renderGroup = [&](const DropVisualPose &pose,
-                               std::uint32_t groupCount) {
+                               std::uint32_t groupCount,
+                               bool persistentWorldAnchor) {
     if (renderFailed || groupCount == 0)
       return;
 
@@ -1811,14 +1857,20 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
             ? std::max(kFlatStackWorldStep,
                        pose.routeScale * kBlockStackScaleStep)
             : kFlatStackWorldStep;
-    const float groupWorldY =
+    const float groupPoseY =
         pose.baseWorldY +
         (pose.inWater
              ? waterBobOffset(sample + pose.waterSampleBias, 0)
              : 0.0f);
-    position[0] = pose.worldX;
-    position[1] = groupWorldY;
-    position[2] = pose.worldZ;
+    const RenderSpacePoint groupRenderOrigin =
+        persistentWorldAnchor
+            ? renderOriginForWorldAnchor(
+                  {pose.worldX, groupPoseY, pose.worldZ}, ownerWorldPosition,
+                  ownerRenderPosition)
+            : RenderSpacePoint{pose.worldX, groupPoseY, pose.worldZ};
+    position[0] = groupRenderOrigin.x;
+    position[1] = groupRenderOrigin.y;
+    position[2] = groupRenderOrigin.z;
 
     for (std::uint32_t copy = 0; copy < copies; ++copy) {
       // Each original drop group retains Java's 1..5-copy row. Independent
@@ -1839,8 +1891,9 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
         return;
       }
 
-      postTranslate(*matrix, pose.worldX + worldOffset.x, groupWorldY,
-                    pose.worldZ + worldOffset.z);
+      postTranslate(*matrix, groupRenderOrigin.x + worldOffset.x,
+                    groupRenderOrigin.y,
+                    groupRenderOrigin.z + worldOffset.z);
       const bool horizontalSurfacePose =
           (pose.grounded || pose.inWater) &&
           traits.height == HeightClass::HorizontalThin;
@@ -1868,7 +1921,8 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
           postRotateYKnown(*matrix, pose.xRotSine, pose.xRotCosine);
         }
       }
-      postTranslate(*matrix, -pose.worldX, -groupWorldY, -pose.worldZ);
+      postTranslate(*matrix, -groupRenderOrigin.x, -groupRenderOrigin.y,
+                    -groupRenderOrigin.z);
 
       const bool previousForce = gForceSingleCopy;
       float *const previousProbe = gObservedModelScale;
@@ -1881,10 +1935,10 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
     }
   };
 
-  renderGroup(livePose, liveGroupCount);
+  renderGroup(liveRenderPose, liveGroupCount, false);
   if (separateDropVisuals && state.dropLineage.initialized && !renderFailed) {
     mDropAnchors.forEach(state.dropLineage, [&](const auto &anchor) {
-      renderGroup(anchor.pose, anchor.count);
+      renderGroup(anchor.pose, anchor.count, true);
     });
   }
 
