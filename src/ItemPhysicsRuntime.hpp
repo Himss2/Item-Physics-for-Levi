@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DropVisualState.hpp"
 #include "MatrixMath.hpp"
 #include "RttiResolver.hpp"
 
@@ -30,8 +31,11 @@ public:
   void setSingleModel(bool enabled) noexcept {
     mSingleModel.store(enabled, std::memory_order_relaxed);
   }
-  void setRealItemModels(bool enabled) noexcept {
-    mRealItemModels.store(enabled, std::memory_order_relaxed);
+  void setSeparateDropVisuals(bool enabled) noexcept {
+    const bool previous =
+        mSeparateDropVisuals.exchange(enabled, std::memory_order_relaxed);
+    if (previous != enabled)
+      mClearDropVisualsRequested.store(true, std::memory_order_release);
   }
   void setHideItemShadow(bool enabled) noexcept {
     mHideItemShadow.store(enabled, std::memory_order_relaxed);
@@ -56,6 +60,13 @@ public:
 
   using MatrixPushFn = MatrixStackRefAbi (*)(void *, bool);
   using MatrixRefDtorFn = void (*)(MatrixStackRefAbi *);
+  using ActorEventFn = void (*)(void *, std::uint32_t, std::uint32_t);
+  using ActorRemoveFn = void (*)(void *);
+  using GetActorUniqueIdFn = const std::int64_t *(*)(void *);
+
+  // Called by the AArch64 entry bridge before forwarding Actor::remove.
+  // Public only so the C-linkage bridge can keep a stable, unmangled target.
+  static void dispatchActorRemove(void *, void *, std::uintptr_t);
 
 private:
   struct AabbAbi {
@@ -110,6 +121,12 @@ private:
     float lastSample{};
     float lastWorldY{};
     float modelScale{};
+    DropVisualPose dropPose{};
+    DropVisualLineage dropLineage{};
+    std::uint64_t uniqueId{};
+    std::uintptr_t registry{};
+    std::uintptr_t itemTypeKey{};
+    std::uintptr_t blockKey{};
     std::int32_t lastProbeAge{-1};
     std::uint8_t stableContactTicks{};
     std::uint8_t movingTicks{};
@@ -124,6 +141,28 @@ private:
     bool shadowInitialized{};
     bool shadowHidden{};
     bool shadowGrounded{};
+    bool dropIdentitySampled{};
+    bool dropPoseSampled{};
+  };
+
+  enum class MergeSignalKind : std::uint8_t {
+    None,
+    ExactPair,
+    CountChanged,
+    Removed
+  };
+
+  struct MergeSignal {
+    MergeSignalKind kind{};
+    std::uint64_t actorId{};
+    std::uint64_t otherId{};
+    std::uintptr_t registry{};
+    std::uint32_t sequence{};
+    std::uint32_t renderStamp{};
+    std::uint16_t count{};
+    std::uint16_t oldCount{};
+    std::uint16_t newCount{};
+    std::uint8_t attempts{};
   };
 
   struct ComponentStorageCache {
@@ -154,17 +193,22 @@ private:
 
   static constexpr std::size_t kStateCapacity = 512;
   static constexpr std::size_t kStateProbeCount = 8;
+  static constexpr std::size_t kDropAnchorCapacity = 256;
+  static constexpr std::size_t kHookSignalCapacity = 64;
+  static constexpr std::size_t kPendingSignalCapacity = 128;
 
   static ItemPhysicsRuntime *sInstance;
   static void renderDetour(void *, void *, void *);
   static void renderItemGroupDetour(void *, void *, void *, std::uint32_t,
                                     std::uint32_t, float, float);
+  static void actorEventDetour(void *, std::uint32_t, std::uint32_t);
 
   void onRender(void *, void *, void *);
   void onRenderItemGroup(void *, void *, void *, std::uint32_t, std::uint32_t,
                          float, float);
 
   [[nodiscard]] bool verifyProfile(const ResolvedVirtual &,
+                                   const ResolvedVirtual &,
                                    ll::mod::NativeMod &) const;
   [[nodiscard]] ItemRenderTraits classifyItem(std::uintptr_t) const noexcept;
   [[nodiscard]] static GroundCalibration
@@ -196,14 +240,36 @@ private:
                                    const ItemRenderTraits &, bool grounded,
                                    bool inWater, float sample,
                                    std::uint8_t phaseTick) const noexcept;
+  [[nodiscard]] std::uint64_t actorUniqueId(void *) const noexcept;
+  [[nodiscard]] std::uintptr_t itemTypeKey(std::uintptr_t) const noexcept;
+  void enqueueMergeSignal(MergeSignal) noexcept;
+  void drainMergeSignals() noexcept;
+  void appendPendingSignal(MergeSignal) noexcept;
+  void clearDropVisuals() noexcept;
+  [[nodiscard]] VisualState *findStateByUniqueId(
+      std::uint64_t, std::uintptr_t = 0) noexcept;
+  [[nodiscard]] bool hasPendingCountChange(std::uint64_t,
+                                           std::uintptr_t) const noexcept;
+  void processPendingMerges(VisualState &, float, unsigned = 0) noexcept;
+  void applyMergedLineage(VisualState &, VisualState &, std::uint16_t,
+                          std::uint16_t, std::uint16_t, float,
+                          MergeSignal *, MergeSignal *,
+                          MergeSignal *) noexcept;
+  void collapseUnresolvedCount(VisualState &, std::uint16_t,
+                               MergeSignal &) noexcept;
   std::atomic_bool mEnabled{true};
   std::atomic_bool mSingleModel{false};
-  std::atomic_bool mRealItemModels{false};
+  std::atomic_bool mSeparateDropVisuals{false};
+  std::atomic_bool mSeparateDropTrackingAvailable{false};
   std::atomic_bool mHideItemShadow{true};
   std::atomic_bool mProfileSupported{false};
+  std::atomic_bool mClearDropVisualsRequested{false};
   std::uintptr_t mMinecraftBase{};
   std::uintptr_t mRenderTarget{};
   std::uintptr_t mRenderItemGroupTarget{};
+  std::uintptr_t mActorEventTarget{};
+  std::uintptr_t mActorRemoveTarget{};
+  std::uintptr_t mItemActorVptr{};
 
   RenderFn mOriginal{};
   RenderItemGroupFn mRenderItemGroupOriginal{};
@@ -211,6 +277,9 @@ private:
   GetPartialTickFn mGetPartialTick{};
   MatrixPushFn mMatrixPush{};
   MatrixRefDtorFn mMatrixRefDtor{};
+  ActorEventFn mActorEventOriginal{};
+  ActorRemoveFn mActorRemoveOriginal{};
+  GetActorUniqueIdFn mGetActorUniqueId{};
   GetPosDeltaFn mGetPosDelta{};
   GetBlockTypeForRenderingFn mGetBlockTypeForRendering{};
   BlockGraphicsGetForBlockTypeFn mGetBlockGraphicsForBlockType{};
@@ -222,7 +291,18 @@ private:
 
   std::unique_ptr<pl::memory::HookHandle> mHook;
   std::unique_ptr<pl::memory::HookHandle> mRenderItemGroupHook;
+  std::unique_ptr<pl::memory::HookHandle> mActorEventHook;
+  std::unique_ptr<pl::memory::HookHandle> mActorRemoveHook;
   std::array<VisualState, kStateCapacity> mStates{};
+  DropVisualAnchorPool<kDropAnchorCapacity> mDropAnchors{};
+  std::array<MergeSignal, kHookSignalCapacity> mHookSignals{};
+  std::array<MergeSignal, kPendingSignalCapacity> mPendingSignals{};
+  std::atomic_flag mSignalLock = ATOMIC_FLAG_INIT;
+  std::atomic_bool mHookSignalsPending{false};
+  std::atomic_uint32_t mSignalSequence{};
+  std::uint16_t mHookSignalWrite{};
+  std::uint16_t mHookSignalCount{};
+  std::uint16_t mStateSweepCursor{};
   mutable ComponentStorageCache mComponentStorageCache{};
   std::uint32_t mRenderCounter{};
 };

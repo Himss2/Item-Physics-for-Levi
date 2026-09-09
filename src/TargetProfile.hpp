@@ -12,7 +12,10 @@ namespace itemphysics::profile {
 // Build ID 868e275cb295e9a275bb29d2258edc2f7dc48761
 inline constexpr std::string_view kMinecraftModule = "libminecraftpe.so";
 inline constexpr std::string_view kItemRendererRtti = "12ItemRenderer";
+inline constexpr std::string_view kItemActorRtti = "9ItemActor";
 inline constexpr std::size_t kItemRendererRenderVtableOffset = 0x18;
+inline constexpr std::size_t kItemActorRemoveVtableOffset = 0x60;
+inline constexpr std::size_t kItemActorEventVtableOffset = 0x228;
 inline constexpr std::array<std::uint8_t, 20> kBuildId = {
     0x86, 0x8E, 0x27, 0x5C, 0xB2, 0x95, 0xE9, 0xA2, 0x75, 0xBB,
     0x29, 0xD2, 0x25, 0x8E, 0xDC, 0x2F, 0x7D, 0xC4, 0x87, 0x61};
@@ -46,6 +49,13 @@ inline constexpr std::uintptr_t kBlockGraphicsGetBlockShapeRva = 0x0A219718;
 inline constexpr std::uintptr_t kIsBlockShape3DRva = 0x0A280E68;
 inline constexpr std::uintptr_t kRelativeShadowStorageRva = 0x0E96A7E4;
 inline constexpr std::uintptr_t kRelativeShadowEmplaceRva = 0x0E96B68C;
+inline constexpr std::uintptr_t kItemActorEventRva = 0x0F12537C;
+inline constexpr std::uintptr_t kActorRemoveRva = 0x0EC8FC7C;
+inline constexpr std::uintptr_t kGetActorUniqueIdRva = 0x0EC8B12C;
+inline constexpr std::uintptr_t kMergeRemoveSequenceRva = 0x0F1245D8;
+// ItemActor::normalTick calls source->remove() at 0xF1245E8. At the
+// following instruction x25 is still the source and x24 the destination.
+inline constexpr std::uintptr_t kMergeRemoveReturnRva = 0x0F1245EC;
 
 inline constexpr std::uint32_t kOnGroundFlagComponentHash = 0xC29078A0u;
 inline constexpr std::uint32_t kVerticalCollisionFlagComponentHash =
@@ -115,5 +125,26 @@ inline constexpr std::array<std::uint32_t, 12>
         0xD10143FFu, 0xA9017BFDu, 0xA9025FF8u, 0xA90357F6u,
         0xA9044FF4u, 0x910043FDu, 0xD53BD058u, 0xAA0303F6u,
         0xAA1F03E3u, 0xF9401708u, 0xAA0003F3u, 0xF90007E8u};
+
+inline constexpr std::array<std::uint32_t, 7> kItemActorEventFingerprint = {
+    0x12001C28u, 0x7101151Fu, 0x54000081u, 0x910E4000u,
+    0x12001C41u, 0x14146547u, 0x17EDD3E5u};
+
+inline constexpr std::array<std::uint32_t, 12> kActorRemoveFingerprint = {
+    0xD10203FFu, 0xA9047BFDu, 0xF9002BF7u, 0xA90657F6u,
+    0xA9074FF4u, 0x910103FDu, 0xD53BD055u, 0xF94016A8u,
+    0xF81F83A8u, 0x39494408u, 0x370026C8u, 0xF9400809u};
+
+inline constexpr std::array<std::uint32_t, 12>
+    kGetActorUniqueIdFingerprint = {
+        0xA9BE7BFDu, 0xF9000BF3u, 0x910003FDu, 0xF9400809u,
+        0x528AF5EAu, 0x72A31F2Au, 0xB9404128u, 0xF9401D2Bu,
+        0x4B0B0108u, 0x53037D08u, 0x51000508u, 0x8A0A010Cu};
+
+inline constexpr std::array<std::uint32_t, 10>
+    kMergeRemoveSequenceFingerprint = {
+        0x1A89B108u, 0xB9042B08u, 0xF9400328u, 0xF9403108u,
+        0xD63F0100u, 0xAA1903E0u, 0x97ED7D27u, 0xF9400008u,
+        0x394ECB03u, 0x910063E4u};
 
 } // namespace itemphysics::profile

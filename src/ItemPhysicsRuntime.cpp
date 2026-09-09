@@ -1,5 +1,4 @@
 #include "ItemPhysicsRuntime.hpp"
-#include "StackVisualLayout.hpp"
 #include "TargetProfile.hpp"
 
 #include <algorithm>
@@ -9,6 +8,26 @@
 #include <limits>
 
 namespace itemphysics {
+
+extern "C" void itemphysics_actor_remove_dispatch(void *actor,
+                                                    void *destination,
+                                                    std::uintptr_t caller) {
+  ItemPhysicsRuntime::dispatchActorRemove(actor, destination, caller);
+}
+
+#if defined(__aarch64__)
+extern "C" __attribute__((naked)) void
+itemphysics_actor_remove_bridge(void *) {
+  __asm__ volatile("mov x1, x24\n"
+                   "mov x2, x30\n"
+                   "b itemphysics_actor_remove_dispatch\n");
+}
+#else
+extern "C" void itemphysics_actor_remove_bridge(void *actor) {
+  itemphysics_actor_remove_dispatch(actor, nullptr, 0);
+}
+#endif
+
 namespace {
 
 constexpr float kRotationPerTick = 0.25f;
@@ -71,6 +90,13 @@ constexpr std::uint8_t kWaterContactGraceTicks = 4u;
 constexpr float kStablePositionEpsilon = 0.012f;
 constexpr float kCollisionPositionEpsilon = 0.025f;
 constexpr float kWakeVerticalSpeed = 0.085f;
+constexpr float kRemoteMergeMaxAxisDistance = 1.10f;
+constexpr std::uint32_t kPendingSignalLifetime = 8192u;
+constexpr std::uint32_t kDropStateStaleRenderDistance = 8192u;
+constexpr std::uint32_t kRemoteMergeSequenceWindow = 16u;
+constexpr std::uint8_t kMergeResolveAttempts = 8u;
+constexpr unsigned kMaxMergeApplicationsPerRender = 8u;
+constexpr unsigned kMaxMergeLineageDepth = 16u;
 
 constexpr const char *kShieldId = "minecraft:shield";
 constexpr const char *kBannerId = "minecraft:banner";
@@ -79,10 +105,10 @@ constexpr const char *kDragonHeadId = "minecraft:dragon_head";
 thread_local bool gForceSingleCopy = false;
 thread_local float *gObservedModelScale = nullptr;
 
-// Default Java-style stacks submit at most five copies; optional exact visual
-// stacks may submit up to 64. These helpers consume one sine/cosine pair
-// calculated for the ItemActor, so copy count never multiplies trigonometric
-// work and the matrix equations remain identical to MatrixMath.hpp.
+// Every original drop group submits at most five Java-style copies. Retained
+// origins reuse stored sine/cosine pairs, so their copy count never multiplies
+// trigonometric work and the matrix equations remain identical to
+// MatrixMath.hpp.
 inline void postRotateXQuarter(Mat4 &matrix) noexcept {
   float c1[4];
   float c2[4];
@@ -257,9 +283,17 @@ bool matchesFingerprint(const ModuleView &module, std::uintptr_t address,
 ItemPhysicsRuntime *ItemPhysicsRuntime::sInstance = nullptr;
 
 bool ItemPhysicsRuntime::verifyProfile(const ResolvedVirtual &resolved,
+                                       const ResolvedVirtual &itemActor,
                                        ll::mod::NativeMod &mod) const {
   const auto base = resolved.module.base;
   const auto expectedRender = base + profile::kItemRendererRenderRva;
+  const auto expectedItemEvent = base + profile::kItemActorEventRva;
+  const auto removeSlot =
+      itemActor.vptr + profile::kItemActorRemoveVtableOffset;
+  const auto resolvedRemove =
+      resolved.module.readable(removeSlot, sizeof(std::uintptr_t))
+          ? *reinterpret_cast<const std::uintptr_t *>(removeSlot)
+          : 0;
 
   if (!resolved.module.hasBuildId ||
       resolved.module.buildId != profile::kBuildId) {
@@ -332,6 +366,24 @@ bool ItemPhysicsRuntime::verifyProfile(const ResolvedVirtual &resolved,
        matchesFingerprint(resolved.module,
                           base + profile::kRelativeShadowEmplaceRva,
                           profile::kRelativeShadowEmplaceFingerprint)},
+      {itemActor.target, "ItemActor::handleEntityEvent",
+       itemActor.module.base == base &&
+           itemActor.target == expectedItemEvent &&
+           matchesFingerprint(resolved.module, itemActor.target,
+                              profile::kItemActorEventFingerprint)},
+      {resolvedRemove, "Actor::remove",
+       resolvedRemove == base + profile::kActorRemoveRva &&
+           matchesFingerprint(resolved.module, resolvedRemove,
+                              profile::kActorRemoveFingerprint)},
+      {base + profile::kGetActorUniqueIdRva, "Actor unique ID accessor",
+       matchesFingerprint(resolved.module,
+                          base + profile::kGetActorUniqueIdRva,
+                          profile::kGetActorUniqueIdFingerprint)},
+      {base + profile::kMergeRemoveSequenceRva,
+       "ItemActor native merge/remove sequence",
+       matchesFingerprint(resolved.module,
+                          base + profile::kMergeRemoveSequenceRva,
+                          profile::kMergeRemoveSequenceFingerprint)},
   };
 
   for (const auto &check : checks) {
@@ -356,7 +408,15 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
         "Item Physics inactive: ItemRenderer RTTI resolution failed");
     return false;
   }
-  if (!verifyProfile(*resolved, mod)) {
+  auto itemActor = resolveVirtualByRtti(
+      profile::kMinecraftModule, profile::kItemActorRtti,
+      profile::kItemActorEventVtableOffset);
+  if (!itemActor) {
+    mod.getLogger().warn(
+        "Item Physics inactive: ItemActor RTTI resolution failed");
+    return false;
+  }
+  if (!verifyProfile(*resolved, *itemActor, mod)) {
     mod.getLogger().warn(
         "Item Physics inactive: unsupported libminecraftpe.so (safe passthrough)");
     return false;
@@ -366,6 +426,10 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
   mRenderTarget = resolved->target;
   mRenderItemGroupTarget =
       mMinecraftBase + profile::kRenderItemGroupLikeRva;
+  mItemActorVptr = itemActor->vptr;
+  mActorEventTarget = itemActor->target;
+  mActorRemoveTarget = *reinterpret_cast<const std::uintptr_t *>(
+      mItemActorVptr + profile::kItemActorRemoveVtableOffset);
   mGetWorldMatrix = reinterpret_cast<GetWorldMatrixFn>(
       mMinecraftBase + profile::kGetWorldMatrixRva);
   mGetPartialTick = reinterpret_cast<GetPartialTickFn>(
@@ -374,6 +438,8 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
       mMinecraftBase + profile::kMatrixStackPushRva);
   mMatrixRefDtor = reinterpret_cast<MatrixRefDtorFn>(
       mMinecraftBase + profile::kMatrixStackRefDtorRva);
+  mGetActorUniqueId = reinterpret_cast<GetActorUniqueIdFn>(
+      mMinecraftBase + profile::kGetActorUniqueIdRva);
   mGetBlockTypeForRendering = reinterpret_cast<GetBlockTypeForRenderingFn>(
       mMinecraftBase + profile::kGetBlockTypeForRenderingRva);
   mGetPosDelta = reinterpret_cast<GetPosDeltaFn>(
@@ -420,14 +486,62 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
     return false;
   }
 
+  mActorEventHook = std::make_unique<pl::memory::HookHandle>(
+      reinterpret_cast<void *>(mActorEventTarget),
+      reinterpret_cast<void *>(&ItemPhysicsRuntime::actorEventDetour),
+      reinterpret_cast<void **>(&mActorEventOriginal),
+      pl::memory::HookPriority::Normal);
+  if (!mActorEventHook->installed() || !mActorEventOriginal) {
+    mod.getLogger().warn(
+        "Separate Drop Visuals unavailable: ItemActor event hook failed");
+    if (mActorEventHook)
+      mActorEventHook->reset();
+    mActorEventHook.reset();
+    mActorEventOriginal = nullptr;
+  } else {
+    mActorRemoveHook = std::make_unique<pl::memory::HookHandle>(
+        reinterpret_cast<void *>(mActorRemoveTarget),
+        reinterpret_cast<void *>(&itemphysics_actor_remove_bridge),
+        reinterpret_cast<void **>(&mActorRemoveOriginal),
+        pl::memory::HookPriority::Normal);
+    if (!mActorRemoveHook->installed() || !mActorRemoveOriginal) {
+      mod.getLogger().warn(
+          "Separate Drop Visuals unavailable: ItemActor remove hook failed");
+      if (mActorRemoveHook)
+        mActorRemoveHook->reset();
+      mActorRemoveHook.reset();
+      mActorRemoveOriginal = nullptr;
+      mActorEventHook->reset();
+      mActorEventHook.reset();
+      mActorEventOriginal = nullptr;
+    } else {
+      mSeparateDropTrackingAvailable.store(true, std::memory_order_relaxed);
+    }
+  }
+
   mProfileSupported.store(true, std::memory_order_relaxed);
-  mod.getLogger().info(
-      "Item Physics visual core active for Minecraft 1.26.45.1");
+  if (mSeparateDropTrackingAvailable.load(std::memory_order_relaxed))
+    mod.getLogger().info(
+        "Item Physics visual core and separate-drop tracking active for "
+        "Minecraft 1.26.45.1");
+  else
+    mod.getLogger().info(
+        "Item Physics visual core active without separate-drop tracking for "
+        "Minecraft 1.26.45.1");
   return true;
 }
 
 void ItemPhysicsRuntime::uninstall() {
   mProfileSupported.store(false, std::memory_order_relaxed);
+  mSeparateDropTrackingAvailable.store(false, std::memory_order_relaxed);
+  if (mActorRemoveHook) {
+    mActorRemoveHook->reset();
+    mActorRemoveHook.reset();
+  }
+  if (mActorEventHook) {
+    mActorEventHook->reset();
+    mActorEventHook.reset();
+  }
   if (mRenderItemGroupHook) {
     mRenderItemGroupHook->reset();
     mRenderItemGroupHook.reset();
@@ -445,6 +559,9 @@ void ItemPhysicsRuntime::uninstall() {
   mGetPartialTick = nullptr;
   mMatrixPush = nullptr;
   mMatrixRefDtor = nullptr;
+  mActorEventOriginal = nullptr;
+  mActorRemoveOriginal = nullptr;
+  mGetActorUniqueId = nullptr;
   mGetPosDelta = nullptr;
   mGetBlockTypeForRendering = nullptr;
   mGetBlockGraphicsForBlockType = nullptr;
@@ -456,13 +573,28 @@ void ItemPhysicsRuntime::uninstall() {
   mMinecraftBase = 0;
   mRenderTarget = 0;
   mRenderItemGroupTarget = 0;
+  mActorEventTarget = 0;
+  mActorRemoveTarget = 0;
+  mItemActorVptr = 0;
   clearStates();
 }
 
 void ItemPhysicsRuntime::clearStates() noexcept {
   mStates = {};
+  mDropAnchors.reset();
+  mPendingSignals = {};
+  while (mSignalLock.test_and_set(std::memory_order_acquire)) {
+  }
+  mHookSignals = {};
+  mHookSignalWrite = 0;
+  mHookSignalCount = 0;
+  mHookSignalsPending.store(false, std::memory_order_relaxed);
+  mSignalLock.clear(std::memory_order_release);
+  mSignalSequence.store(0, std::memory_order_relaxed);
+  mClearDropVisualsRequested.store(false, std::memory_order_relaxed);
   mComponentStorageCache = {};
   mRenderCounter = 0;
+  mStateSweepCursor = 0;
 }
 
 void ItemPhysicsRuntime::renderDetour(void *self, void *ctx, void *renderData) {
@@ -478,6 +610,102 @@ void ItemPhysicsRuntime::renderItemGroupDetour(
                                  animation);
 }
 
+void ItemPhysicsRuntime::actorEventDetour(void *actor, std::uint32_t event,
+                                          std::uint32_t data) {
+  auto *const instance = sInstance;
+  const auto original = instance ? instance->mActorEventOriginal : nullptr;
+  if (!original)
+    return;
+
+  const bool observe =
+      instance->mSeparateDropVisuals.load(std::memory_order_relaxed) && actor &&
+      (event & 0xFFu) == 0x45u;
+  std::uint16_t oldCount = 0;
+  std::uint64_t uniqueId = 0;
+  std::uintptr_t registry = 0;
+  if (observe) {
+    const auto address = reinterpret_cast<std::uintptr_t>(actor);
+    oldCount = *reinterpret_cast<const std::uint8_t *>(
+        address + profile::kItemCountOffset);
+    uniqueId = instance->actorUniqueId(actor);
+    registry = *reinterpret_cast<const std::uintptr_t *>(
+        address + profile::kActorRegistryOffset);
+  }
+
+  original(actor, event, data);
+
+  if (!observe || !uniqueId || !registry)
+    return;
+  const auto address = reinterpret_cast<std::uintptr_t>(actor);
+  const auto newCount = static_cast<std::uint16_t>(
+      *reinterpret_cast<const std::uint8_t *>(address +
+                                             profile::kItemCountOffset));
+  if (newCount <= oldCount)
+    return;
+  instance->enqueueMergeSignal(MergeSignal{
+      .kind = MergeSignalKind::CountChanged,
+      .actorId = uniqueId,
+      .registry = registry,
+      .oldCount = oldCount,
+      .newCount = newCount,
+  });
+}
+
+void ItemPhysicsRuntime::dispatchActorRemove(void *actor, void *destination,
+                                             std::uintptr_t caller) {
+  auto *const instance = sInstance;
+  const auto original = instance ? instance->mActorRemoveOriginal : nullptr;
+  if (!original)
+    return;
+
+  if (instance->mSeparateDropVisuals.load(std::memory_order_relaxed) && actor &&
+      *reinterpret_cast<const std::uintptr_t *>(actor) ==
+          instance->mItemActorVptr) {
+    const auto sourceAddress = reinterpret_cast<std::uintptr_t>(actor);
+    const auto sourceId = instance->actorUniqueId(actor);
+    const auto sourceCount = static_cast<std::uint16_t>(
+        *reinterpret_cast<const std::uint8_t *>(
+            sourceAddress + profile::kItemCountOffset));
+    const auto registry = *reinterpret_cast<const std::uintptr_t *>(
+        sourceAddress + profile::kActorRegistryOffset);
+
+    if (sourceId && sourceCount) {
+      if (caller == instance->mMinecraftBase +
+                        profile::kMergeRemoveReturnRva &&
+          destination &&
+          *reinterpret_cast<const std::uintptr_t *>(destination) ==
+              instance->mItemActorVptr) {
+        const auto destinationAddress =
+            reinterpret_cast<std::uintptr_t>(destination);
+        const auto destinationId = instance->actorUniqueId(destination);
+        const auto destinationCount = static_cast<std::uint16_t>(
+            *reinterpret_cast<const std::uint8_t *>(
+                destinationAddress + profile::kItemCountOffset));
+        if (destinationId && destinationCount >= sourceCount) {
+          instance->enqueueMergeSignal(MergeSignal{
+              .kind = MergeSignalKind::ExactPair,
+              .actorId = sourceId,
+              .otherId = destinationId,
+              .count = sourceCount,
+              .oldCount = static_cast<std::uint16_t>(destinationCount -
+                                                     sourceCount),
+              .newCount = destinationCount,
+          });
+        }
+      }
+
+      instance->enqueueMergeSignal(MergeSignal{
+          .kind = MergeSignalKind::Removed,
+          .actorId = sourceId,
+          .registry = registry,
+          .count = sourceCount,
+      });
+    }
+  }
+
+  original(actor);
+}
+
 void ItemPhysicsRuntime::onRenderItemGroup(
     void *self, void *ctx, void *itemData, std::uint32_t count,
     std::uint32_t flags, float scale, float animation) {
@@ -491,6 +719,123 @@ void ItemPhysicsRuntime::onRenderItemGroup(
 
   original(self, ctx, itemData, gForceSingleCopy ? 1u : count, flags, scale,
            animation);
+}
+
+std::uint64_t ItemPhysicsRuntime::actorUniqueId(void *actor) const noexcept {
+  if (!actor || !mGetActorUniqueId)
+    return 0;
+  const auto *const value = mGetActorUniqueId(actor);
+  if (!value || *value == -1 || *value == 0)
+    return 0;
+  return static_cast<std::uint64_t>(*value);
+}
+
+std::uintptr_t
+ItemPhysicsRuntime::itemTypeKey(std::uintptr_t actor) const noexcept {
+  if (!actor)
+    return 0;
+  const auto handle = *reinterpret_cast<const std::uintptr_t *>(
+      actor + profile::kItemHandleOffset);
+  return handle ? *reinterpret_cast<const std::uintptr_t *>(handle) : 0;
+}
+
+void ItemPhysicsRuntime::enqueueMergeSignal(MergeSignal signal) noexcept {
+  signal.sequence =
+      mSignalSequence.fetch_add(1u, std::memory_order_relaxed) + 1u;
+  while (mSignalLock.test_and_set(std::memory_order_acquire)) {
+  }
+  mHookSignals[mHookSignalWrite] = signal;
+  mHookSignalWrite = static_cast<std::uint16_t>(
+      (mHookSignalWrite + 1u) % kHookSignalCapacity);
+  if (mHookSignalCount < kHookSignalCapacity)
+    ++mHookSignalCount;
+  mSignalLock.clear(std::memory_order_release);
+  mHookSignalsPending.store(true, std::memory_order_release);
+}
+
+void ItemPhysicsRuntime::appendPendingSignal(MergeSignal signal) noexcept {
+  signal.renderStamp = mRenderCounter;
+  MergeSignal *oldest = nullptr;
+  for (auto &slot : mPendingSignals) {
+    if (slot.kind == MergeSignalKind::None) {
+      slot = signal;
+      return;
+    }
+    if (!oldest || slot.sequence < oldest->sequence)
+      oldest = &slot;
+  }
+  if (oldest)
+    *oldest = signal;
+}
+
+void ItemPhysicsRuntime::drainMergeSignals() noexcept {
+  if (!mHookSignalsPending.exchange(false, std::memory_order_acq_rel))
+    return;
+
+  std::array<MergeSignal, kHookSignalCapacity> incoming{};
+  std::uint16_t count = 0;
+
+  while (mSignalLock.test_and_set(std::memory_order_acquire)) {
+  }
+  count = mHookSignalCount;
+  const auto oldest = static_cast<std::uint16_t>(
+      (mHookSignalWrite + kHookSignalCapacity - count) %
+      kHookSignalCapacity);
+  for (std::uint16_t i = 0; i < count; ++i) {
+    incoming[i] =
+        mHookSignals[(oldest + i) % kHookSignalCapacity];
+  }
+  mHookSignals = {};
+  mHookSignalCount = 0;
+  mSignalLock.clear(std::memory_order_release);
+
+  for (std::uint16_t i = 0; i < count; ++i)
+    appendPendingSignal(incoming[i]);
+
+  for (auto &signal : mPendingSignals) {
+    if (signal.kind != MergeSignalKind::None &&
+        mRenderCounter - signal.renderStamp > kPendingSignalLifetime)
+      signal = {};
+  }
+}
+
+void ItemPhysicsRuntime::clearDropVisuals() noexcept {
+  mDropAnchors.reset();
+  for (auto &state : mStates) {
+    state.dropLineage = {};
+    state.dropLineage.head = kNoDropVisualAnchor;
+    state.dropPoseSampled = false;
+  }
+  mPendingSignals = {};
+  while (mSignalLock.test_and_set(std::memory_order_acquire)) {
+  }
+  mHookSignals = {};
+  mHookSignalWrite = 0;
+  mHookSignalCount = 0;
+  mHookSignalsPending.store(false, std::memory_order_relaxed);
+  mSignalLock.clear(std::memory_order_release);
+}
+
+ItemPhysicsRuntime::VisualState *ItemPhysicsRuntime::findStateByUniqueId(
+    std::uint64_t uniqueId, std::uintptr_t registry) noexcept {
+  if (!uniqueId)
+    return nullptr;
+  for (auto &state : mStates) {
+    if (state.used && state.uniqueId == uniqueId &&
+        (!registry || state.registry == registry))
+      return &state;
+  }
+  return nullptr;
+}
+
+bool ItemPhysicsRuntime::hasPendingCountChange(
+    std::uint64_t uniqueId, std::uintptr_t registry) const noexcept {
+  for (const auto &signal : mPendingSignals) {
+    if (signal.kind == MergeSignalKind::CountChanged &&
+        signal.actorId == uniqueId && signal.registry == registry)
+      return true;
+  }
+  return false;
 }
 
 void *ItemPhysicsRuntime::findComponentStorage(void *actor,
@@ -856,6 +1201,8 @@ ItemPhysicsRuntime::stateFor(std::uint32_t entity, std::int32_t age,
                              float bobOffset, float sample) noexcept {
   static_assert((kStateCapacity & (kStateCapacity - 1u)) == 0u);
   const auto initialize = [&](VisualState &state) -> VisualState & {
+    if (state.dropLineage.initialized)
+      mDropAnchors.release(state.dropLineage);
     state = {};
     state.entity = entity;
     state.lastSeen = mRenderCounter;
@@ -995,6 +1342,184 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
   return nativeGrounded || state.groundedLatched;
 }
 
+void ItemPhysicsRuntime::applyMergedLineage(
+    VisualState &destination, VisualState &source, std::uint16_t sourceCount,
+    std::uint16_t oldCount, std::uint16_t newCount, float destinationSample,
+    MergeSignal *countSignal, MergeSignal *removeSignal,
+    MergeSignal *exactSignal) noexcept {
+  if (!destination.dropLineage.initialized)
+    mDropAnchors.observe(destination.dropLineage, oldCount);
+  if (!source.dropLineage.initialized)
+    mDropAnchors.observe(source.dropLineage, sourceCount);
+  else
+    mDropAnchors.reconcile(source.dropLineage, sourceCount);
+
+  bool merged = false;
+  if (source.dropPoseSampled &&
+      destination.dropLineage.trackedCount == oldCount) {
+    const float sampleDelta = source.lastSample - destinationSample;
+    merged = mDropAnchors.merge(
+        source.dropLineage, source.dropPose, sourceCount,
+        destination.dropLineage, oldCount, newCount, sampleDelta);
+  }
+
+  if (!merged) {
+    // Missing off-screen history or a full fixed pool degrades safely to the
+    // survivor's live group. Gameplay count remains untouched either way.
+    mDropAnchors.release(source.dropLineage);
+    mDropAnchors.reconcile(destination.dropLineage, newCount);
+  }
+
+  if (countSignal)
+    *countSignal = {};
+  if (removeSignal)
+    *removeSignal = {};
+  if (exactSignal)
+    *exactSignal = {};
+
+  // Remove duplicate server/client observations for the consumed source so a
+  // later event cannot transfer the same visual lineage twice.
+  for (auto &signal : mPendingSignals) {
+    if ((signal.kind == MergeSignalKind::CountChanged &&
+         signal.actorId == source.uniqueId) ||
+        (signal.kind == MergeSignalKind::Removed &&
+         signal.actorId == source.uniqueId) ||
+        (signal.kind == MergeSignalKind::ExactPair &&
+         signal.actorId == source.uniqueId &&
+         signal.otherId == destination.uniqueId))
+      signal = {};
+  }
+}
+
+void ItemPhysicsRuntime::collapseUnresolvedCount(
+    VisualState &destination, std::uint16_t liveCount,
+    MergeSignal &countSignal) noexcept {
+  if (!destination.dropLineage.initialized)
+    mDropAnchors.observe(destination.dropLineage, liveCount);
+  else
+    mDropAnchors.reconcile(destination.dropLineage, liveCount);
+  countSignal = {};
+}
+
+void ItemPhysicsRuntime::processPendingMerges(
+    VisualState &destination, float destinationSample,
+    unsigned lineageDepth) noexcept {
+  if (!destination.uniqueId || !destination.dropPoseSampled ||
+      lineageDepth > kMaxMergeLineageDepth)
+    return;
+
+  for (unsigned applied = 0; applied < kMaxMergeApplicationsPerRender;
+       ++applied) {
+    MergeSignal *countSignal = nullptr;
+    for (auto &signal : mPendingSignals) {
+      if (signal.kind == MergeSignalKind::CountChanged &&
+          signal.actorId == destination.uniqueId &&
+          signal.registry == destination.registry &&
+          (!countSignal || signal.sequence < countSignal->sequence))
+        countSignal = &signal;
+    }
+    if (!countSignal)
+      return;
+
+    const auto oldCount = countSignal->oldCount;
+    const auto newCount = countSignal->newCount;
+    if (!oldCount || newCount <= oldCount) {
+      collapseUnresolvedCount(destination, newCount, *countSignal);
+      continue;
+    }
+    const auto sourceCount =
+        static_cast<std::uint16_t>(newCount - oldCount);
+
+    if (!destination.dropLineage.initialized)
+      mDropAnchors.observe(destination.dropLineage, oldCount);
+
+    MergeSignal *exactSignal = nullptr;
+    for (auto &signal : mPendingSignals) {
+      if (signal.kind == MergeSignalKind::ExactPair &&
+          signal.otherId == destination.uniqueId &&
+          signal.count == sourceCount && signal.oldCount == oldCount &&
+          signal.newCount == newCount) {
+        exactSignal = &signal;
+        break;
+      }
+    }
+
+    MergeSignal *removeSignal = nullptr;
+    VisualState *source = nullptr;
+    if (exactSignal) {
+      for (auto &signal : mPendingSignals) {
+        if (signal.kind == MergeSignalKind::Removed &&
+            signal.actorId == exactSignal->actorId &&
+            signal.registry == countSignal->registry &&
+            signal.count == sourceCount) {
+          removeSignal = &signal;
+          break;
+        }
+      }
+      if (removeSignal)
+        source = findStateByUniqueId(exactSignal->actorId,
+                                     countSignal->registry);
+    }
+    if (!source) {
+      // A remote server does not send the removed source ID in event 0x45.
+      // Accept a fallback only when exactly one same-registry, same-item,
+      // same-count source disappeared inside native merge range.
+      unsigned candidates = 0;
+      for (auto &signal : mPendingSignals) {
+        if (signal.kind != MergeSignalKind::Removed ||
+            signal.registry != countSignal->registry ||
+            signal.count != sourceCount)
+          continue;
+        const auto sequenceDistance =
+            signal.sequence > countSignal->sequence
+                ? signal.sequence - countSignal->sequence
+                : countSignal->sequence - signal.sequence;
+        if (sequenceDistance > kRemoteMergeSequenceWindow)
+          continue;
+        auto *candidate =
+            findStateByUniqueId(signal.actorId, signal.registry);
+        if (!candidate || !candidate->dropPoseSampled ||
+            !candidate->itemTypeKey ||
+            candidate->itemTypeKey != destination.itemTypeKey ||
+            candidate->blockKey != destination.blockKey)
+          continue;
+        const auto &a = candidate->dropPose;
+        const auto &b = destination.dropPose;
+        if (std::abs(a.worldX - b.worldX) > kRemoteMergeMaxAxisDistance ||
+            std::abs(a.baseWorldY - b.baseWorldY) >
+                kRemoteMergeMaxAxisDistance ||
+            std::abs(a.worldZ - b.worldZ) > kRemoteMergeMaxAxisDistance)
+          continue;
+        ++candidates;
+        source = candidate;
+        removeSignal = &signal;
+        if (candidates > 1)
+          break;
+      }
+      if (candidates != 1) {
+        source = nullptr;
+        removeSignal = nullptr;
+      }
+    }
+
+    if (!source || !removeSignal) {
+      if (++countSignal->attempts >= kMergeResolveAttempts)
+        collapseUnresolvedCount(destination, newCount, *countSignal);
+      return;
+    }
+
+    // Native tick order may merge A into B and then B into C before another
+    // render pass. Resolve B's pending ancestry first so transferring B to C
+    // cannot collapse A into B's live root.
+    if (hasPendingCountChange(source->uniqueId, source->registry))
+      processPendingMerges(*source, source->lastSample, lineageDepth + 1u);
+
+    applyMergedLineage(destination, *source, sourceCount, oldCount, newCount,
+                       destinationSample, countSignal, removeSignal,
+                       exactSignal);
+  }
+}
+
 void ItemPhysicsRuntime::updateRotation(VisualState &state,
                                         bool keepsLandingAngle,
                                         bool grounded, bool inWater,
@@ -1130,6 +1655,25 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
   const float sample = static_cast<float>(age) + partial;
 
   ++mRenderCounter;
+  if (mClearDropVisualsRequested.exchange(false, std::memory_order_acq_rel))
+    clearDropVisuals();
+  const bool separateDropVisuals =
+      mSeparateDropVisuals.load(std::memory_order_relaxed) &&
+      mSeparateDropTrackingAvailable.load(std::memory_order_relaxed);
+  if (separateDropVisuals)
+    drainMergeSignals();
+
+  // Reclaim one cold slot per render. Frozen positions are meaningful only
+  // while their surviving ItemActor is being rendered, and this bounded sweep
+  // prevents picked-up lineages from consuming the fixed anchor pool forever.
+  auto &stale = mStates[mStateSweepCursor++ & (kStateCapacity - 1u)];
+  if (stale.used &&
+      mRenderCounter - stale.lastSeen > kDropStateStaleRenderDistance) {
+    if (stale.dropLineage.initialized)
+      mDropAnchors.release(stale.dropLineage);
+    stale = {};
+  }
+
   auto &state = stateFor(entity, age, bobOffset, sample);
   const bool grounded = resolveGrounded(state, actor, age, originalWorldY);
   const bool enabled = mEnabled.load(std::memory_order_relaxed);
@@ -1193,11 +1737,6 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
       *reinterpret_cast<const std::uint8_t *>(actorAddress +
                                              profile::kItemCountOffset));
   const bool singleModel = mSingleModel.load(std::memory_order_relaxed);
-  const bool realItemModels =
-      mRealItemModels.load(std::memory_order_relaxed);
-  const auto copies =
-      selectVisualCopyCount(count, singleModel, realItemModels);
-  const bool compactCopyLayout = realItemModels && !singleModel;
   auto &frameFlag = *reinterpret_cast<std::uint8_t *>(
       actorAddress + profile::kIsInItemFrameOffset);
   const auto oldFrameFlag = frameFlag;
@@ -1211,95 +1750,148 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
                                     state.inWater, sample,
                                     state.waterBobPhase);
   const float worldZ = position[2];
-  position[1] = worldY;
-
   const float routeScale =
       state.modelScale > 0.0f ? state.modelScale : kDefaultBlockScale;
-  const float stackStep =
-      traits.block
-          ? std::max(kFlatStackWorldStep,
-                     routeScale * kBlockStackScaleStep)
-          : kFlatStackWorldStep;
-  const float stackDirectionX = yRotCosine;
-  const float stackDirectionZ = yRotSine;
+
+  const float currentWaterBob =
+      state.inWater ? waterBobOffset(sample, state.waterBobPhase) : 0.0f;
+  const DropVisualPose livePose{
+      .worldX = worldX,
+      .baseWorldY = worldY - currentWaterBob,
+      .worldZ = worldZ,
+      .xRotSine = xRotSine,
+      .xRotCosine = xRotCosine,
+      .yRotSine = yRotSine,
+      .yRotCosine = yRotCosine,
+      .routeScale = routeScale,
+      .bobOffset = bobOffset,
+      .waterSampleBias = static_cast<float>(state.waterBobPhase),
+      .grounded = grounded,
+      .inWater = state.inWater,
+  };
+
+  std::uint32_t liveGroupCount = count;
+  if (separateDropVisuals) {
+    if (!state.dropIdentitySampled) {
+      state.uniqueId = actorUniqueId(actor);
+      state.registry = *reinterpret_cast<const std::uintptr_t *>(
+          actorAddress + profile::kActorRegistryOffset);
+      state.itemTypeKey = itemTypeKey(actorAddress);
+      state.blockKey = *reinterpret_cast<const std::uintptr_t *>(
+          actorAddress + profile::kBlockPtrOffset);
+      state.dropIdentitySampled = state.uniqueId != 0 && state.registry != 0;
+    }
+    state.dropPose = livePose;
+    state.dropPoseSampled = state.dropIdentitySampled;
+
+    if (state.dropPoseSampled) {
+      processPendingMerges(state, sample);
+      if (!hasPendingCountChange(state.uniqueId, state.registry))
+        mDropAnchors.observe(state.dropLineage, count);
+      if (state.dropLineage.initialized && state.dropLineage.rootCount)
+        liveGroupCount = state.dropLineage.rootCount;
+    } else if (state.dropLineage.initialized) {
+      mDropAnchors.release(state.dropLineage);
+    }
+  }
+
+  const float originalWorldX = position[0];
+  const float originalWorldZ = position[2];
   bool rendered = false;
-  for (std::uint32_t copy = 0; copy < copies; ++copy) {
-    // Keep Java's approved 1..5-copy row unchanged while the optional exact
-    // mode uses a compact XZ-only grid. No copy receives a Y displacement, so
-    // visual stack count cannot reintroduce vertical stacking or floating.
-    const StackXZOffset localOffset =
-        compactCopyLayout
-            ? compactGridOffset(copy, copies, stackStep)
-            : centeredRowOffset(copy, copies, stackStep);
-    const StackXZOffset worldOffset = rotateStackOffset(
-        localOffset, stackDirectionZ, stackDirectionX);
-    const float copyWorldX = worldOffset.x;
-    const float copyWorldZ = worldOffset.z;
+  bool renderFailed = false;
+  const auto renderGroup = [&](const DropVisualPose &pose,
+                               std::uint32_t groupCount) {
+    if (renderFailed || groupCount == 0)
+      return;
 
-    MatrixPushScope scope(mGetWorldMatrix ? mGetWorldMatrix(ctx) : nullptr,
-                          mMatrixPush, mMatrixRefDtor);
-    Mat4 *matrix = scope.matrix();
-    if (!matrix) {
-      if (!rendered)
-        original(self, ctx, renderData);
-      break;
-    }
+    const auto copies =
+        singleModel ? 1u : javaVisualCopyCount(groupCount);
+    const float stackStep =
+        traits.block
+            ? std::max(kFlatStackWorldStep,
+                       pose.routeScale * kBlockStackScaleStep)
+            : kFlatStackWorldStep;
+    const float groupWorldY =
+        pose.baseWorldY +
+        (pose.inWater
+             ? waterBobOffset(sample + pose.waterSampleBias, 0)
+             : 0.0f);
+    position[0] = pose.worldX;
+    position[1] = groupWorldY;
+    position[2] = pose.worldZ;
 
-    // Offset the copy before model rotation, in world XZ. This prevents an
-    // arbitrary frozen item angle from turning a side offset into vertical
-    // stacking or a floating copy.
-    postTranslate(*matrix, worldX + copyWorldX, worldY,
-                  worldZ + copyWorldZ);
-    const bool horizontalSurfacePose =
-        (grounded || state.inWater) &&
-        traits.height == HeightClass::HorizontalThin;
-    if (horizontalSurfacePose) {
-      // A slab/trapdoor/carpet is already horizontal in its native block
-      // model. Java's universal X+90 pose turns that thin axis vertical, and
-      // changing xRot cannot undo it. At solid contact or while floating,
-      // preserve the Java block translation in world space and retain only a
-      // harmless surface yaw. Do not apply an AABB centre drop here: Bedrock's
-      // item origin is not the visual AABB centre, and that extra subtraction
-      // is what pushed slabs/trapdoors/carpets through the ground. The same
-      // world-up basis is used while floating so these models cannot become
-      // vertical at the water surface.
-      postTranslate(*matrix, kBlockOffsetY * -yRotSine,
-                    -kBlockOffsetZ,
-                    kBlockOffsetY * yRotCosine);
-      postRotateYKnown(*matrix, yRotSine, yRotCosine);
-    } else {
-      postRotateXQuarter(*matrix);
-      postRotateZKnown(*matrix, yRotSine, yRotCosine);
-    }
+    for (std::uint32_t copy = 0; copy < copies; ++copy) {
+      // Each original drop group retains Java's 1..5-copy row. Independent
+      // groups have independent frozen world origins; no copy receives a Y
+      // displacement and gameplay still owns one merged ItemActor.
+      const StackXZOffset localOffset =
+          centeredRowOffset(copy, copies, stackStep);
+      const StackXZOffset worldOffset = rotateStackOffset(
+          localOffset, pose.yRotSine, pose.yRotCosine);
 
-    if (!horizontalSurfacePose) {
-      if (traits.block) {
-        postTranslate(*matrix, 0.0f, kBlockOffsetY, kBlockOffsetZ);
-        // Java has one block transform, including for every skull and Dragon
-        // Head. A head-only local-Z pivot causes a visible horizontal orbit.
-        postTranslate(*matrix, 0.0f, routeScale, 0.0f);
-        postRotateYKnown(*matrix, xRotSine, xRotCosine);
-        postTranslate(*matrix, 0.0f, -routeScale, 0.0f);
-      } else {
-        postTranslate(*matrix, 0.0f, 0.0f,
-                      kFlatOffsetZ - bobOffset * kBobOffsetScale);
-        postRotateYKnown(*matrix, xRotSine, xRotCosine);
+      MatrixPushScope scope(mGetWorldMatrix ? mGetWorldMatrix(ctx) : nullptr,
+                            mMatrixPush, mMatrixRefDtor);
+      Mat4 *matrix = scope.matrix();
+      if (!matrix) {
+        if (!rendered)
+          original(self, ctx, renderData);
+        renderFailed = true;
+        return;
       }
-    }
-    postTranslate(*matrix, -worldX, -worldY, -worldZ);
 
-    const bool previousForce = gForceSingleCopy;
-    float *const previousProbe = gObservedModelScale;
-    gForceSingleCopy = true;
-    gObservedModelScale = &state.modelScale;
-    original(self, ctx, renderData);
-    gObservedModelScale = previousProbe;
-    gForceSingleCopy = previousForce;
-    rendered = true;
+      postTranslate(*matrix, pose.worldX + worldOffset.x, groupWorldY,
+                    pose.worldZ + worldOffset.z);
+      const bool horizontalSurfacePose =
+          (pose.grounded || pose.inWater) &&
+          traits.height == HeightClass::HorizontalThin;
+      if (horizontalSurfacePose) {
+        // The existing approved slab/trapdoor/carpet ground and water basis is
+        // reused verbatim for every frozen drop origin.
+        postTranslate(*matrix, kBlockOffsetY * -pose.yRotSine,
+                      -kBlockOffsetZ,
+                      kBlockOffsetY * pose.yRotCosine);
+        postRotateYKnown(*matrix, pose.yRotSine, pose.yRotCosine);
+      } else {
+        postRotateXQuarter(*matrix);
+        postRotateZKnown(*matrix, pose.yRotSine, pose.yRotCosine);
+      }
+
+      if (!horizontalSurfacePose) {
+        if (traits.block) {
+          postTranslate(*matrix, 0.0f, kBlockOffsetY, kBlockOffsetZ);
+          postTranslate(*matrix, 0.0f, pose.routeScale, 0.0f);
+          postRotateYKnown(*matrix, pose.xRotSine, pose.xRotCosine);
+          postTranslate(*matrix, 0.0f, -pose.routeScale, 0.0f);
+        } else {
+          postTranslate(*matrix, 0.0f, 0.0f,
+                        kFlatOffsetZ - pose.bobOffset * kBobOffsetScale);
+          postRotateYKnown(*matrix, pose.xRotSine, pose.xRotCosine);
+        }
+      }
+      postTranslate(*matrix, -pose.worldX, -groupWorldY, -pose.worldZ);
+
+      const bool previousForce = gForceSingleCopy;
+      float *const previousProbe = gObservedModelScale;
+      gForceSingleCopy = true;
+      gObservedModelScale = &state.modelScale;
+      original(self, ctx, renderData);
+      gObservedModelScale = previousProbe;
+      gForceSingleCopy = previousForce;
+      rendered = true;
+    }
+  };
+
+  renderGroup(livePose, liveGroupCount);
+  if (separateDropVisuals && state.dropLineage.initialized && !renderFailed) {
+    mDropAnchors.forEach(state.dropLineage, [&](const auto &anchor) {
+      renderGroup(anchor.pose, anchor.count);
+    });
   }
 
   frameFlag = oldFrameFlag;
+  position[0] = originalWorldX;
   position[1] = originalWorldY;
+  position[2] = originalWorldZ;
 }
 
 } // namespace itemphysics
