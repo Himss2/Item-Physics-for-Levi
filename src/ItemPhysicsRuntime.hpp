@@ -120,6 +120,7 @@ private:
     float yRot{};
     float lastSample{};
     float lastWorldY{};
+    float lastVerticalSpeed{};
     float modelScale{};
     DropVisualPose dropPose{};
     DropVisualLineage dropLineage{};
@@ -180,7 +181,6 @@ private:
   };
 
   using GetPosDeltaFn = const Vec3Abi *(*)(const void *);
-  using NativeBoolFn = bool (*)(const void *);
   using GetBlockTypeForRenderingFn = const void *(*)(const void *);
   using BlockGraphicsGetForBlockTypeFn = void *(*)(const void *);
   using BlockGraphicsGetForBlockFn = void *(*)(const void *);
@@ -196,7 +196,8 @@ private:
 
   static constexpr std::size_t kStateCapacity = 512;
   static constexpr std::size_t kStateProbeCount = 8;
-  static constexpr std::size_t kDropAnchorCapacity = 256;
+  static constexpr std::size_t kDropAnchorCapacity = 96;
+  static constexpr std::size_t kMaxDropAnchorsPerLineage = 16;
   static constexpr std::size_t kHookSignalCapacity = 64;
   static constexpr std::size_t kPendingSignalCapacity = 128;
 
@@ -205,7 +206,6 @@ private:
   static void renderItemGroupDetour(void *, void *, void *, std::uint32_t,
                                     std::uint32_t, float, float);
   static void actorEventDetour(void *, std::uint32_t, std::uint32_t);
-  static void normalTickDetour(void *);
 
   void onRender(void *, void *, void *);
   void onRenderItemGroup(void *, void *, void *, std::uint32_t, std::uint32_t,
@@ -286,9 +286,6 @@ private:
   MatrixRefDtorFn mMatrixRefDtor{};
   ActorEventFn mActorEventOriginal{};
   ActorRemoveFn mActorRemoveOriginal{};
-  ActorRemoveFn mNormalTickOriginal{};
-  NativeBoolFn mActorIsClientSide{};
-  NativeBoolFn mStackIsFireResistant{};
   GetActorUniqueIdFn mGetActorUniqueId{};
   GetPosDeltaFn mGetPosDelta{};
   GetBlockTypeForRenderingFn mGetBlockTypeForRendering{};
@@ -303,7 +300,6 @@ private:
   std::unique_ptr<pl::memory::HookHandle> mRenderItemGroupHook;
   std::unique_ptr<pl::memory::HookHandle> mActorEventHook;
   std::unique_ptr<pl::memory::HookHandle> mActorRemoveHook;
-  std::unique_ptr<pl::memory::HookHandle> mNormalTickHook;
   std::array<VisualState, kStateCapacity> mStates{};
   DropVisualAnchorPool<kDropAnchorCapacity> mDropAnchors{};
   std::array<MergeSignal, kHookSignalCapacity> mHookSignals{};

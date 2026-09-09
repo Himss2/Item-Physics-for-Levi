@@ -34,7 +34,7 @@ public:
 
   bool load() {
     mSelf.getLogger().info(
-        "Levi Item Physics 0.15.1: unified fluid visuals and lava buoyancy loaded");
+        "Levi Item Physics 0.15.2: native liquid transit and stable surface bob loaded");
     return true;
   }
 

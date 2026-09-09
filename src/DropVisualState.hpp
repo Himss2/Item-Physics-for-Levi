@@ -28,73 +28,73 @@ fluidMotionScale(DropFluidKind fluid) noexcept {
   return fluid == DropFluidKind::Lava ? 0.5f : 1.0f;
 }
 
-[[nodiscard]] constexpr float
-fluidRisePerTick(DropFluidKind fluid) noexcept {
-  if (fluid == DropFluidKind::Water)
-    return 0.04f;
-  if (fluid == DropFluidKind::Lava)
-    return 0.02f;
-  return 0.0f;
-}
-
-// normalTick can subtract 0.04 gravity on the next tick when the native
-// shrunken lava probe misses a small item. Leave enough velocity for a 0.02
-// ascent even on that path. Native collision, removal and networking still own
-// the actor; never apply this to a remote client replica or a burning item.
-[[nodiscard]] inline float lavaVelocityAfterTick(
-    float nativeY, bool inLava, bool fireResistant, bool clientSide,
-    bool enabled) noexcept {
-  if (!enabled || clientSide || !inLava || !fireResistant ||
-      !std::isfinite(nativeY))
-    return nativeY;
-  return std::max(nativeY, 0.06f);
-}
-
-[[nodiscard]] inline float advanceFluidBase(
-    float base, float target, float delta, DropFluidKind fluid) noexcept {
-  if (!std::isfinite(base) || !std::isfinite(target) ||
-      !std::isfinite(delta) || delta <= 0.0f || delta > 10.0f ||
-      target <= base)
-    return base;
-  return std::min(base + fluidRisePerTick(fluid) * delta, target);
-}
-
-// Render-owned, absolute world-space Y. Reject the native downward part of
-// small buoyancy oscillations so the existing custom waveform is applied once.
-// Real falls/relocations and fluid exits reset the base instead of leaving a
-// model suspended at an obsolete water level. No world/block scans are needed.
+// Render-only surface latch. Minecraft owns the complete sink and buoyant-rise
+// path: before the actor has stayed vertically stable for three distinct game
+// ticks this returns the exact native interpolated Y. Only then is the base Y
+// frozen so our small Java-style waveform cannot double with native jitter.
 class FluidVisualBase {
 public:
-  float update(float nativeY, float sample, DropFluidKind fluid) noexcept {
-    if (!isFluid(fluid) || !std::isfinite(nativeY) ||
-        !std::isfinite(sample)) {
+  float update(float nativeRenderY, float nativeTickY, float verticalSpeed,
+               std::int32_t age, DropFluidKind fluid) noexcept {
+    if (!isFluid(fluid) || !std::isfinite(nativeRenderY) ||
+        !std::isfinite(nativeTickY) || !std::isfinite(verticalSpeed)) {
       *this = {};
-      return nativeY;
+      return nativeRenderY;
     }
-    const float delta = sample - mLastSample;
-    if (!mInitialized || fluid != mFluid || delta < 0.0f || delta > 10.0f ||
-        mTarget - nativeY > 0.25f || nativeY - mTarget > 0.5f) {
-      mBase = nativeY;
-      mTarget = nativeY;
-      mInitialized = true;
+
+    if (!mInitialized || fluid != mFluid || age < mLastAge ||
+        age - mLastAge > 10) {
+      initialize(nativeTickY, age, fluid);
+      return nativeRenderY;
     }
-    mTarget = std::max(mTarget, nativeY);
-    mBase = advanceFluidBase(mBase, mTarget, delta, fluid);
-    mLastSample = sample;
-    mFluid = fluid;
-    return mBase;
+
+    if (age != mLastAge) {
+      const float tickDelta = nativeTickY - mLastTickY;
+      if (mBobbing && std::abs(nativeTickY - mBase) > 0.35f) {
+        initialize(nativeTickY, age, fluid);
+        return nativeRenderY;
+      }
+
+      if (!mBobbing) {
+        const bool stable = std::abs(tickDelta) <= 0.012f &&
+                            std::abs(verticalSpeed) <= 0.025f;
+        mStableTicks = stable
+                           ? static_cast<std::uint8_t>(
+                                 std::min<unsigned>(mStableTicks + 1u, 3u))
+                           : 0u;
+        if (mStableTicks >= 3u) {
+          mBase = nativeTickY;
+          mBobbing = true;
+        }
+      }
+      mLastTickY = nativeTickY;
+      mLastAge = age;
+    }
+
+    return mBobbing ? mBase : nativeRenderY;
   }
 
-  [[nodiscard]] bool bobbing() const noexcept {
-    return mInitialized && mBase >= mTarget - 0.0005f;
-  }
+  [[nodiscard]] bool bobbing() const noexcept { return mBobbing; }
 
 private:
+  void initialize(float nativeTickY, std::int32_t age,
+                  DropFluidKind fluid) noexcept {
+    mBase = nativeTickY;
+    mLastTickY = nativeTickY;
+    mLastAge = age;
+    mFluid = fluid;
+    mStableTicks = 0;
+    mInitialized = true;
+    mBobbing = false;
+  }
+
   float mBase{};
-  float mTarget{};
-  float mLastSample{};
+  float mLastTickY{};
+  std::int32_t mLastAge{};
   DropFluidKind mFluid{DropFluidKind::None};
+  std::uint8_t mStableTicks{};
   bool mInitialized{};
+  bool mBobbing{};
 };
 
 [[nodiscard]] constexpr std::uint32_t
@@ -163,11 +163,25 @@ struct DropVisualPose {
   float routeScale{};
   float bobOffset{};
   float waterSampleBias{};
-  float fluidLastSample{};
   DropFluidKind fluid{DropFluidKind::None};
   bool grounded{};
   bool fluidBobbing{};
 };
+
+[[nodiscard]] constexpr bool canRetainDropPose(
+    const DropVisualPose &source,
+    const DropVisualPose &destination) noexcept {
+  if (!isFluid(source.fluid))
+    return source.grounded;
+  return source.fluidBobbing && source.fluid == destination.fluid;
+}
+
+[[nodiscard]] constexpr bool withinDropAnchorBudget(
+    std::size_t destinationAnchors, std::size_t sourceAnchors,
+    std::size_t maximumAnchors) noexcept {
+  return destinationAnchors < maximumAnchors &&
+         sourceAnchors < maximumAnchors - destinationAnchors;
+}
 
 struct DropVisualLineage {
   std::uint16_t head{kNoDropVisualAnchor};
@@ -213,8 +227,7 @@ public:
                            DropVisualLineage &destination,
                            std::uint32_t destinationOldCount,
                            std::uint32_t destinationNewCount,
-                           float waterSampleDelta = 0.0f,
-                           float destinationSample = 0.0f) noexcept {
+                           float waterSampleDelta = 0.0f) noexcept {
     const auto sourceTotal = clampCount(sourceCount);
     const auto oldTotal = clampCount(destinationOldCount);
     const auto newTotal = clampCount(destinationNewCount);
@@ -235,8 +248,6 @@ public:
     rootAnchor.pose = sourcePose;
     rootAnchor.pose.waterSampleBias +=
         waterSampleDelta * fluidMotionScale(rootAnchor.pose.fluid);
-    rootAnchor.pose.fluidLastSample = destinationSample;
-    rootAnchor.pose.fluidBobbing = false;
     rootAnchor.count = source.rootCount;
     rootAnchor.used = true;
 
@@ -251,7 +262,6 @@ public:
         auto &node = mAnchors[tail];
         node.pose.waterSampleBias +=
             waterSampleDelta * fluidMotionScale(node.pose.fluid);
-        node.pose.fluidLastSample = destinationSample;
         if (node.next == kNoDropVisualAnchor) {
           node.next = destination.head;
           break;
@@ -265,30 +275,6 @@ public:
     source = {};
     source.head = kNoDropVisualAnchor;
     return true;
-  }
-
-  void advanceFluidAnchors(const DropVisualLineage &lineage,
-                           float targetBaseWorldY,
-                           float currentSample) noexcept {
-    auto index = lineage.head;
-    for (std::size_t guard = 0;
-         index != kNoDropVisualAnchor && guard < Capacity; ++guard) {
-      if (index >= Capacity)
-        return;
-      auto &anchor = mAnchors[index];
-      if (!anchor.used)
-        return;
-
-      auto &pose = anchor.pose;
-      if (isFluid(pose.fluid)) {
-        const float delta = currentSample - pose.fluidLastSample;
-        pose.fluidLastSample = currentSample;
-        pose.baseWorldY = advanceFluidBase(
-            pose.baseWorldY, targetBaseWorldY, delta, pose.fluid);
-        pose.fluidBobbing = pose.baseWorldY >= targetBaseWorldY - 0.0005f;
-      }
-      index = anchor.next;
-    }
   }
 
   void reconcile(DropVisualLineage &lineage,

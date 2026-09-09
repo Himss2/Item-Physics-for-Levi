@@ -59,27 +59,6 @@ inline constexpr std::uintptr_t kMergeRemoveSequenceRva = 0x0F1245D8;
 // following instruction x25 is still the source and x24 the destination.
 inline constexpr std::uintptr_t kMergeRemoveReturnRva = 0x0F1245EC;
 
-// Optional physical lava correction, independently gated from the renderer.
-inline constexpr std::uintptr_t kItemActorNormalTickRva = 0x0F124154;
-inline constexpr std::uintptr_t kActorIsClientSideRva = 0x0EC8E9D8;
-inline constexpr std::uintptr_t kStackIsFireResistantRva = 0x0F63FC00;
-inline constexpr std::uintptr_t kItemIsFireResistantRva = 0x0F6699A4;
-inline constexpr std::ptrdiff_t kActorRemovedOffset = 0x251;
-inline constexpr std::uintptr_t kActorSetRemovedSequenceRva = 0x0EC9011C;
-inline constexpr std::array<std::uint32_t, 8> kItemActorNormalTickFingerprint = {
-    0xD10383FFu, 0xFD003BE8u, 0xA9087BFDu, 0xA9096FFCu,
-    0xA90A67FAu, 0xA90B5FF8u, 0xA90C57F6u, 0xA90D4FF4u};
-inline constexpr std::array<std::uint32_t, 7> kActorIsClientSideFingerprint = {
-    0xF940E800u, 0xB4000080u, 0xF9400008u, 0xF944F901u,
-    0xD61F0020u, 0x52800020u, 0xD65F03C0u};
-inline constexpr std::array<std::uint32_t, 7> kStackIsFireResistantFingerprint = {
-    0xF9400408u, 0xB4000088u, 0xF9400100u, 0xB4000040u,
-    0x1400A765u, 0x2A1F03E0u, 0xD65F03C0u};
-inline constexpr std::array<std::uint32_t, 3> kItemIsFireResistantFingerprint = {
-    0x79422408u, 0x53051500u, 0xD65F03C0u};
-inline constexpr std::array<std::uint32_t, 3> kActorSetRemovedFingerprint = {
-    0xB9401A74u, 0x72A88681u, 0x39094668u};
-
 inline constexpr std::uint32_t kOnGroundFlagComponentHash = 0xC29078A0u;
 inline constexpr std::uint32_t kVerticalCollisionFlagComponentHash =
     0xC6A02A9Au;

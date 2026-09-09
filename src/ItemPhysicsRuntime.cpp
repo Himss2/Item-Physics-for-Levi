@@ -40,7 +40,8 @@ constexpr float kDefaultBlockScale = 0.25f;
 constexpr float kFlatStackWorldStep = 0.055f;
 constexpr float kBlockStackScaleStep = 0.32f;
 constexpr float kMaxContinuousDeltaTicks = 10.0f;
-constexpr float kFluidSurfaceLiftY = 0.125f;
+constexpr float kFullBlockFluidSurfaceLiftY = 0.125f;
+constexpr float kOtherFluidSurfaceLiftY = 0.085f;
 constexpr std::uint32_t kWaterCycleTicks = 91u;
 // One-tick samples of the approved waveform: 8 ticks at the bottom, a
 // half-sine transition at approximately 0.10 radians/tick, 20 ticks at the
@@ -96,7 +97,7 @@ constexpr std::uint32_t kPendingSignalLifetime = 8192u;
 constexpr std::uint32_t kDropStateStaleRenderDistance = 8192u;
 constexpr std::uint32_t kRemoteMergeSequenceWindow = 16u;
 constexpr std::uint8_t kMergeResolveAttempts = 8u;
-constexpr unsigned kMaxMergeApplicationsPerRender = 8u;
+constexpr unsigned kMaxMergeApplicationsPerRender = 2u;
 constexpr unsigned kMaxMergeLineageDepth = 16u;
 
 constexpr const char *kShieldId = "minecraft:shield";
@@ -105,19 +106,6 @@ constexpr const char *kDragonHeadId = "minecraft:dragon_head";
 
 thread_local bool gForceSingleCopy = false;
 thread_local float *gObservedModelScale = nullptr;
-
-// Actor::remove may run inside normalTick (merge, expiry, or another hook).
-// Track nested calls on the simulation thread without touching render state.
-struct TickRemovalWatch;
-thread_local TickRemovalWatch *gTickRemovalWatch = nullptr;
-struct TickRemovalWatch {
-  void *actor;
-  bool removed{};
-  TickRemovalWatch *previous;
-  explicit TickRemovalWatch(void *value) noexcept
-      : actor(value), previous(gTickRemovalWatch) { gTickRemovalWatch = this; }
-  ~TickRemovalWatch() { gTickRemovalWatch = previous; }
-};
 
 // Every original drop group submits at most five Java-style copies. Retained
 // origins reuse stored sine/cosine pairs, so their copy count never multiplies
@@ -542,46 +530,6 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
     }
   }
 
-  // Physics is optional: a missing boundary disables only this correction.
-  // Removal observation is required so a dead actor is never read post-tick.
-  const auto &module = resolved->module;
-  const auto base = mMinecraftBase;
-  const bool lavaProfile = mActorRemoveOriginal &&
-      module.executable(base + profile::kItemActorNormalTickRva) &&
-      module.executable(base + profile::kActorIsClientSideRva) &&
-      module.executable(base + profile::kStackIsFireResistantRva) &&
-      module.executable(base + profile::kItemIsFireResistantRva) &&
-      matchesFingerprint(module, base + profile::kItemActorNormalTickRva,
-                         profile::kItemActorNormalTickFingerprint) &&
-      matchesFingerprint(module, base + profile::kActorIsClientSideRva,
-                         profile::kActorIsClientSideFingerprint) &&
-      matchesFingerprint(module, base + profile::kStackIsFireResistantRva,
-                         profile::kStackIsFireResistantFingerprint) &&
-      matchesFingerprint(module, base + profile::kItemIsFireResistantRva,
-                         profile::kItemIsFireResistantFingerprint) &&
-      matchesFingerprint(module, base + profile::kActorSetRemovedSequenceRva,
-                         profile::kActorSetRemovedFingerprint);
-  if (lavaProfile) {
-    mActorIsClientSide = reinterpret_cast<NativeBoolFn>(
-        base + profile::kActorIsClientSideRva);
-    mStackIsFireResistant = reinterpret_cast<NativeBoolFn>(
-        base + profile::kStackIsFireResistantRva);
-    mNormalTickHook = std::make_unique<pl::memory::HookHandle>(
-        reinterpret_cast<void *>(base + profile::kItemActorNormalTickRva),
-        reinterpret_cast<void *>(&ItemPhysicsRuntime::normalTickDetour),
-        reinterpret_cast<void **>(&mNormalTickOriginal),
-        pl::memory::HookPriority::Normal);
-    if (!mNormalTickHook->installed() || !mNormalTickOriginal) {
-      mNormalTickHook->reset();
-      mNormalTickHook.reset();
-      mNormalTickOriginal = nullptr;
-    }
-  }
-  if (mNormalTickOriginal)
-    mod.getLogger().info("Physical lava buoyancy active on authoritative ItemActors");
-  else
-    mod.getLogger().warn("Physical lava buoyancy unavailable; visual core retained");
-
   mProfileSupported.store(true, std::memory_order_relaxed);
   if (mSeparateDropTrackingAvailable.load(std::memory_order_relaxed))
     mod.getLogger().info(
@@ -597,10 +545,6 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
 void ItemPhysicsRuntime::uninstall() {
   mProfileSupported.store(false, std::memory_order_relaxed);
   mSeparateDropTrackingAvailable.store(false, std::memory_order_relaxed);
-  if (mNormalTickHook) {
-    mNormalTickHook->reset();
-    mNormalTickHook.reset();
-  }
   if (mActorRemoveHook) {
     mActorRemoveHook->reset();
     mActorRemoveHook.reset();
@@ -628,9 +572,6 @@ void ItemPhysicsRuntime::uninstall() {
   mMatrixRefDtor = nullptr;
   mActorEventOriginal = nullptr;
   mActorRemoveOriginal = nullptr;
-  mNormalTickOriginal = nullptr;
-  mActorIsClientSide = nullptr;
-  mStackIsFireResistant = nullptr;
   mGetActorUniqueId = nullptr;
   mGetPosDelta = nullptr;
   mGetBlockTypeForRendering = nullptr;
@@ -721,57 +662,12 @@ void ItemPhysicsRuntime::actorEventDetour(void *actor, std::uint32_t event,
   });
 }
 
-void ItemPhysicsRuntime::normalTickDetour(void *actor) {
-  auto *const instance = sInstance;
-  const auto original = instance ? instance->mNormalTickOriginal : nullptr;
-  if (!original)
-    return;
-  if (!actor || !instance->mEnabled.load(std::memory_order_relaxed) ||
-      !instance->mProfileSupported.load(std::memory_order_relaxed) ||
-      !instance->mActorIsClientSide || !instance->mStackIsFireResistant ||
-      !instance->mGetPosDelta) {
-    original(actor);
-    return;
-  }
-  const auto address = reinterpret_cast<std::uintptr_t>(actor);
-  const auto removed = [address] {
-    return (*reinterpret_cast<const std::uint8_t *>(
-                address + profile::kActorRemovedOffset) & 1u) != 0;
-  };
-  // Match normalTick's own authority check. Integrated singleplayer/LAN host
-  // actors are corrected; remote-server replicas retain server simulation.
-  if (removed() || instance->mActorIsClientSide(actor) ||
-      !instance->mStackIsFireResistant(reinterpret_cast<const void *>(
-          address + profile::kItemStackBaseOffset))) {
-    original(actor);
-    return;
-  }
-
-  TickRemovalWatch watch(actor);
-  original(actor);
-  // No actor dereference after a removal observed during the original call.
-  if (watch.removed || !instance->mEnabled.load(std::memory_order_relaxed) ||
-      removed())
-    return;
-  // This lookup must not use the render thread's mutable component cache.
-  if (!instance->hasComponent(actor, kWasInLavaFlagComponentHash, false))
-    return;
-  auto *motion = const_cast<Vec3Abi *>(instance->mGetPosDelta(actor));
-  if (motion && std::isfinite(motion->x) && std::isfinite(motion->z))
-    motion->y = lavaVelocityAfterTick(motion->y, true, true, false, true);
-}
-
 void ItemPhysicsRuntime::dispatchActorRemove(void *actor, void *destination,
                                              std::uintptr_t caller) {
   auto *const instance = sInstance;
   const auto original = instance ? instance->mActorRemoveOriginal : nullptr;
   if (!original)
     return;
-
-  for (auto *watch = gTickRemovalWatch; watch; watch = watch->previous) {
-    if (watch->actor == actor)
-      watch->removed = true;
-  }
 
   if (instance->mSeparateDropVisuals.load(std::memory_order_relaxed) && actor &&
       *reinterpret_cast<const std::uintptr_t *>(actor) ==
@@ -1404,6 +1300,7 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
       hasMotion = true;
     }
   }
+  state.lastVerticalSpeed = verticalSpeed;
 
   if (inFluid) {
     // Java's calculateFluid path keeps a floating item airborne. A stable
@@ -1484,13 +1381,18 @@ void ItemPhysicsRuntime::applyMergedLineage(
     mDropAnchors.reconcile(source.dropLineage, sourceCount);
 
   bool merged = false;
+  const auto sourceAnchors = mDropAnchors.anchorCount(source.dropLineage);
+  const auto destinationAnchors =
+      mDropAnchors.anchorCount(destination.dropLineage);
   if (source.dropPoseSampled &&
-      destination.dropLineage.trackedCount == oldCount) {
+      destination.dropLineage.trackedCount == oldCount &&
+      canRetainDropPose(source.dropPose, destination.dropPose) &&
+      withinDropAnchorBudget(destinationAnchors, sourceAnchors,
+                             kMaxDropAnchorsPerLineage)) {
     const float sampleDelta = source.lastSample - destinationSample;
     merged = mDropAnchors.merge(
         source.dropLineage, source.dropPose, sourceCount,
-        destination.dropLineage, oldCount, newCount, sampleDelta,
-        destinationSample);
+        destination.dropLineage, oldCount, newCount, sampleDelta);
   }
 
   if (!merged) {
@@ -1669,9 +1571,9 @@ void ItemPhysicsRuntime::updateRotation(VisualState &state,
       delta > kMaxContinuousDeltaTicks)
     return;
 
-  if (!keepsLandingAngle && grounded) {
-    // Flat items and thin structural block models snap only on the first real
-    // ground frame. There is deliberately no pre-contact alignment.
+  if (!keepsLandingAngle && (grounded || inFluid)) {
+    // Flat items and thin structural block models snap at real ground contact
+    // or liquid entry. There is deliberately no dry-air pre-alignment.
     state.xRot = 0.0f;
     return;
   }
@@ -1747,7 +1649,11 @@ float ItemPhysicsRuntime::renderWorldY(
     float originalWorldY, const ItemRenderTraits &traits, bool grounded,
     DropFluidKind fluid, float sample, std::uint8_t phaseTick) const noexcept {
   const bool inFluid = isFluid(fluid);
-  const float waterSurfaceLift = inFluid ? kFluidSurfaceLiftY : 0.0f;
+  const float waterSurfaceLift =
+      !inFluid ? 0.0f
+               : (traits.height == HeightClass::FullBlock
+                      ? kFullBlockFluidSurfaceLiftY
+                      : kOtherFluidSurfaceLiftY);
   const float waterBob =
       inFluid ? waterBobOffset(sample, phaseTick, fluid) : 0.0f;
   return originalWorldY + heightOffset(traits, grounded) + waterSurfaceLift +
@@ -1885,6 +1791,7 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
   // cost. Never store ActorRenderData's camera-relative Y as a fluid anchor.
   RenderSpacePoint ownerWorldPosition{};
   bool ownerWorldPositionSampled = false;
+  float ownerTickWorldY = originalWorldY;
   if (separateDropVisuals || isFluid(state.fluid)) {
     using GetActorPositionFn = const Vec3Abi *(*)(const void *);
     const auto getPosition = reinterpret_cast<GetActorPositionFn>(
@@ -1894,6 +1801,7 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
     const auto *current = getPosition(actor);
     const auto *previous = getPreviousPosition(actor);
     if (current && previous) {
+      ownerTickWorldY = current->y;
       ownerWorldPosition = {
           previous->x + (current->x - previous->x) * partial,
           previous->y + (current->y - previous->y) * partial,
@@ -1908,7 +1816,8 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
   float fluidRenderY = originalWorldY;
   if (isFluid(state.fluid) && ownerWorldPositionSampled) {
     const float baseY = state.fluidBase.update(
-        ownerWorldPosition.y, sample, state.fluid);
+        ownerWorldPosition.y, ownerTickWorldY, state.lastVerticalSpeed, age,
+        state.fluid);
     fluidRenderY += baseY - ownerWorldPosition.y;
   } else {
     state.fluidBase = {};
@@ -1936,11 +1845,10 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
       .routeScale = routeScale,
       .bobOffset = bobOffset,
       .waterSampleBias = static_cast<float>(state.waterBobPhase),
-      .fluidLastSample = sample,
       .fluid = state.fluid,
       .grounded = grounded,
-      .fluidBobbing = isFluid(state.fluid) &&
-                     (!ownerWorldPositionSampled || state.fluidBase.bobbing()),
+      .fluidBobbing = isFluid(state.fluid) && ownerWorldPositionSampled &&
+                     state.fluidBase.bobbing(),
   };
 
   const RenderSpacePoint ownerRenderPosition{worldX, originalWorldY, worldZ};
@@ -1972,9 +1880,6 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
         mDropAnchors.observe(state.dropLineage, count);
       if (state.dropLineage.initialized && state.dropLineage.rootCount)
         liveGroupCount = state.dropLineage.rootCount;
-      if (isFluid(state.fluid) && state.dropLineage.initialized)
-        mDropAnchors.advanceFluidAnchors(
-            state.dropLineage, state.dropPose.baseWorldY, sample);
     } else if (state.dropLineage.initialized) {
       mDropAnchors.release(state.dropLineage);
     }
