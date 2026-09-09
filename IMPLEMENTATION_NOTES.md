@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.14.1
+# Implementation notes: universal visual core 0.15.0
 
 ## Source behavior reproduced
 
@@ -13,18 +13,18 @@ The Bedrock implementation follows the same boundary:
    omits it, require stable world Y on four ItemActor age ticks, or two when
    `VerticalCollisionFlagComponent` confirms contact. Once latched, only actual
    ItemActor vertical velocity can release it; camera sneak cannot. A live or
-   four-tick-grace `WasInWaterFlagComponent` explicitly excludes stable surface
-   Y from this ground fallback.
+   four-tick-grace `WasInWaterFlagComponent` or `WasInLavaFlagComponent`
+   explicitly excludes stable surface Y from this ground fallback.
 3. Advance one scalar rotation from `age + partialTick` only while airborne and
-   outside water. In water, retain the last scalar angle and compose Bedrock's
-   ItemActor position with a small render-only sampled vertical wave.
+   outside fluid. In water or lava, retain the last scalar angle and compose
+   Bedrock's ItemActor position with a small render-only sampled vertical wave.
 4. Choose block or flat pivot; never choose a separate airborne motion family.
    Classification controls ground height and whether a thin structural model
    takes its corrected contact pose after—not before—contact. Horizontal block
    models preserve their native world-up thin axis. No visual-AABB centre
    subtraction is applied because Bedrock's rendered block-item origin is not
    the AABB centre; applying it pushed slabs and trapdoors below the floor. The
-   same world-up pose is selected while `WasInWaterFlagComponent` is active.
+   same world-up pose is selected while either fluid flag is active.
 5. Push the world matrix, apply the Java pose around render position, submit one
    native model, and pop the matrix.
 6. Repeat submission using Java's model-count thresholds, but place copies in a
@@ -45,10 +45,11 @@ Java's bytecode applies `realtimeDeltaTicks * 0.25 * rotateSpeed`, doubles that
 step while airborne, and divides it by `1 + viscosity` in fluid. CreativeCore's
 Fabric implementation returns `fluid.getTickDelay(level) / 5`, which is one for
 water. The Bedrock adaptation keeps the exact doubled air step but intentionally
-freezes custom roll while `WasInWaterFlagComponent` is active. The vertical
+freezes custom roll while either native fluid flag is active. The vertical
 render wave uses `+/-0.015` extrema, an eight-tick lower hold, approximately
-`0.10` radians/tick while moving, and a twenty-tick upper hold. Ground-only Y
-corrections are never applied while airborne or floating.
+`0.10` radians/tick while moving, and a twenty-tick upper hold. Lava evaluates
+the same table at half water speed. Ground-only Y corrections are never applied
+while airborne or floating.
 
 Java bytecode applies no skull- or Dragon-Head-specific pivot: every
 `usesBlockLight()` model follows the same block transform. The former Bedrock
@@ -168,16 +169,16 @@ state timing, copy count, or transforms. Release compilation uses `-O2`; LTO,
 dead-section collection, identical-code folding, external `c++_shared`, and
 full stripping continue to keep the native library well under the build cap.
 
-Bedrock's water-state position leaves the custom item model approximately half
+Bedrock's fluid-state position leaves the custom item model approximately half
 an ItemActor height below the desired visible line. A uniform `+0.125` render-Y
-correction is therefore applied to every item class while the native water flag
-is live. The bounded `+/-0.015` sampled wave is added after that lift. Its
+correction is therefore applied to every item class while a native water or
+lava flag is live. The bounded `+/-0.015` sampled wave is added after that lift. Its
 entity-derived phase keeps nearby items out of lockstep. Dry actors do not
 evaluate it, and wet actors use table interpolation with no trigonometric call.
 Ground-height selection uses compile-time constants with no float atomics or
 string parsing in the render loop. These visual offsets change neither actor
 position nor velocity. Horizontal-thin
-items select the same world-up basis for `(grounded || inWater)`, while their
+items select the same world-up basis for `(grounded || inFluid)`, while their
 complete dry-air transform remains unchanged.
 
 The version 0.13.0 exact-count grid experiment is removed. Rendering every
@@ -210,7 +211,7 @@ RVA `0xEC8B12C` provide a stable correlation key.
 For an exact local observation, the render thread moves the source lineage to
 the destination lineage. It creates one fixed-size anchor containing the
 source's last fully rendered XYZ origin, frozen rotation sine/cosine pairs,
-route scale, bob offset, contact/water flags, and original source-root count.
+route scale, bob offset, contact/fluid state, and original source-root count.
 Any anchors already owned by the source are spliced into the same chain, so an
 `A -> B -> C` sequence retains all three independent origins. The live root
 keeps following the native destination actor.
@@ -231,18 +232,29 @@ or capacity-exhausted history collapses into the live destination group. This
 is deliberately fail-closed: an omitted separation is preferable to a ghost
 copied from an unrelated item.
 
-Frozen water origins retain the established vertical-only waveform. An anchor
-stores the native-Y-derived base separately from the bob and carries a sample
-bias. When a complete lineage changes owners, the bias is rebased by source
-sample minus destination sample, preserving the current vertical position and
-then advancing with the survivor's tick sample. XZ and roll remain frozen.
+Version 0.15.0 makes retained fluid origins follow the missing native buoyancy
+phase after their source `ItemActor` is removed. Each anchor records whether it
+was in water or lava and stores the native-Y-derived base separately from the
+bob. While the live survivor remains in fluid, that base approaches the
+survivor's current non-bob surface base at `0.04` block/tick for water or
+`0.02` block/tick for lava. The approach is driven by `age + partialTick`, is
+independent of render FPS, clamps at the target, and never pulls an anchor
+downward. Bobbing is withheld during ascent and enabled only after the target
+is reached. Water then uses the established waveform; lava uses the same
+waveform at half speed. XZ and roll remain frozen.
+
+When a complete lineage changes owners, its waveform bias is rebased by source
+sample minus destination sample, scaled for its fluid, preserving phase without
+a vertical jump. The anchor pool performs one bounded traversal for ascent only
+while `Separate Drop Visuals` is enabled and the survivor is in fluid. It adds
+no actor, packet, block query, per-anchor ECS lookup, or per-anchor trigonometry.
 
 The existing render-group detour still forces one native model per custom
 submission. `Single Model` means one submission per independent origin, not one
 origin for the complete native stack. With separate visuals disabled, the
 renderer remains on its prior maximum-five-copy path. With it enabled, model
 submission necessarily scales with retained origins, but it adds no entity,
-per-copy physics, packet, ECS lookup, block classification, water query, or
+per-copy physics, packet, ECS lookup, block classification, fluid query, or
 per-copy trigonometric work. The stripped library remains subject to the same
 600-KiB hard limit.
 
@@ -261,6 +273,7 @@ per-copy trigonometric work. The stripped library remains subject to the same
 - On-ground component hash: `0xC29078A0`
 - Vertical-collision component hash: `0xC6A02A9A`
 - Was-in-water component hash: `0x78E89F39`
+- Was-in-lava component hash: `0x832A2768`
 - Actor position delta: `0xEC82A68`
 - Actor current/previous position: `0xEC7A020` / `0xEC8EAAC`
 - BlockGraphics helpers: `0xA2189DC`, `0xA2189F0`, `0xA219718`, `0xA280E68`

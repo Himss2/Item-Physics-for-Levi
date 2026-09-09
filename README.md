@@ -1,7 +1,7 @@
 # Levi Item Physics
 
 ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.45.1`.
-Version `0.14.1` preserves the device-approved Java ItemPhysic-style airborne,
+Version `0.15.0` preserves the device-approved Java ItemPhysic-style airborne,
 landing, ground-height, head, shadow, and water behavior, and replaces the old
 exact-count grid experiment with optional per-drop visual positions.
 
@@ -29,11 +29,12 @@ exact-count grid experiment with optional per-drop visual positions.
   `-0.205` for generic shaped, `-0.087` for full block, `-0.178` for slab/thin,
   `+0.165` for normal skull, `+0.203` for Dragon Head, `-0.147` for Shield,
   `-0.159` for Banner, `-0.171` for Fence/Gate, and `-0.081` for Scaffolding.
-- Water freezes the last roll angle and adds only vertical surface movement.
-  A class-independent `+0.125` lift places items at the visible water line.
+- Water and lava freeze the last roll angle and add only vertical surface
+  movement. A class-independent `+0.125` lift places items at the visible line.
   The render-only wave has `+/-0.015` amplitude, an eight-tick lower hold, a
   smooth rise, a twenty-tick upper hold, and a mirrored fall. Its 91-sample
-  table avoids an extra trigonometric call in the water path.
+  table avoids an extra trigonometric call in the fluid path. Lava uses half
+  the water waveform speed.
 - Java stack-copy thresholds remain `1 / 2 / 3 / 4 / 5` visible models at
   counts `1 / 2 / 17 / 33 / 49`. Every copy remains on one world-XZ plane.
 - `Single Model` and `Hide Item Shadow` remain immediate Mod Menu toggles.
@@ -54,8 +55,11 @@ requested visual behavior without changing Minecraft's stack rules:
 4. Each origin uses Java's normal 1-to-5 copy threshold for the count originally
    represented by that drop. `Single Model` reduces each retained origin to one
    model; it does not erase the independent origins.
-5. A retained water origin keeps only the approved vertical bob, with its phase
-   rebased at transfer so the merge does not cause a vertical jump.
+5. A retained water or lava origin first rises toward the surviving actor's
+   non-bob surface height while X/Z stay fixed. It moves at `0.04` block/tick
+   in water or `0.02` block/tick in lava, never moves downward, and begins the
+   approved vertical bob only after reaching that height. Its phase is rebased
+   at transfer so neither ownership change nor bob start causes a jump.
 
 Local-world merges use the exact source and destination UniqueIDs captured at
 the analyzed `ItemActor::normalTick` removal call. A remote client does not
@@ -66,7 +70,7 @@ case deliberately collapses to the surviving live group instead of showing a
 ghost at the wrong position.
 
 The tracker uses fixed arrays: no heap allocation, per-copy physics, entity
-spawn, packet, or world query is added. The anchor pool is capped at 256 visual
+spawn, packet, block query, or world query is added. The anchor pool is capped at 256 visual
 origins and stale states are reclaimed incrementally. With the toggle off, the
 two merge observers perform only their disabled branch and the renderer stays
 on the original maximum-five-copy path. With it on, geometry cost necessarily
@@ -150,6 +154,9 @@ but visibly different positions. After native merge, every source model must
 remain at its last position and orientation instead of moving to the first
 item. Test chained `A -> B -> C` merges, separately dropped multi-item stacks,
 partial transfers near stack limits, pickup/despawn of the survivor, water
-merges, `Single Model`, toggle-off cleanup, and toggle-on restart. In multiplayer,
+and lava merges at several depths, `Single Model`, toggle-off cleanup, and
+toggle-on restart. A submerged retained origin must keep X/Z fixed, rise to the
+survivor's surface height, then bob without rotation; lava must rise and bob at
+half water speed. In multiplayer,
 create two simultaneous same-item merges; an ambiguous pair may collapse to one
 live group but must never create a visual at an unrelated source position.
