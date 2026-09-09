@@ -54,18 +54,37 @@ target_include_directories(
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 
-# The visual core intentionally has no JSON/reflection dependency. fmt is the
-# only support library retained because it is part of the preloader logger API.
+# pl/Config.hpp is a public PreLoader header but its reflection/JSON
+# dependencies are PRIVATE on the pinned PreLoader target. Link those
+# header-only interface targets here so their include paths reach this mod.
 # c++_shared stays external in LeviLaunchroid, keeping this .so small.
-target_link_libraries(levi_item_physics PRIVATE preloader fmt::fmt)
+target_link_libraries(
+  levi_item_physics
+  PRIVATE
+  preloader
+  fmt::fmt
+  nlohmann_json::nlohmann_json
+  Boost::pfr
+  magic_enum::magic_enum
+)
 
 find_library(LOG_LIB log)
 find_library(DL_LIB dl)
+
 if(LOG_LIB)
-  target_link_libraries(levi_item_physics PRIVATE "${LOG_LIB}")
+  target_link_libraries(
+    levi_item_physics
+    PRIVATE
+    "${LOG_LIB}"
+  )
 endif()
+
 if(DL_LIB)
-  target_link_libraries(levi_item_physics PRIVATE "${DL_LIB}")
+  target_link_libraries(
+    levi_item_physics
+    PRIVATE
+    "${DL_LIB}"
+  )
 endif()
 
 target_compile_options(
@@ -74,6 +93,7 @@ target_compile_options(
   -Wall
   -Wextra
   -Wpedantic
+
   # This renderer runs on the frame thread. O2 keeps the small stripped binary
   # far below the package cap while avoiding Oz's speed-for-size trade-offs.
   -O2
@@ -95,7 +115,11 @@ target_link_options(
 )
 
 include(CheckIPOSupported)
-check_ipo_supported(RESULT IPO_OK OUTPUT IPO_ERROR)
+check_ipo_supported(
+  RESULT IPO_OK
+  OUTPUT IPO_ERROR
+)
+
 if(IPO_OK)
   set_property(
     TARGET levi_item_physics
@@ -105,4 +129,7 @@ else()
   message(WARNING "IPO/LTO unavailable: ${IPO_ERROR}")
 endif()
 
-message(STATUS "Levi Item Physics: ABI=${ANDROID_ABI}, platform=${ANDROID_PLATFORM}, strict 1.26.45.1 visual profile")
+message(
+  STATUS
+  "Levi Item Physics: ABI=${ANDROID_ABI}, platform=${ANDROID_PLATFORM}, strict 1.26.45.1 visual profile"
+)
