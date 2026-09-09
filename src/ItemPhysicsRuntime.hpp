@@ -130,14 +130,14 @@ private:
     std::int32_t lastProbeAge{-1};
     std::uint8_t stableContactTicks{};
     std::uint8_t movingTicks{};
-    std::uint8_t waterMissTicks{};
+    std::uint8_t fluidMissTicks{};
     std::uint8_t waterBobPhase{};
     bool used{};
     bool sampled{};
     bool traitsSampled{};
     bool positionSampled{};
     bool groundedLatched{};
-    bool inWater{};
+    DropFluidKind fluid{DropFluidKind::None};
     bool shadowInitialized{};
     bool shadowHidden{};
     bool shadowGrounded{};
@@ -174,6 +174,7 @@ private:
     void *onGround{};
     void *verticalCollision{};
     void *inWater{};
+    void *inLava{};
     void *relativeShadow{};
   };
 
@@ -235,10 +236,11 @@ private:
   [[nodiscard]] float heightOffset(const ItemRenderTraits &,
                                    bool) const noexcept;
   [[nodiscard]] float waterBobOffset(float sample,
-                                     std::uint8_t phaseTick) const noexcept;
+                                     float sampleBias,
+                                     DropFluidKind fluid) const noexcept;
   [[nodiscard]] float renderWorldY(float originalWorldY,
                                    const ItemRenderTraits &, bool grounded,
-                                   bool inWater, float sample,
+                                   DropFluidKind fluid, float sample,
                                    std::uint8_t phaseTick) const noexcept;
   [[nodiscard]] std::uint64_t actorUniqueId(void *) const noexcept;
   [[nodiscard]] std::uintptr_t itemTypeKey(std::uintptr_t) const noexcept;

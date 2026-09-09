@@ -12,6 +12,30 @@ namespace itemphysics {
 inline constexpr std::uint16_t kNoDropVisualAnchor =
     std::numeric_limits<std::uint16_t>::max();
 
+enum class DropFluidKind : std::uint8_t {
+  None,
+  Water,
+  Lava,
+};
+
+[[nodiscard]] constexpr bool isFluid(DropFluidKind fluid) noexcept {
+  return fluid != DropFluidKind::None;
+}
+
+[[nodiscard]] constexpr float
+fluidMotionScale(DropFluidKind fluid) noexcept {
+  return fluid == DropFluidKind::Lava ? 0.5f : 1.0f;
+}
+
+[[nodiscard]] constexpr float
+fluidRisePerTick(DropFluidKind fluid) noexcept {
+  if (fluid == DropFluidKind::Water)
+    return 0.04f;
+  if (fluid == DropFluidKind::Lava)
+    return 0.02f;
+  return 0.0f;
+}
+
 [[nodiscard]] constexpr std::uint32_t
 javaVisualCopyCount(std::uint32_t count) noexcept {
   if (count > 48u)
@@ -78,8 +102,10 @@ struct DropVisualPose {
   float routeScale{};
   float bobOffset{};
   float waterSampleBias{};
+  float fluidLastSample{};
+  DropFluidKind fluid{DropFluidKind::None};
   bool grounded{};
-  bool inWater{};
+  bool fluidBobbing{};
 };
 
 struct DropVisualLineage {
@@ -126,7 +152,8 @@ public:
                            DropVisualLineage &destination,
                            std::uint32_t destinationOldCount,
                            std::uint32_t destinationNewCount,
-                           float waterSampleDelta = 0.0f) noexcept {
+                           float waterSampleDelta = 0.0f,
+                           float destinationSample = 0.0f) noexcept {
     const auto sourceTotal = clampCount(sourceCount);
     const auto oldTotal = clampCount(destinationOldCount);
     const auto newTotal = clampCount(destinationNewCount);
@@ -145,7 +172,10 @@ public:
     auto &rootAnchor = mAnchors[freeIndex];
     rootAnchor = {};
     rootAnchor.pose = sourcePose;
-    rootAnchor.pose.waterSampleBias += waterSampleDelta;
+    rootAnchor.pose.waterSampleBias +=
+        waterSampleDelta * fluidMotionScale(rootAnchor.pose.fluid);
+    rootAnchor.pose.fluidLastSample = destinationSample;
+    rootAnchor.pose.fluidBobbing = false;
     rootAnchor.count = source.rootCount;
     rootAnchor.used = true;
 
@@ -158,7 +188,9 @@ public:
       auto tail = source.head;
       for (std::size_t guard = 0; guard < Capacity; ++guard) {
         auto &node = mAnchors[tail];
-        node.pose.waterSampleBias += waterSampleDelta;
+        node.pose.waterSampleBias +=
+            waterSampleDelta * fluidMotionScale(node.pose.fluid);
+        node.pose.fluidLastSample = destinationSample;
         if (node.next == kNoDropVisualAnchor) {
           node.next = destination.head;
           break;
@@ -172,6 +204,34 @@ public:
     source = {};
     source.head = kNoDropVisualAnchor;
     return true;
+  }
+
+  void advanceFluidAnchors(const DropVisualLineage &lineage,
+                           float targetBaseWorldY,
+                           float currentSample) noexcept {
+    auto index = lineage.head;
+    for (std::size_t guard = 0;
+         index != kNoDropVisualAnchor && guard < Capacity; ++guard) {
+      if (index >= Capacity)
+        return;
+      auto &anchor = mAnchors[index];
+      if (!anchor.used)
+        return;
+
+      auto &pose = anchor.pose;
+      if (isFluid(pose.fluid)) {
+        const float delta = currentSample - pose.fluidLastSample;
+        pose.fluidLastSample = currentSample;
+        if (delta > 0.0f && delta <= 10.0f &&
+            targetBaseWorldY > pose.baseWorldY) {
+          const float rise = fluidRisePerTick(pose.fluid) * delta;
+          pose.baseWorldY =
+              std::min(pose.baseWorldY + rise, targetBaseWorldY);
+        }
+        pose.fluidBobbing = pose.baseWorldY >= targetBaseWorldY - 0.0005f;
+      }
+      index = anchor.next;
+    }
   }
 
   void reconcile(DropVisualLineage &lineage,

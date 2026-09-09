@@ -40,7 +40,7 @@ constexpr float kDefaultBlockScale = 0.25f;
 constexpr float kFlatStackWorldStep = 0.055f;
 constexpr float kBlockStackScaleStep = 0.32f;
 constexpr float kMaxContinuousDeltaTicks = 10.0f;
-constexpr float kWaterSurfaceLiftY = 0.125f;
+constexpr float kFluidSurfaceLiftY = 0.125f;
 constexpr std::uint32_t kWaterCycleTicks = 91u;
 // One-tick samples of the approved waveform: 8 ticks at the bottom, a
 // half-sine transition at approximately 0.10 radians/tick, 20 ticks at the
@@ -85,7 +85,8 @@ constexpr std::int32_t kSkullShape = 83;
 constexpr float kExtentEpsilon = 0.0005f;
 constexpr float kThinYRatio = 0.70f;
 constexpr std::uint32_t kWasInWaterFlagComponentHash = 0x78E89F39u;
-constexpr std::uint8_t kWaterContactGraceTicks = 4u;
+constexpr std::uint32_t kWasInLavaFlagComponentHash = 0x832A2768u;
+constexpr std::uint8_t kFluidContactGraceTicks = 4u;
 
 constexpr float kStablePositionEpsilon = 0.012f;
 constexpr float kCollisionPositionEpsilon = 0.025f;
@@ -890,6 +891,9 @@ void *ItemPhysicsRuntime::findComponentStorage(void *actor,
   case kWasInWaterFlagComponentHash:
     cached = &cache.inWater;
     break;
+  case kWasInLavaFlagComponentHash:
+    cached = &cache.inLava;
+    break;
   case profile::kRelativeShadowOffsetComponentHash:
     cached = &cache.relativeShadow;
     break;
@@ -1262,17 +1266,24 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
       actor, profile::kVerticalCollisionFlagComponentHash);
   const bool nativeInWater =
       hasComponent(actor, kWasInWaterFlagComponentHash);
+  const bool nativeInLava =
+      hasComponent(actor, kWasInLavaFlagComponentHash);
+  const DropFluidKind nativeFluid =
+      nativeInLava ? DropFluidKind::Lava
+                   : (nativeInWater ? DropFluidKind::Water
+                                    : DropFluidKind::None);
 
-  if (nativeInWater) {
-    state.inWater = true;
-    state.waterMissTicks = 0;
-  } else if (state.inWater &&
-             state.waterMissTicks < kWaterContactGraceTicks) {
-    ++state.waterMissTicks;
+  if (isFluid(nativeFluid)) {
+    state.fluid = nativeFluid;
+    state.fluidMissTicks = 0;
+  } else if (isFluid(state.fluid) &&
+             state.fluidMissTicks < kFluidContactGraceTicks) {
+    ++state.fluidMissTicks;
   } else {
-    state.inWater = false;
-    state.waterMissTicks = 0;
+    state.fluid = DropFluidKind::None;
+    state.fluidMissTicks = 0;
   }
+  const bool inFluid = isFluid(state.fluid);
 
   float verticalSpeed = 0.0f;
   bool hasMotion = false;
@@ -1289,9 +1300,9 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
     state.groundedLatched = true;
     state.stableContactTicks = 4;
     state.movingTicks = 0;
-  } else if (state.inWater) {
+  } else if (inFluid) {
     // Java's calculateFluid path keeps a floating item airborne. A stable
-    // water-surface Y must never enter the mob-drop ground fallback.
+    // fluid-surface Y must never enter the mob-drop ground fallback.
     state.groundedLatched = false;
     state.stableContactTicks = 0;
     state.movingTicks = 0;
@@ -1319,7 +1330,7 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
     const bool moving =
         hasMotion && std::abs(verticalSpeed) >= kWakeVerticalSpeed;
 
-    if (!nativeGrounded && !state.inWater) {
+    if (!nativeGrounded && !inFluid) {
       if (!state.groundedLatched) {
         state.stableContactTicks = stableCollision || stablePosition
                                        ? static_cast<std::uint8_t>(
@@ -1369,7 +1380,8 @@ void ItemPhysicsRuntime::applyMergedLineage(
     const float sampleDelta = source.lastSample - destinationSample;
     merged = mDropAnchors.merge(
         source.dropLineage, source.dropPose, sourceCount,
-        destination.dropLineage, oldCount, newCount, sampleDelta);
+        destination.dropLineage, oldCount, newCount, sampleDelta,
+        destinationSample);
   }
 
   if (!merged) {
@@ -1531,7 +1543,7 @@ void ItemPhysicsRuntime::processPendingMerges(
 
 void ItemPhysicsRuntime::updateRotation(VisualState &state,
                                         bool keepsLandingAngle,
-                                        bool grounded, bool inWater,
+                                        bool grounded, bool inFluid,
                                         std::int32_t age,
                                         float sample) noexcept {
   if (!std::isfinite(sample))
@@ -1555,9 +1567,9 @@ void ItemPhysicsRuntime::updateRotation(VisualState &state,
     return;
   }
 
-  if (!grounded && !inWater) {
-    // Keep the Java airborne tumble exact. Once Bedrock reports water, freeze
-    // the last roll; the render path may add vertical motion but never spin.
+  if (!grounded && !inFluid) {
+    // Keep the Java airborne tumble exact. Once Bedrock reports water or lava,
+    // freeze the last roll; render may add vertical motion but never spin.
     state.xRot += delta * kRotationPerTick * 2.0f * kDefaultRotationSpeed;
   }
   // Full 3D blocks freeze at their exact airborne angle after contact. Heads
@@ -1601,17 +1613,21 @@ float ItemPhysicsRuntime::heightOffset(const ItemRenderTraits &traits,
 }
 
 float ItemPhysicsRuntime::waterBobOffset(float sample,
-                                         std::uint8_t phaseTick) const noexcept {
+                                         float sampleBias,
+                                         DropFluidKind fluid) const noexcept {
   if (!std::isfinite(sample) || sample < 0.0f ||
       sample > static_cast<float>(std::numeric_limits<std::uint32_t>::max()))
     return 0.0f;
 
-  const auto wholeTick = static_cast<std::uint32_t>(sample);
-  const float partial = sample - static_cast<float>(wholeTick);
-  std::uint32_t index =
-      wholeTick % kWaterCycleTicks + phaseTick % kWaterCycleTicks;
-  if (index >= kWaterCycleTicks)
-    index -= kWaterCycleTicks;
+  const float motionSample =
+      sample * fluidMotionScale(fluid) + sampleBias;
+  if (!std::isfinite(motionSample) || motionSample < 0.0f ||
+      motionSample >
+          static_cast<float>(std::numeric_limits<std::uint32_t>::max()))
+    return 0.0f;
+  const auto wholeTick = static_cast<std::uint32_t>(motionSample);
+  const float partial = motionSample - static_cast<float>(wholeTick);
+  const std::uint32_t index = wholeTick % kWaterCycleTicks;
   const std::uint32_t next =
       index + 1u == kWaterCycleTicks ? 0u : index + 1u;
   const float from = kWaterBobSamples[index];
@@ -1620,9 +1636,11 @@ float ItemPhysicsRuntime::waterBobOffset(float sample,
 
 float ItemPhysicsRuntime::renderWorldY(
     float originalWorldY, const ItemRenderTraits &traits, bool grounded,
-    bool inWater, float sample, std::uint8_t phaseTick) const noexcept {
-  const float waterSurfaceLift = inWater ? kWaterSurfaceLiftY : 0.0f;
-  const float waterBob = inWater ? waterBobOffset(sample, phaseTick) : 0.0f;
+    DropFluidKind fluid, float sample, std::uint8_t phaseTick) const noexcept {
+  const bool inFluid = isFluid(fluid);
+  const float waterSurfaceLift = inFluid ? kFluidSurfaceLiftY : 0.0f;
+  const float waterBob =
+      inFluid ? waterBobOffset(sample, phaseTick, fluid) : 0.0f;
   return originalWorldY + heightOffset(traits, grounded) + waterSurfaceLift +
          waterBob;
 }
@@ -1713,7 +1731,7 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
   }
   const auto &traits = state.traits;
   updateRotation(state, traits.block && !traits.groundFlat, grounded,
-                 state.inWater, age, sample);
+                 isFluid(state.fluid), age, sample);
 
   // Java keeps the first tick vanilla, but calculateRotation has already run.
   // This warm-up also learns Bedrock's route-specific model scale.
@@ -1753,17 +1771,20 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
 
   const float worldX = position[0];
   // Bedrock keeps the ItemActor centre approximately half of its 0.25-block
-  // height below the visible water line. Apply one class-independent visual
-  // lift while its native water component is live; do not alter actor motion.
+  // height below the visible fluid line. Apply one class-independent visual
+  // lift while a native fluid component is live; do not alter actor motion.
   const float worldY = renderWorldY(originalWorldY, traits, grounded,
-                                    state.inWater, sample,
+                                    state.fluid, sample,
                                     state.waterBobPhase);
   const float worldZ = position[2];
   const float routeScale =
       state.modelScale > 0.0f ? state.modelScale : kDefaultBlockScale;
 
   const float currentWaterBob =
-      state.inWater ? waterBobOffset(sample, state.waterBobPhase) : 0.0f;
+      isFluid(state.fluid)
+          ? waterBobOffset(sample, static_cast<float>(state.waterBobPhase),
+                           state.fluid)
+          : 0.0f;
   const DropVisualPose liveRenderPose{
       .worldX = worldX,
       .baseWorldY = worldY - currentWaterBob,
@@ -1775,8 +1796,10 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
       .routeScale = routeScale,
       .bobOffset = bobOffset,
       .waterSampleBias = static_cast<float>(state.waterBobPhase),
+      .fluidLastSample = sample,
+      .fluid = state.fluid,
       .grounded = grounded,
-      .inWater = state.inWater,
+      .fluidBobbing = isFluid(state.fluid),
   };
 
   // ActorRenderData::position is expressed relative to the current render
@@ -1835,6 +1858,9 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
         mDropAnchors.observe(state.dropLineage, count);
       if (state.dropLineage.initialized && state.dropLineage.rootCount)
         liveGroupCount = state.dropLineage.rootCount;
+      if (isFluid(state.fluid) && state.dropLineage.initialized)
+        mDropAnchors.advanceFluidAnchors(
+            state.dropLineage, state.dropPose.baseWorldY, sample);
     } else if (state.dropLineage.initialized) {
       mDropAnchors.release(state.dropLineage);
     }
@@ -1857,10 +1883,13 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
             ? std::max(kFlatStackWorldStep,
                        pose.routeScale * kBlockStackScaleStep)
             : kFlatStackWorldStep;
+    const bool applyFluidBob =
+        isFluid(pose.fluid) &&
+        (!persistentWorldAnchor || pose.fluidBobbing);
     const float groupPoseY =
         pose.baseWorldY +
-        (pose.inWater
-             ? waterBobOffset(sample + pose.waterSampleBias, 0)
+        (applyFluidBob
+             ? waterBobOffset(sample, pose.waterSampleBias, pose.fluid)
              : 0.0f);
     const RenderSpacePoint groupRenderOrigin =
         persistentWorldAnchor
@@ -1895,7 +1924,7 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
                     groupRenderOrigin.y,
                     groupRenderOrigin.z + worldOffset.z);
       const bool horizontalSurfacePose =
-          (pose.grounded || pose.inWater) &&
+          (pose.grounded || isFluid(pose.fluid)) &&
           traits.height == HeightClass::HorizontalThin;
       if (horizontalSurfacePose) {
         // The existing approved slab/trapdoor/carpet ground and water basis is
