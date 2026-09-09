@@ -5,11 +5,33 @@ from __future__ import annotations
 import hashlib
 import struct
 import sys
+import zipfile
 from pathlib import Path
 
 EXPECTED_SHA256 = "444e77434bdd3789a0d90978d06336a99831e78e52955e528258cc375dfa0557"
 
 PROFILE = {
+    "ItemActor::normalTick (optional lava hook)": (
+        0x0F124154,
+        [0xD10383FF, 0xFD003BE8, 0xA9087BFD, 0xA9096FFC,
+         0xA90A67FA, 0xA90B5FF8, 0xA90C57F6, 0xA90D4FF4],
+    ),
+    "Actor::isClientSide": (
+        0x0EC8E9D8,
+        [0xF940E800, 0xB4000080, 0xF9400008, 0xF944F901,
+         0xD61F0020, 0x52800020, 0xD65F03C0],
+    ),
+    "ItemStackBase::isFireResistant": (
+        0x0F63FC00,
+        [0xF9400408, 0xB4000088, 0xF9400100, 0xB4000040,
+         0x1400A765, 0x2A1F03E0, 0xD65F03C0],
+    ),
+    "Item::isFireResistant flag": (
+        0x0F6699A4, [0x79422408, 0x53051500, 0xD65F03C0],
+    ),
+    "Actor::remove flag setter": (
+        0x0EC9011C, [0xB9401A74, 0x72A88681, 0x39094668],
+    ),
     "ItemRenderer::render": (
         0x0A29F708,
         [
@@ -143,10 +165,19 @@ def rva_to_file_offset(segments: list[tuple[int, int, int]], rva: int) -> int:
 
 def main() -> int:
     if len(sys.argv) != 2:
-        print(f"usage: {Path(sys.argv[0]).name} /path/to/libminecraftpe.so")
+        print(f"usage: {Path(sys.argv[0]).name} /path/to/libminecraftpe.so-or-zip")
         return 2
 
-    data = Path(sys.argv[1]).read_bytes()
+    source = Path(sys.argv[1])
+    try:
+        if source.suffix.lower() == ".zip":
+            with zipfile.ZipFile(source) as archive:
+                data = archive.read("libminecraftpe.so")
+        else:
+            data = source.read_bytes()
+    except (OSError, KeyError, zipfile.BadZipFile) as exc:
+        print(f"input: FAIL ({exc})")
+        return 1
     digest = hashlib.sha256(data).hexdigest()
     sha_ok = digest == EXPECTED_SHA256
     print(f"sha256: {digest}")
