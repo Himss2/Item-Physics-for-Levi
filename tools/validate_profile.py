@@ -49,6 +49,14 @@ PROFILE = {
         [0xF9400408, 0xB40000C8, 0xF9400100, 0xB4000080,
          0xF9400008, 0xF9401D01, 0xD61F0020],
     ),
+    "Actor::getPosition": (
+        0x0EC7A020,
+        [0xF9410400, 0xD65F03C0],
+    ),
+    "Actor::getPreviousPosition": (
+        0x0EC8EAAC,
+        [0xF9410408, 0x91003100, 0xD65F03C0],
+    ),
     "Actor::getPosDelta": (
         0x0EC82A68,
         [0xF9410408, 0x91006100, 0xD65F03C0],
@@ -84,6 +92,29 @@ PROFILE = {
         [0xD10143FF, 0xA9017BFD, 0xA9025FF8, 0xA90357F6,
          0xA9044FF4, 0x910043FD, 0xD53BD058, 0xAA0303F6,
          0xAA1F03E3, 0xF9401708, 0xAA0003F3, 0xF90007E8],
+    ),
+    "ItemActor::handleEntityEvent": (
+        0x0F12537C,
+        [0x12001C28, 0x7101151F, 0x54000081, 0x910E4000,
+         0x12001C41, 0x14146547, 0x17EDD3E5],
+    ),
+    "Actor::remove": (
+        0x0EC8FC7C,
+        [0xD10203FF, 0xA9047BFD, 0xF9002BF7, 0xA90657F6,
+         0xA9074FF4, 0x910103FD, 0xD53BD055, 0xF94016A8,
+         0xF81F83A8, 0x39494408, 0x370026C8, 0xF9400809],
+    ),
+    "Actor unique ID accessor": (
+        0x0EC8B12C,
+        [0xA9BE7BFD, 0xF9000BF3, 0x910003FD, 0xF9400809,
+         0x528AF5EA, 0x72A31F2A, 0xB9404128, 0xF9401D2B,
+         0x4B0B0108, 0x53037D08, 0x51000508, 0x8A0A010C],
+    ),
+    "ItemActor merge/remove sequence": (
+        0x0F1245D8,
+        [0x1A89B108, 0xB9042B08, 0xF9400328, 0xF9403108,
+         0xD63F0100, 0xAA1903E0, 0x97ED7D27, 0xF9400008,
+         0x394ECB03, 0x910063E4],
     ),
 }
 
