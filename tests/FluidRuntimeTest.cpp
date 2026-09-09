@@ -61,44 +61,15 @@ struct Fixture {
 };
 
 Fixture *active{};
-R *runtime{};
-bool clientSide{}, fireproof{true}, removeInTick{}, disableInTick{};
-unsigned ticks{}, motionReads{}, removeCalls{};
-bool isClient(const void *actor) {
-  assert(active && actor == active->actor.data());
-  return clientSide;
-}
-bool resistant(const void *stack) {
-  assert(active && stack == active->actor.data() + 0x390);
-  return fireproof;
-}
+unsigned motionReads{};
 const R::Vec3Abi *getMotion(const void *actor) {
   assert(active && actor == active->actor.data());
   ++motionReads;
   return &active->motion;
 }
-void nativeRemove(void *) { ++removeCalls; }
-void nativeTick(void *actor) {
-  ++ticks;
-  assert(active && actor == active->actor.data());
-  if (removeInTick) {
-    R::dispatchActorRemove(actor, nullptr, 0);
-    delete active;
-    active = nullptr; // ASAN detects any post-tick access to this actor.
-    return;
-  }
-  active->motion.y = -0.04f;
-  if (disableInTick)
-    runtime->setEnabled(false);
-}
 void configure(R &r) {
-  runtime = &r;
   R::sInstance = &r;
   r.mProfileSupported.store(true);
-  r.mNormalTickOriginal = nativeTick;
-  r.mActorRemoveOriginal = nativeRemove;
-  r.mActorIsClientSide = isClient;
-  r.mStackIsFireResistant = resistant;
   r.mGetPosDelta = getMotion;
 }
 }
@@ -145,37 +116,35 @@ int main() {
     assert(std::abs(bob) <= 0.015001f);
     assert(std::abs(r.waterBobOffset(sample * 2.0f, 0.0f, F::Lava) - bob) < 1e-6f);
   }
+
+  // Full blocks keep the approved surface lift. Flatter/shaped models use a
+  // lower liquid support so they do not hover above the water plane.
+  R::ItemRenderTraits flat{};
+  flat.height = H::FlatItem;
+  R::ItemRenderTraits full{};
+  full.height = H::FullBlock;
+  assert(std::abs(r.renderWorldY(64.0f, flat, false, F::Water,
+                                40.0f, 0) - 64.100f) < 0.00001f);
+  assert(std::abs(r.renderWorldY(64.0f, full, false, F::Water,
+                                40.0f, 0) - 64.140f) < 0.00001f);
+
+  // A 2D/shaped item must be completely prone as soon as it enters liquid;
+  // a full 3D block still freezes its last airborne angle.
+  R::VisualState flatState{};
+  flatState.sampled = true;
+  flatState.lastSample = 5.0f;
+  flatState.xRot = 0.75f;
+  R::updateRotation(flatState, false, false, true, 6, 6.0f);
+  assert(flatState.xRot == 0.0f);
+  R::VisualState blockState{};
+  blockState.sampled = true;
+  blockState.lastSample = 5.0f;
+  blockState.xRot = 0.75f;
+  R::updateRotation(blockState, true, false, true, 6, 6.0f);
+  assert(blockState.xRot == 0.75f);
+
   configure(r);
   active = new Fixture;
-  // Regression: post-tick correction has to survive a native gravity write;
-  // placing it before normalTick would leave -0.04 here instead of ascent.
-  R::normalTickDetour(active->actor.data());
-  assert(ticks == 1 && motionReads == 1);
-  assert(std::abs(active->motion.y - 0.06f) < 0.00001f);
-  assert(active->motion.x == 0.1f && active->motion.z == -0.2f);
-  assert(r.mComponentStorageCache.registry == 0); // no render-cache mutation
-
-  clientSide = true;
-  R::normalTickDetour(active->actor.data());
-  assert(active->motion.y == -0.04f && motionReads == 1);
-  clientSide = false;
-  fireproof = false;
-  R::normalTickDetour(active->actor.data());
-  assert(active->motion.y == -0.04f && motionReads == 1);
-  fireproof = true;
-  active->lavaPage[Fixture::entity] = 0xFFFFFFFFu;
-  R::normalTickDetour(active->actor.data());
-  assert(active->motion.y == -0.04f && motionReads == 1);
-  active->lavaPage[Fixture::entity] = Fixture::entity;
-  r.setEnabled(false);
-  R::normalTickDetour(active->actor.data());
-  assert(active->motion.y == -0.04f && motionReads == 1);
-  r.setEnabled(true);
-  disableInTick = true;
-  R::normalTickDetour(active->actor.data());
-  assert(active->motion.y == -0.04f && motionReads == 1);
-  disableInTick = false;
-  r.setEnabled(true);
 
   // Native onGround may coexist with lava at the bottom: rendering must not
   // apply the calibrated ground lowering while the item is in fluid.
@@ -189,12 +158,8 @@ int main() {
   assert(state.fluid == itemphysics::DropFluidKind::None);
   assert(r.resolveGrounded(state, active->actor.data(), 16, 60.0f));
 
-  // Removal observation must work even with Separate Drop Visuals OFF.
-  assert(!r.mSeparateDropVisuals.load());
-  active->lavaPage[Fixture::entity] = Fixture::entity;
-  removeInTick = true;
-  R::normalTickDetour(active->actor.data());
-  assert(!active && removeCalls == 1 && ticks == 7);
+  delete active;
+  active = nullptr;
   r.uninstall();
   std::cout << "fluid runtime boundaries passed\n";
 }

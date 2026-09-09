@@ -23,6 +23,7 @@ itemphysics::DropVisualPose pose(float x, float y, float z) {
   value.worldX = x;
   value.baseWorldY = y;
   value.worldZ = z;
+  value.grounded = true;
   return value;
 }
 
@@ -37,56 +38,84 @@ int main() {
   using itemphysics::javaVisualCopyCount;
   using itemphysics::renderOriginForWorldAnchor;
 
-  // Removing the lava correction strands a stationary fireproof item; applying
-  // it outside these gates changes ordinary drops or remote-server simulation.
-  using itemphysics::lavaVelocityAfterTick;
-  if (!closeEnough(lavaVelocityAfterTick(0.0f, true, true, false, true),
-                   0.06f))
-    return fail("fireproof lava item did not receive upward motion");
-  if (lavaVelocityAfterTick(-0.04f, false, true, false, true) != -0.04f ||
-      lavaVelocityAfterTick(-0.04f, true, false, false, true) != -0.04f ||
-      lavaVelocityAfterTick(-0.04f, true, true, true, true) != -0.04f ||
-      lavaVelocityAfterTick(-0.04f, true, true, false, false) != -0.04f)
-    return fail("lava correction escaped its gameplay gates");
-  if (lavaVelocityAfterTick(0.3f, true, true, false, true) != 0.3f)
-    return fail("lava correction clamped existing upward throw motion");
   const float nan = std::numeric_limits<float>::quiet_NaN();
-  if (!std::isnan(lavaVelocityAfterTick(nan, true, true, false, true)))
-    return fail("invalid native velocity was turned into motion");
 
-  // Live fluid height must retain a world-space base just like an anchor:
-  // native buoyancy jitter is not a second oscillation added to the custom bob.
+  // Regression: the mod must not fight Minecraft while an item sinks and then
+  // rises. Every pre-surface frame is the exact native interpolated Y; the
+  // custom bob starts only after three distinct stable game ticks.
   itemphysics::FluidVisualBase liveBase{};
-  if (!closeEnough(liveBase.update(64.0f, 10.0f, DropFluidKind::Water), 64.0f))
+  if (!closeEnough(liveBase.update(64.0f, 64.0f, -0.08f, 10,
+                                   DropFluidKind::Water), 64.0f))
     return fail("fluid entry changed the initial world height");
-  for (unsigned tick = 11; tick < 60; ++tick) {
-    const float nativeY = tick % 2 ? 63.98f : 64.0f;
-    if (!closeEnough(liveBase.update(nativeY, float(tick), DropFluidKind::Water),
-                     64.0f))
-      return fail("native bob leaked into the live visual base");
-  }
-  if (!liveBase.bobbing())
-    return fail("stable live item never entered the bob phase");
-  if (!closeEnough(liveBase.update(64.1f, 60.0f, DropFluidKind::Water), 64.04f) ||
+  if (!closeEnough(liveBase.update(63.97f, 64.0f, -0.08f, 10,
+                                   DropFluidKind::Water), 63.97f))
+    return fail("repeat render was not native during liquid entry");
+  if (!closeEnough(liveBase.update(63.90f, 63.80f, -0.10f, 11,
+                                   DropFluidKind::Water), 63.90f) ||
+      !closeEnough(liveBase.update(63.85f, 63.90f, 0.10f, 12,
+                                   DropFluidKind::Water), 63.85f) ||
+      !closeEnough(liveBase.update(63.95f, 64.00f, 0.10f, 13,
+                                   DropFluidKind::Water), 63.95f))
+    return fail("native sink/rise was replaced by a visual ascent");
+  if (liveBase.bobbing())
+    return fail("bob started while native buoyancy was still moving");
+  if (!closeEnough(liveBase.update(64.00f, 64.00f, 0.0f, 14,
+                                   DropFluidKind::Water), 64.00f) ||
+      !closeEnough(liveBase.update(63.995f, 64.00f, 0.0f, 14,
+                                   DropFluidKind::Water), 63.995f) ||
+      !closeEnough(liveBase.update(64.00f, 64.00f, 0.0f, 14,
+                                   DropFluidKind::Water), 64.00f) ||
+      !closeEnough(liveBase.update(64.00f, 64.00f, 0.0f, 15,
+                                   DropFluidKind::Water), 64.00f) ||
       liveBase.bobbing())
-    return fail("live ascent did not use the retained-anchor rise rate");
-  if (!closeEnough(liveBase.update(64.1f, 60.5f, DropFluidKind::Water), 64.06f))
-    return fail("live ascent ignored partial ticks");
-  if (!closeEnough(liveBase.update(64.1f, 60.5f, DropFluidKind::Water), 64.06f))
-    return fail("repeat render advanced fluid motion twice");
-  if (!closeEnough(liveBase.update(64.1f, 62.0f, DropFluidKind::Water), 64.1f) ||
+    return fail("surface latch counted frames instead of game ticks");
+  if (!closeEnough(liveBase.update(64.00f, 64.00f, 0.0f, 16,
+                                   DropFluidKind::Water), 64.00f) ||
       !liveBase.bobbing())
-    return fail("live ascent overshot its target or failed to bob");
-  if (!closeEnough(liveBase.update(62.0f, 63.0f, DropFluidKind::Water), 62.0f))
+    return fail("stable native surface never enabled bobbing");
+  if (!closeEnough(liveBase.update(63.99f, 63.99f, -0.01f, 17,
+                                   DropFluidKind::Water), 64.00f))
+    return fail("native surface jitter leaked into custom bobbing");
+  if (!closeEnough(liveBase.update(62.0f, 62.0f, -0.4f, 18,
+                                   DropFluidKind::Water), 62.0f) ||
+      liveBase.bobbing())
     return fail("large real relocation left a floating ghost behind");
-  if (!closeEnough(liveBase.update(60.0f, 64.0f, DropFluidKind::None), 60.0f) ||
+  if (!closeEnough(liveBase.update(60.0f, 60.0f, 0.0f, 19,
+                                   DropFluidKind::None), 60.0f) ||
       liveBase.bobbing())
     return fail("leaving fluid retained the old surface anchor");
-  if (!closeEnough(liveBase.update(60.0f, 65.0f, DropFluidKind::Lava), 60.0f) ||
-      !closeEnough(liveBase.update(60.1f, 66.0f, DropFluidKind::Lava), 60.02f))
-    return fail("lava live base did not use the slower rise rate");
-  if (!std::isnan(liveBase.update(nan, 67.0f, DropFluidKind::Lava)))
+  if (!std::isnan(liveBase.update(nan, 60.0f, 0.0f, 20,
+                                  DropFluidKind::Lava)))
     return fail("invalid visual position was not rejected");
+
+  // A removed actor has no physics of its own. Preserve its origin only after
+  // a dry item has landed or a liquid item has reached the custom bob phase;
+  // otherwise the last mid-air frame becomes a permanent ghost.
+  DropVisualPose destinationPose = pose(0.0f, 64.0f, 0.0f);
+  DropVisualPose airbornePose = pose(0.0f, 65.0f, 0.0f);
+  airbornePose.grounded = false;
+  if (itemphysics::canRetainDropPose(airbornePose, destinationPose))
+    return fail("airborne source was accepted as a permanent anchor");
+  DropVisualPose risingWaterPose = airbornePose;
+  risingWaterPose.fluid = DropFluidKind::Water;
+  destinationPose.fluid = DropFluidKind::Water;
+  destinationPose.grounded = false;
+  if (itemphysics::canRetainDropPose(risingWaterPose, destinationPose))
+    return fail("rising water source was accepted before the surface");
+  risingWaterPose.fluidBobbing = true;
+  if (!itemphysics::canRetainDropPose(risingWaterPose, destinationPose))
+    return fail("settled water source could not retain its visual origin");
+  destinationPose.fluid = DropFluidKind::Lava;
+  if (itemphysics::canRetainDropPose(risingWaterPose, destinationPose))
+    return fail("an anchor crossed between different fluids");
+
+  // Rendering more independent origins is intentionally bounded. The 17th
+  // source collapses into the live group instead of causing unbounded draw
+  // calls and the severe frame drop reported on Android.
+  if (!itemphysics::withinDropAnchorBudget(15, 0, 16) ||
+      itemphysics::withinDropAnchorBudget(16, 0, 16) ||
+      itemphysics::withinDropAnchorBudget(14, 2, 16))
+    return fail("separate-drop anchor budget accepted the wrong boundary");
 
   // Regression: a frozen visual is a world-space anchor, not an old
   // ActorRenderData position. Camera-origin shifts and movement of the live
@@ -199,60 +228,6 @@ int main() {
   });
   if (javaVisualCopyCount(stack20.rootCount) != 3 || sourceCopies != 2)
     return fail("merged drop groups did not retain independent Java copies");
-
-  // A removed actor no longer has native buoyancy. Its retained water anchor
-  // must therefore approach the live survivor's current surface Y using game
-  // time. Five ticks at 0.04 blocks/tick move it exactly 0.20 blocks, and bob
-  // starts only after the target has actually been reached.
-  DropVisualAnchorPool<4> fluidPool;
-  DropVisualLineage waterSource{};
-  DropVisualLineage waterDestination{};
-  fluidPool.observe(waterSource, 1);
-  fluidPool.observe(waterDestination, 1);
-  DropVisualPose waterPose = pose(0.0f, 60.0f, 0.0f);
-  waterPose.fluid = DropFluidKind::Water;
-  if (!fluidPool.merge(waterSource, waterPose, 1, waterDestination, 1, 2,
-                       0.0f, 10.0f))
-    return fail("water source merge was rejected");
-  fluidPool.advanceFluidAnchors(waterDestination, 61.0f, 15.0f);
-  DropVisualPose advancedWater{};
-  fluidPool.forEach(waterDestination,
-                    [&](const auto &anchor) { advancedWater = anchor.pose; });
-  if (!closeEnough(advancedWater.baseWorldY, 60.20f) ||
-      advancedWater.fluidBobbing)
-    return fail("water anchor did not rise by tick time before bobbing");
-
-  fluidPool.advanceFluidAnchors(waterDestination, 60.22f, 15.5f);
-  fluidPool.forEach(waterDestination,
-                    [&](const auto &anchor) { advancedWater = anchor.pose; });
-  if (!closeEnough(advancedWater.baseWorldY, 60.22f) ||
-      !advancedWater.fluidBobbing)
-    return fail("water anchor overshot its surface or failed to begin bobbing");
-
-  // Lava uses the approved half-speed path: the same five game ticks move
-  // only 0.10 blocks. A lower target must never pull an anchor back down.
-  fluidPool.reset();
-  DropVisualLineage lavaSource{};
-  DropVisualLineage lavaDestination{};
-  fluidPool.observe(lavaSource, 1);
-  fluidPool.observe(lavaDestination, 1);
-  DropVisualPose lavaPose = pose(0.0f, 60.0f, 0.0f);
-  lavaPose.fluid = DropFluidKind::Lava;
-  if (!fluidPool.merge(lavaSource, lavaPose, 1, lavaDestination, 1, 2,
-                       0.0f, 10.0f))
-    return fail("lava source merge was rejected");
-  fluidPool.advanceFluidAnchors(lavaDestination, 61.0f, 15.0f);
-  DropVisualPose advancedLava{};
-  fluidPool.forEach(lavaDestination,
-                    [&](const auto &anchor) { advancedLava = anchor.pose; });
-  if (!closeEnough(advancedLava.baseWorldY, 60.10f) ||
-      advancedLava.fluidBobbing)
-    return fail("lava anchor did not rise at half water speed");
-  fluidPool.advanceFluidAnchors(lavaDestination, 59.0f, 16.0f);
-  fluidPool.forEach(lavaDestination,
-                    [&](const auto &anchor) { advancedLava = anchor.pose; });
-  if (!closeEnough(advancedLava.baseWorldY, 60.10f))
-    return fail("a lower fluid target pulled an anchor downward");
 
   // A non-merge count decrease (for example hopper/inventory transfer) must
   // remove visual source groups before leaving stale ghosts behind.
