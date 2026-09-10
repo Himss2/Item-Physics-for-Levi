@@ -41,7 +41,7 @@ constexpr float kFlatStackWorldStep = 0.055f;
 constexpr float kBlockStackScaleStep = 0.32f;
 constexpr float kMaxContinuousDeltaTicks = 10.0f;
 constexpr float kFullBlockFluidSurfaceLiftY = 0.125f;
-constexpr float kOtherFluidSurfaceLiftY = 0.085f;
+constexpr float kOtherFluidSurfaceLiftY = 0.055f;
 constexpr std::uint32_t kWaterCycleTicks = 91u;
 // One-tick samples of the approved waveform: 8 ticks at the bottom, a
 // half-sine transition at approximately 0.10 radians/tick, 20 ticks at the
@@ -89,13 +89,13 @@ constexpr std::uint32_t kWasInWaterFlagComponentHash = 0x78E89F39u;
 constexpr std::uint32_t kWasInLavaFlagComponentHash = 0x832A2768u;
 constexpr std::uint8_t kFluidContactGraceTicks = 4u;
 
-constexpr float kStablePositionEpsilon = 0.012f;
 constexpr float kCollisionPositionEpsilon = 0.025f;
 constexpr float kWakeVerticalSpeed = 0.085f;
 constexpr float kRemoteMergeMaxAxisDistance = 1.10f;
 constexpr std::uint32_t kPendingSignalLifetime = 8192u;
 constexpr std::uint32_t kDropStateStaleRenderDistance = 8192u;
 constexpr std::uint32_t kRemoteMergeSequenceWindow = 16u;
+constexpr std::uint32_t kRemovalPoseFreshRenderDistance = 64u;
 constexpr std::uint8_t kMergeResolveAttempts = 8u;
 constexpr unsigned kMaxMergeApplicationsPerRender = 2u;
 constexpr unsigned kMaxMergeLineageDepth = 16u;
@@ -106,6 +106,8 @@ constexpr const char *kDragonHeadId = "minecraft:dragon_head";
 
 thread_local bool gForceSingleCopy = false;
 thread_local float *gObservedModelScale = nullptr;
+thread_local void *gNormalTickActor = nullptr;
+thread_local bool gNormalTickActorRemoved = false;
 
 // Every original drop group submits at most five Java-style copies. Retained
 // origins reuse stored sine/cosine pairs, so their copy count never multiplies
@@ -382,6 +384,10 @@ bool ItemPhysicsRuntime::verifyProfile(const ResolvedVirtual &resolved,
            itemActor.target == expectedItemEvent &&
            matchesFingerprint(resolved.module, itemActor.target,
                               profile::kItemActorEventFingerprint)},
+      {base + profile::kItemActorNormalTickRva, "ItemActor::normalTick",
+       matchesFingerprint(resolved.module,
+                          base + profile::kItemActorNormalTickRva,
+                          profile::kItemActorNormalTickFingerprint)},
       {resolvedRemove, "Actor::remove",
        resolvedRemove == base + profile::kActorRemoveRva &&
            matchesFingerprint(resolved.module, resolvedRemove,
@@ -390,6 +396,15 @@ bool ItemPhysicsRuntime::verifyProfile(const ResolvedVirtual &resolved,
        matchesFingerprint(resolved.module,
                           base + profile::kGetActorUniqueIdRva,
                           profile::kGetActorUniqueIdFingerprint)},
+      {base + profile::kActorIsClientSideRva, "Actor::isClientSide",
+       matchesFingerprint(resolved.module,
+                          base + profile::kActorIsClientSideRva,
+                          profile::kActorIsClientSideFingerprint)},
+      {base + profile::kItemStackIsFireResistantRva,
+       "ItemStackBase::isFireResistant",
+       matchesFingerprint(resolved.module,
+                          base + profile::kItemStackIsFireResistantRva,
+                          profile::kItemStackIsFireResistantFingerprint)},
       {base + profile::kMergeRemoveSequenceRva,
        "ItemActor native merge/remove sequence",
        matchesFingerprint(resolved.module,
@@ -439,6 +454,7 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
       mMinecraftBase + profile::kRenderItemGroupLikeRva;
   mItemActorVptr = itemActor->vptr;
   mActorEventTarget = itemActor->target;
+  mNormalTickTarget = mMinecraftBase + profile::kItemActorNormalTickRva;
   mActorRemoveTarget = *reinterpret_cast<const std::uintptr_t *>(
       mItemActorVptr + profile::kItemActorRemoveVtableOffset);
   mGetWorldMatrix = reinterpret_cast<GetWorldMatrixFn>(
@@ -451,10 +467,18 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
       mMinecraftBase + profile::kMatrixStackRefDtorRva);
   mGetActorUniqueId = reinterpret_cast<GetActorUniqueIdFn>(
       mMinecraftBase + profile::kGetActorUniqueIdRva);
+  mIsClientSide = reinterpret_cast<ActorBoolFn>(
+      mMinecraftBase + profile::kActorIsClientSideRva);
+  mIsFireResistant = reinterpret_cast<ActorBoolFn>(
+      mMinecraftBase + profile::kItemStackIsFireResistantRva);
   mGetBlockTypeForRendering = reinterpret_cast<GetBlockTypeForRenderingFn>(
       mMinecraftBase + profile::kGetBlockTypeForRenderingRva);
   mGetPosDelta = reinterpret_cast<GetPosDeltaFn>(
       mMinecraftBase + profile::kGetPosDeltaRva);
+  mGetActorPosition = reinterpret_cast<GetActorPositionFn>(
+      mMinecraftBase + profile::kGetActorPositionRva);
+  mGetActorPreviousPosition = reinterpret_cast<GetActorPositionFn>(
+      mMinecraftBase + profile::kGetActorPreviousPositionRva);
   mGetBlockGraphicsForBlockType =
       reinterpret_cast<BlockGraphicsGetForBlockTypeFn>(
           mMinecraftBase + profile::kBlockGraphicsGetForBlockTypeRva);
@@ -497,6 +521,20 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
     return false;
   }
 
+  mNormalTickHook = std::make_unique<pl::memory::HookHandle>(
+      reinterpret_cast<void *>(mNormalTickTarget),
+      reinterpret_cast<void *>(&ItemPhysicsRuntime::normalTickDetour),
+      reinterpret_cast<void **>(&mNormalTickOriginal),
+      pl::memory::HookPriority::Normal);
+  if (!mNormalTickHook->installed() || !mNormalTickOriginal) {
+    mod.getLogger().warn(
+        "Fire-resistant lava recovery unavailable: normalTick hook failed");
+    if (mNormalTickHook)
+      mNormalTickHook->reset();
+    mNormalTickHook.reset();
+    mNormalTickOriginal = nullptr;
+  }
+
   mActorEventHook = std::make_unique<pl::memory::HookHandle>(
       reinterpret_cast<void *>(mActorEventTarget),
       reinterpret_cast<void *>(&ItemPhysicsRuntime::actorEventDetour),
@@ -509,6 +547,13 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
       mActorEventHook->reset();
     mActorEventHook.reset();
     mActorEventOriginal = nullptr;
+    if (mNormalTickHook) {
+      mod.getLogger().warn(
+          "Fire-resistant lava recovery disabled: lifecycle hook unavailable");
+      mNormalTickHook->reset();
+      mNormalTickHook.reset();
+      mNormalTickOriginal = nullptr;
+    }
   } else {
     mActorRemoveHook = std::make_unique<pl::memory::HookHandle>(
         reinterpret_cast<void *>(mActorRemoveTarget),
@@ -525,6 +570,13 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
       mActorEventHook->reset();
       mActorEventHook.reset();
       mActorEventOriginal = nullptr;
+      if (mNormalTickHook) {
+        mod.getLogger().warn(
+            "Fire-resistant lava recovery disabled: remove hook unavailable");
+        mNormalTickHook->reset();
+        mNormalTickHook.reset();
+        mNormalTickOriginal = nullptr;
+      }
     } else {
       mSeparateDropTrackingAvailable.store(true, std::memory_order_relaxed);
     }
@@ -545,6 +597,10 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
 void ItemPhysicsRuntime::uninstall() {
   mProfileSupported.store(false, std::memory_order_relaxed);
   mSeparateDropTrackingAvailable.store(false, std::memory_order_relaxed);
+  if (mNormalTickHook) {
+    mNormalTickHook->reset();
+    mNormalTickHook.reset();
+  }
   if (mActorRemoveHook) {
     mActorRemoveHook->reset();
     mActorRemoveHook.reset();
@@ -572,8 +628,11 @@ void ItemPhysicsRuntime::uninstall() {
   mMatrixRefDtor = nullptr;
   mActorEventOriginal = nullptr;
   mActorRemoveOriginal = nullptr;
+  mNormalTickOriginal = nullptr;
   mGetActorUniqueId = nullptr;
   mGetPosDelta = nullptr;
+  mGetActorPosition = nullptr;
+  mGetActorPreviousPosition = nullptr;
   mGetBlockTypeForRendering = nullptr;
   mGetBlockGraphicsForBlockType = nullptr;
   mGetBlockGraphicsForBlock = nullptr;
@@ -581,17 +640,21 @@ void ItemPhysicsRuntime::uninstall() {
   mIsBlockShape3D = nullptr;
   mGetRelativeShadowStorage = nullptr;
   mEmplaceRelativeShadow = nullptr;
+  mIsClientSide = nullptr;
+  mIsFireResistant = nullptr;
   mMinecraftBase = 0;
   mRenderTarget = 0;
   mRenderItemGroupTarget = 0;
   mActorEventTarget = 0;
   mActorRemoveTarget = 0;
+  mNormalTickTarget = 0;
   mItemActorVptr = 0;
   clearStates();
 }
 
 void ItemPhysicsRuntime::clearStates() noexcept {
   mStates = {};
+  mLavaRecoveryStates = {};
   mDropAnchors.reset();
   mPendingSignals = {};
   while (mSignalLock.test_and_set(std::memory_order_acquire)) {
@@ -605,6 +668,7 @@ void ItemPhysicsRuntime::clearStates() noexcept {
   mClearDropVisualsRequested.store(false, std::memory_order_relaxed);
   mComponentStorageCache = {};
   mRenderCounter = 0;
+  mNormalTickCounter = 0;
   mStateSweepCursor = 0;
 }
 
@@ -662,8 +726,18 @@ void ItemPhysicsRuntime::actorEventDetour(void *actor, std::uint32_t event,
   });
 }
 
+void ItemPhysicsRuntime::normalTickDetour(void *actor) {
+  auto *const instance = sInstance;
+  const auto original = instance ? instance->mNormalTickOriginal : nullptr;
+  if (!original)
+    return;
+  instance->onNormalTick(actor);
+}
+
 void ItemPhysicsRuntime::dispatchActorRemove(void *actor, void *destination,
                                              std::uintptr_t caller) {
+  if (actor && actor == gNormalTickActor)
+    gNormalTickActorRemoved = true;
   auto *const instance = sInstance;
   const auto original = instance ? instance->mActorRemoveOriginal : nullptr;
   if (!original)
@@ -679,6 +753,42 @@ void ItemPhysicsRuntime::dispatchActorRemove(void *actor, void *destination,
             sourceAddress + profile::kItemCountOffset));
     const auto registry = *reinterpret_cast<const std::uintptr_t *>(
         sourceAddress + profile::kActorRegistryOffset);
+    DropRemovalSnapshot removal{};
+    removal.age = std::max(
+        *reinterpret_cast<const std::int32_t *>(
+            sourceAddress + profile::kItemAgeOffset),
+        0);
+    removal.nativeGrounded = instance->hasComponent(
+        actor, profile::kOnGroundFlagComponentHash, false);
+    removal.verticalCollision = instance->hasComponent(
+        actor, profile::kVerticalCollisionFlagComponentHash, false);
+    const bool inWater =
+        instance->hasComponent(actor, kWasInWaterFlagComponentHash, false);
+    const bool inLava =
+        instance->hasComponent(actor, kWasInLavaFlagComponentHash, false);
+    removal.fluid = inLava ? DropFluidKind::Lava
+                           : (inWater ? DropFluidKind::Water
+                                      : DropFluidKind::None);
+    if (instance->mGetActorPosition) {
+      if (const auto *position = instance->mGetActorPosition(actor);
+          position && std::isfinite(position->x) &&
+          std::isfinite(position->y) && std::isfinite(position->z)) {
+        removal.worldX = position->x;
+        removal.worldY = position->y;
+        removal.worldZ = position->z;
+        removal.valid = true;
+      }
+    }
+    if (instance->mGetPosDelta) {
+      if (const auto *motion = instance->mGetPosDelta(actor);
+          motion && std::isfinite(motion->y)) {
+        removal.verticalSpeed = motion->y;
+      } else {
+        removal.valid = false;
+      }
+    } else {
+      removal.valid = false;
+    }
 
     if (sourceId && sourceCount) {
       if (caller == instance->mMinecraftBase +
@@ -710,6 +820,7 @@ void ItemPhysicsRuntime::dispatchActorRemove(void *actor, void *destination,
           .actorId = sourceId,
           .registry = registry,
           .count = sourceCount,
+          .removal = removal,
       });
     }
   }
@@ -730,6 +841,76 @@ void ItemPhysicsRuntime::onRenderItemGroup(
 
   original(self, ctx, itemData, gForceSingleCopy ? 1u : count, flags, scale,
            animation);
+}
+
+void ItemPhysicsRuntime::onNormalTick(void *actor) {
+  const auto original = mNormalTickOriginal;
+  if (!original)
+    return;
+
+  // Actor::remove can run inside ItemActor::normalTick during burning,
+  // despawn, pickup or a native merge. Never inspect the actor after that.
+  void *const previousTickActor = gNormalTickActor;
+  const bool previousRemoved = gNormalTickActorRemoved;
+  gNormalTickActor = actor;
+  gNormalTickActorRemoved = false;
+  original(actor);
+  const bool removed = gNormalTickActorRemoved;
+  gNormalTickActor = previousTickActor;
+  gNormalTickActorRemoved = previousRemoved;
+
+  if (removed || !actor ||
+      !mProfileSupported.load(std::memory_order_relaxed) ||
+      *reinterpret_cast<const std::uintptr_t *>(actor) != mItemActorVptr ||
+      !mGetActorPosition || !mGetPosDelta || !mIsClientSide ||
+      !mIsFireResistant)
+    return;
+
+  ++mNormalTickCounter;
+  const auto address = reinterpret_cast<std::uintptr_t>(actor);
+  const auto entity = *reinterpret_cast<const std::uint32_t *>(
+      address + profile::kActorEntityIdOffset);
+  const bool enabled = mEnabled.load(std::memory_order_relaxed);
+  const bool inLava =
+      hasComponent(actor, kWasInLavaFlagComponentHash, false);
+  if (!enabled || !inLava) {
+    clearLavaRecoveryFor(entity);
+    return;
+  }
+  const bool authoritative = !mIsClientSide(actor);
+  const bool fireResistant =
+      authoritative &&
+      mIsFireResistant(reinterpret_cast<const void *>(
+          address + profile::kItemStackBaseOffset));
+  if (!authoritative || !fireResistant) {
+    clearLavaRecoveryFor(entity);
+    return;
+  }
+
+  const auto registry = *reinterpret_cast<const std::uintptr_t *>(
+      address + profile::kActorRegistryOffset);
+  const auto uniqueId = actorUniqueId(actor);
+  auto &slot = lavaRecoveryFor(entity, uniqueId, registry);
+  const auto *position = mGetActorPosition(actor);
+  const auto *motion = mGetPosDelta(actor);
+  if (!position || !motion || !std::isfinite(position->y) ||
+      !std::isfinite(motion->y)) {
+    slot.recovery = {};
+    return;
+  }
+  const bool nativeGrounded = hasComponent(
+      actor, profile::kOnGroundFlagComponentHash, false);
+  const bool verticalCollision = hasComponent(
+      actor, profile::kVerticalCollisionFlagComponentHash, false);
+  const auto age = std::max(
+      *reinterpret_cast<const std::int32_t *>(
+          address + profile::kItemAgeOffset),
+      0);
+  const auto correction = slot.recovery.update(
+      position->y, motion->y, nativeGrounded, verticalCollision, age, inLava,
+      fireResistant, authoritative, enabled);
+  if (correction && motion->y < *correction)
+    const_cast<Vec3Abi *>(motion)->y = *correction;
 }
 
 std::uint64_t ItemPhysicsRuntime::actorUniqueId(void *actor) const noexcept {
@@ -847,6 +1028,68 @@ bool ItemPhysicsRuntime::hasPendingCountChange(
       return true;
   }
   return false;
+}
+
+ItemPhysicsRuntime::LavaRecoverySlot &
+ItemPhysicsRuntime::lavaRecoveryFor(std::uint32_t entity,
+                                    std::uint64_t uniqueId,
+                                    std::uintptr_t registry) noexcept {
+  static_assert((kLavaRecoveryCapacity & (kLavaRecoveryCapacity - 1u)) == 0u);
+  const auto initialize = [&](LavaRecoverySlot &slot) -> LavaRecoverySlot & {
+    slot = {};
+    slot.entity = entity;
+    slot.uniqueId = uniqueId;
+    slot.registry = registry;
+    slot.lastSeen = mNormalTickCounter;
+    slot.used = true;
+    return slot;
+  };
+
+  const std::size_t first =
+      (static_cast<std::size_t>(entity) * 2654435761u) &
+      (kLavaRecoveryCapacity - 1u);
+  LavaRecoverySlot *oldest = &mLavaRecoveryStates[first];
+  std::uint32_t oldestDistance = 0;
+  for (std::size_t probe = 0; probe < kLavaRecoveryProbeCount; ++probe) {
+    auto &slot = mLavaRecoveryStates[
+        (first + probe) & (kLavaRecoveryCapacity - 1u)];
+    if (!slot.used)
+      return initialize(slot);
+    if (slot.entity == entity) {
+      const bool identityChanged =
+          uniqueId && registry && slot.uniqueId && slot.registry &&
+          (slot.uniqueId != uniqueId || slot.registry != registry);
+      if (identityChanged)
+        return initialize(slot);
+      if (uniqueId && registry && (!slot.uniqueId || !slot.registry)) {
+        slot.uniqueId = uniqueId;
+        slot.registry = registry;
+      }
+      slot.lastSeen = mNormalTickCounter;
+      return slot;
+    }
+    const auto distance = mNormalTickCounter - slot.lastSeen;
+    if (distance >= oldestDistance) {
+      oldestDistance = distance;
+      oldest = &slot;
+    }
+  }
+  return initialize(*oldest);
+}
+
+void ItemPhysicsRuntime::clearLavaRecoveryFor(
+    std::uint32_t entity) noexcept {
+  const std::size_t first =
+      (static_cast<std::size_t>(entity) * 2654435761u) &
+      (kLavaRecoveryCapacity - 1u);
+  for (std::size_t probe = 0; probe < kLavaRecoveryProbeCount; ++probe) {
+    auto &slot = mLavaRecoveryStates[
+        (first + probe) & (kLavaRecoveryCapacity - 1u)];
+    if (slot.used && slot.entity == entity) {
+      slot = {};
+      return;
+    }
+  }
 }
 
 void *ItemPhysicsRuntime::findComponentStorage(void *actor,
@@ -1216,13 +1459,17 @@ ItemPhysicsRuntime::classifyItem(std::uintptr_t actor) const noexcept {
 
 ItemPhysicsRuntime::VisualState &
 ItemPhysicsRuntime::stateFor(std::uint32_t entity, std::int32_t age,
-                             float bobOffset, float sample) noexcept {
+                             float bobOffset, float sample,
+                             std::uint64_t uniqueId,
+                             std::uintptr_t registry) noexcept {
   static_assert((kStateCapacity & (kStateCapacity - 1u)) == 0u);
   const auto initialize = [&](VisualState &state) -> VisualState & {
     if (state.dropLineage.initialized)
       mDropAnchors.release(state.dropLineage);
     state = {};
     state.entity = entity;
+    state.uniqueId = uniqueId;
+    state.registry = registry;
     state.lastSeen = mRenderCounter;
     state.lastAge = age;
     state.yRot = std::isfinite(bobOffset) ? bobOffset : 0.0f;
@@ -1243,8 +1490,15 @@ ItemPhysicsRuntime::stateFor(std::uint32_t entity, std::int32_t age,
   for (std::size_t probe = 0; probe < kStateProbeCount; ++probe) {
     auto &state = mStates[(first + probe) & (kStateCapacity - 1u)];
     if (state.used && state.entity == entity) {
-      if (age < state.lastAge)
+      const bool identityChanged =
+          uniqueId && registry && state.uniqueId && state.registry &&
+          (state.uniqueId != uniqueId || state.registry != registry);
+      if (age < state.lastAge || identityChanged)
         return initialize(state);
+      if (uniqueId && registry && (!state.uniqueId || !state.registry)) {
+        state.uniqueId = uniqueId;
+        state.registry = registry;
+      }
       state.lastSeen = mRenderCounter;
       return state;
     }
@@ -1267,6 +1521,7 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
     return state.groundedLatched;
 
   const bool nativeGrounded = hasOnGroundComponent(actor);
+  state.nativeGrounded = nativeGrounded;
   const bool verticalCollision = hasComponent(
       actor, profile::kVerticalCollisionFlagComponentHash);
   const bool nativeInWater =
@@ -1320,13 +1575,21 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
   // mean a ceiling). A stable world Y is the primary fallback because Bedrock
   // may retain a small gravity delta even while a mob-spawned item is already
   // blocked by the floor.
-  if (age != state.lastProbeAge && std::isfinite(worldY)) {
+  // ActorRenderData::position is camera-relative. Ground acquisition must use
+  // the actor's absolute world Y, and the conservative fallback must agree
+  // with native vertical collision so an airborne apex cannot become a
+  // permanent retained anchor.
+  float actorWorldY = std::numeric_limits<float>::quiet_NaN();
+  if (mGetActorPosition) {
+    if (const auto *current = mGetActorPosition(actor);
+        current && std::isfinite(current->y))
+      actorWorldY = current->y;
+  }
+  (void)worldY;
+  if (age != state.lastProbeAge && std::isfinite(actorWorldY)) {
     const bool hasPositionDelta = state.positionSampled;
     const float positionDelta =
-        hasPositionDelta ? worldY - state.lastWorldY : 0.0f;
-    const bool stablePosition =
-        hasPositionDelta &&
-        std::abs(positionDelta) <= kStablePositionEpsilon;
+        hasPositionDelta ? actorWorldY - state.lastWorldY : 0.0f;
     const bool stableCollision =
         hasPositionDelta && verticalCollision &&
         std::abs(positionDelta) <= kCollisionPositionEpsilon;
@@ -1338,14 +1601,13 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
 
     if (!nativeGrounded && !inFluid) {
       if (!state.groundedLatched) {
-        state.stableContactTicks = stableCollision || stablePosition
+        state.stableContactTicks = stableCollision
                                        ? static_cast<std::uint8_t>(
                                              std::min<unsigned>(
                                                  state.stableContactTicks + 1u,
                                                  4u))
                                        : 0;
-        const std::uint8_t requiredTicks = verticalCollision ? 2u : 4u;
-        if (state.stableContactTicks >= requiredTicks)
+        if (state.stableContactTicks >= 2u)
           state.groundedLatched = true;
       } else {
         state.movingTicks =
@@ -1362,7 +1624,7 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
     }
 
     state.lastProbeAge = age;
-    state.lastWorldY = worldY;
+    state.lastWorldY = actorWorldY;
     state.positionSampled = true;
   }
   return !inFluid && (nativeGrounded || state.groundedLatched);
@@ -1384,14 +1646,32 @@ void ItemPhysicsRuntime::applyMergedLineage(
   const auto sourceAnchors = mDropAnchors.anchorCount(source.dropLineage);
   const auto destinationAnchors =
       mDropAnchors.anchorCount(destination.dropLineage);
-  if (source.dropPoseSampled &&
+  DropVisualPose retainedPose{};
+  const bool freshSource =
+      mRenderCounter - source.lastSeen <= kRemovalPoseFreshRenderDistance;
+  const bool sameItem = source.itemTypeKey &&
+                        source.itemTypeKey == destination.itemTypeKey &&
+                        source.blockKey == destination.blockKey;
+  const bool validRemovalPose =
+      removeSignal && freshSource && sameItem &&
+      poseAtRemoval(source.dropPose, source.lastActorWorldY,
+                    removeSignal->removal, destination.dropPose,
+                    retainedPose);
+  const bool withinMergeRange =
+      validRemovalPose &&
+      std::abs(retainedPose.worldX - destination.dropPose.worldX) <=
+          kRemoteMergeMaxAxisDistance &&
+      std::abs(retainedPose.baseWorldY - destination.dropPose.baseWorldY) <=
+          kRemoteMergeMaxAxisDistance &&
+      std::abs(retainedPose.worldZ - destination.dropPose.worldZ) <=
+          kRemoteMergeMaxAxisDistance;
+  if (source.dropPoseSampled && validRemovalPose && withinMergeRange &&
       destination.dropLineage.trackedCount == oldCount &&
-      canRetainDropPose(source.dropPose, destination.dropPose) &&
       withinDropAnchorBudget(destinationAnchors, sourceAnchors,
                              kMaxDropAnchorsPerLineage)) {
     const float sampleDelta = source.lastSample - destinationSample;
     merged = mDropAnchors.merge(
-        source.dropLineage, source.dropPose, sourceCount,
+        source.dropLineage, retainedPose, sourceCount,
         destination.dropLineage, oldCount, newCount, sampleDelta);
   }
 
@@ -1500,7 +1780,7 @@ void ItemPhysicsRuntime::processPendingMerges(
       for (auto &signal : mPendingSignals) {
         if (signal.kind != MergeSignalKind::Removed ||
             signal.registry != countSignal->registry ||
-            signal.count != sourceCount)
+            signal.count != sourceCount || !signal.removal.valid)
           continue;
         const auto sequenceDistance =
             signal.sequence > countSignal->sequence
@@ -1515,10 +1795,10 @@ void ItemPhysicsRuntime::processPendingMerges(
             candidate->itemTypeKey != destination.itemTypeKey ||
             candidate->blockKey != destination.blockKey)
           continue;
-        const auto &a = candidate->dropPose;
+        const auto &a = signal.removal;
         const auto &b = destination.dropPose;
         if (std::abs(a.worldX - b.worldX) > kRemoteMergeMaxAxisDistance ||
-            std::abs(a.baseWorldY - b.baseWorldY) >
+            std::abs(a.worldY - b.baseWorldY) >
                 kRemoteMergeMaxAxisDistance ||
             std::abs(a.worldZ - b.worldZ) > kRemoteMergeMaxAxisDistance)
           continue;
@@ -1647,7 +1927,8 @@ float ItemPhysicsRuntime::waterBobOffset(float sample,
 
 float ItemPhysicsRuntime::renderWorldY(
     float originalWorldY, const ItemRenderTraits &traits, bool grounded,
-    DropFluidKind fluid, float sample, std::uint8_t phaseTick) const noexcept {
+    DropFluidKind fluid, float sample, std::uint8_t phaseTick,
+    bool fluidBobbing) const noexcept {
   const bool inFluid = isFluid(fluid);
   const float waterSurfaceLift =
       !inFluid ? 0.0f
@@ -1655,7 +1936,7 @@ float ItemPhysicsRuntime::renderWorldY(
                       ? kFullBlockFluidSurfaceLiftY
                       : kOtherFluidSurfaceLiftY);
   const float waterBob =
-      inFluid ? waterBobOffset(sample, phaseTick, fluid) : 0.0f;
+      inFluid && fluidBobbing ? waterBobOffset(sample, phaseTick, fluid) : 0.0f;
   return originalWorldY + heightOffset(traits, grounded) + waterSurfaceLift +
          waterBob;
 }
@@ -1716,7 +1997,15 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
     stale = {};
   }
 
-  auto &state = stateFor(entity, age, bobOffset, sample);
+  const std::uintptr_t frameRegistry =
+      separateDropVisuals
+          ? *reinterpret_cast<const std::uintptr_t *>(
+                actorAddress + profile::kActorRegistryOffset)
+          : 0;
+  const std::uint64_t frameUniqueId =
+      separateDropVisuals ? actorUniqueId(actor) : 0;
+  auto &state = stateFor(entity, age, bobOffset, sample, frameUniqueId,
+                         frameRegistry);
   const bool grounded = resolveGrounded(state, actor, age, originalWorldY);
   const bool enabled = mEnabled.load(std::memory_order_relaxed);
   const bool hideShadow =
@@ -1792,14 +2081,10 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
   RenderSpacePoint ownerWorldPosition{};
   bool ownerWorldPositionSampled = false;
   float ownerTickWorldY = originalWorldY;
-  if (separateDropVisuals || isFluid(state.fluid)) {
-    using GetActorPositionFn = const Vec3Abi *(*)(const void *);
-    const auto getPosition = reinterpret_cast<GetActorPositionFn>(
-        mMinecraftBase + profile::kGetActorPositionRva);
-    const auto getPreviousPosition = reinterpret_cast<GetActorPositionFn>(
-        mMinecraftBase + profile::kGetActorPreviousPositionRva);
-    const auto *current = getPosition(actor);
-    const auto *previous = getPreviousPosition(actor);
+  if ((separateDropVisuals || isFluid(state.fluid)) &&
+      mGetActorPosition && mGetActorPreviousPosition) {
+    const auto *current = mGetActorPosition(actor);
+    const auto *previous = mGetActorPreviousPosition(actor);
     if (current && previous) {
       ownerTickWorldY = current->y;
       ownerWorldPosition = {
@@ -1817,20 +2102,23 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
   if (isFluid(state.fluid) && ownerWorldPositionSampled) {
     const float baseY = state.fluidBase.update(
         ownerWorldPosition.y, ownerTickWorldY, state.lastVerticalSpeed, age,
-        state.fluid);
+        state.fluid, state.nativeGrounded);
     fluidRenderY += baseY - ownerWorldPosition.y;
   } else {
     state.fluidBase = {};
   }
+  const bool fluidBobbing =
+      isFluid(state.fluid) && ownerWorldPositionSampled &&
+      state.fluidBase.bobbing();
   const float worldY = renderWorldY(fluidRenderY, traits, grounded,
                                     state.fluid, sample,
-                                    state.waterBobPhase);
+                                    state.waterBobPhase, fluidBobbing);
   const float worldZ = position[2];
   const float routeScale =
       state.modelScale > 0.0f ? state.modelScale : kDefaultBlockScale;
 
   const float currentWaterBob =
-      isFluid(state.fluid)
+      fluidBobbing
           ? waterBobOffset(sample, static_cast<float>(state.waterBobPhase),
                            state.fluid)
           : 0.0f;
@@ -1847,8 +2135,7 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
       .waterSampleBias = static_cast<float>(state.waterBobPhase),
       .fluid = state.fluid,
       .grounded = grounded,
-      .fluidBobbing = isFluid(state.fluid) && ownerWorldPositionSampled &&
-                     state.fluidBase.bobbing(),
+      .fluidBobbing = fluidBobbing,
   };
 
   const RenderSpacePoint ownerRenderPosition{worldX, originalWorldY, worldZ};
@@ -1856,9 +2143,8 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
   std::uint32_t liveGroupCount = count;
   if (separateDropVisuals) {
     if (!state.dropIdentitySampled) {
-      state.uniqueId = actorUniqueId(actor);
-      state.registry = *reinterpret_cast<const std::uintptr_t *>(
-          actorAddress + profile::kActorRegistryOffset);
+      state.uniqueId = frameUniqueId;
+      state.registry = frameRegistry;
       state.itemTypeKey = itemTypeKey(actorAddress);
       state.blockKey = *reinterpret_cast<const std::uintptr_t *>(
           actorAddress + profile::kBlockPtrOffset);
@@ -1870,6 +2156,7 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
       state.dropPose.baseWorldY =
           ownerWorldPosition.y + liveRenderPose.baseWorldY - originalWorldY;
       state.dropPose.worldZ = ownerWorldPosition.z;
+      state.lastActorWorldY = ownerWorldPosition.y;
     }
     state.dropPoseSampled =
         state.dropIdentitySampled && ownerWorldPositionSampled;
@@ -1878,6 +2165,13 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
       processPendingMerges(state, sample);
       if (!hasPendingCountChange(state.uniqueId, state.registry))
         mDropAnchors.observe(state.dropLineage, count);
+      if (fluidBobbing && state.dropLineage.initialized) {
+        mDropAnchors.forEachMutable(state.dropLineage, [&](auto &anchor) {
+          if (anchor.pose.fluid == state.dropPose.fluid)
+            (void)advanceFluidAnchor(anchor.pose, state.dropPose.baseWorldY,
+                                     sample);
+        });
+      }
       if (state.dropLineage.initialized && state.dropLineage.rootCount)
         liveGroupCount = state.dropLineage.rootCount;
     } else if (state.dropLineage.initialized) {

@@ -52,8 +52,11 @@ inline constexpr std::uintptr_t kIsBlockShape3DRva = 0x0A280E68;
 inline constexpr std::uintptr_t kRelativeShadowStorageRva = 0x0E96A7E4;
 inline constexpr std::uintptr_t kRelativeShadowEmplaceRva = 0x0E96B68C;
 inline constexpr std::uintptr_t kItemActorEventRva = 0x0F12537C;
+inline constexpr std::uintptr_t kItemActorNormalTickRva = 0x0F124154;
 inline constexpr std::uintptr_t kActorRemoveRva = 0x0EC8FC7C;
 inline constexpr std::uintptr_t kGetActorUniqueIdRva = 0x0EC8B12C;
+inline constexpr std::uintptr_t kActorIsClientSideRva = 0x0EC8E9D8;
+inline constexpr std::uintptr_t kItemStackIsFireResistantRva = 0x0F63FC00;
 inline constexpr std::uintptr_t kMergeRemoveSequenceRva = 0x0F1245D8;
 // ItemActor::normalTick calls source->remove() at 0xF1245E8. At the
 // following instruction x25 is still the source and x24 the destination.
@@ -139,6 +142,13 @@ inline constexpr std::array<std::uint32_t, 7> kItemActorEventFingerprint = {
     0x12001C28u, 0x7101151Fu, 0x54000081u, 0x910E4000u,
     0x12001C41u, 0x14146547u, 0x17EDD3E5u};
 
+inline constexpr std::array<std::uint32_t, 16>
+    kItemActorNormalTickFingerprint = {
+        0xD10383FFu, 0xFD003BE8u, 0xA9087BFDu, 0xA9096FFCu,
+        0xA90A67FAu, 0xA90B5FF8u, 0xA90C57F6u, 0xA90D4FF4u,
+        0x910203FDu, 0xD53BD05Au, 0xAA0003F3u, 0xF9401748u,
+        0xF81E83A8u, 0xB9442C09u, 0x71000528u, 0x540000ABu};
+
 inline constexpr std::array<std::uint32_t, 12> kActorRemoveFingerprint = {
     0xD10203FFu, 0xA9047BFDu, 0xF9002BF7u, 0xA90657F6u,
     0xA9074FF4u, 0x910103FDu, 0xD53BD055u, 0xF94016A8u,
@@ -149,6 +159,16 @@ inline constexpr std::array<std::uint32_t, 12>
         0xA9BE7BFDu, 0xF9000BF3u, 0x910003FDu, 0xF9400809u,
         0x528AF5EAu, 0x72A31F2Au, 0xB9404128u, 0xF9401D2Bu,
         0x4B0B0108u, 0x53037D08u, 0x51000508u, 0x8A0A010Cu};
+
+inline constexpr std::array<std::uint32_t, 7>
+    kActorIsClientSideFingerprint = {
+        0xF940E800u, 0xB4000080u, 0xF9400008u, 0xF944F901u,
+        0xD61F0020u, 0x52800020u, 0xD65F03C0u};
+
+inline constexpr std::array<std::uint32_t, 7>
+    kItemStackIsFireResistantFingerprint = {
+        0xF9400408u, 0xB4000088u, 0xF9400100u, 0xB4000040u,
+        0x1400A765u, 0x2A1F03E0u, 0xD65F03C0u};
 
 inline constexpr std::array<std::uint32_t, 10>
     kMergeRemoveSequenceFingerprint = {

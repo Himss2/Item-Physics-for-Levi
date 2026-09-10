@@ -1,5 +1,8 @@
 #include "ItemPhysicsRuntime.hpp"
+#include "ItemPhysicsConfig.hpp"
 
+#include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -33,18 +36,32 @@ public:
   LeviItemPhysicsMod() : mSelf(*ll::mod::NativeMod::current()) {}
 
   bool load() {
+    std::scoped_lock lock(mConfigMutex);
+    mConfigFile.emplace();
+    if (!mConfigFile->load()) {
+      mSelf.getLogger().error("Failed to load Item Physics config");
+      mConfigFile.reset();
+      return false;
+    }
+    normalize(mConfigFile->value());
+    if (!mConfigFile->save()) {
+      mSelf.getLogger().error("Failed to persist Item Physics config");
+      mConfigFile.reset();
+      return false;
+    }
     mSelf.getLogger().info(
-        "Levi Item Physics 0.15.2: native liquid transit and stable surface bob loaded");
+        "Levi Item Physics 0.16.0: stable liquid and persistent settings loaded");
     return true;
   }
 
   bool enable() {
     // A profile mismatch is intentionally non-fatal: the mod remains loaded and
     // performs no writes or hooks against an unknown Minecraft binary.
+    const auto settings = configSnapshot();
     mRuntime.setEnabled(true);
-    mRuntime.setSingleModel(false);
-    mRuntime.setSeparateDropVisuals(false);
-    mRuntime.setHideItemShadow(true);
+    mRuntime.setSingleModel(settings.singleModel);
+    mRuntime.setSeparateDropVisuals(settings.separateDropVisuals);
+    mRuntime.setHideItemShadow(settings.hideItemShadow);
     const bool hookActive = mRuntime.install(mSelf);
     if (!hookActive)
       mSelf.getLogger().warn(
@@ -58,12 +75,15 @@ public:
             .defaultEnabled(true)
             .onToggle(onToggle)
             .config(std::string(kSingleModelKey), "Single Model",
-                    pl::modmenu::ConfigType::Toggle, "false")
+                    pl::modmenu::ConfigType::Toggle,
+                    boolText(settings.singleModel))
             .config(std::string(kSeparateDropVisualsKey),
                     "Separate Drop Visuals",
-                    pl::modmenu::ConfigType::Toggle, "false")
+                    pl::modmenu::ConfigType::Toggle,
+                    boolText(settings.separateDropVisuals))
             .config(std::string(kHideItemShadowKey), "Hide Item Shadow",
-                    pl::modmenu::ConfigType::Toggle, "true")
+                    pl::modmenu::ConfigType::Toggle,
+                    boolText(settings.hideItemShadow))
             .onConfigChanged(onConfigChanged)
             .registerModule();
     if (!registered) {
@@ -85,10 +105,21 @@ public:
   bool unload() {
     unregisterMenu();
     mRuntime.uninstall();
+    std::scoped_lock lock(mConfigMutex);
+    mConfigFile.reset();
     return true;
   }
 
 private:
+  static std::string boolText(bool value) {
+    return value ? "true" : "false";
+  }
+
+  ItemPhysicsConfig configSnapshot() {
+    std::scoped_lock lock(mConfigMutex);
+    return mConfigFile ? mConfigFile->value() : ItemPhysicsConfig{};
+  }
+
   static void onToggle(std::string_view moduleId, bool enabled) {
     if (moduleId == kModuleId)
       instance().mRuntime.setEnabled(enabled);
@@ -98,13 +129,51 @@ private:
                               std::string_view value) {
     if (moduleId != kModuleId)
       return;
-    auto &runtime = instance().mRuntime;
-    if (key == kSingleModelKey)
-      runtime.setSingleModel(parseMenuBool(value, false));
-    else if (key == kSeparateDropVisualsKey)
-      runtime.setSeparateDropVisuals(parseMenuBool(value, false));
-    else if (key == kHideItemShadowKey)
-      runtime.setHideItemShadow(parseMenuBool(value, true));
+    instance().applyConfigChange(key, value);
+  }
+
+  void applyConfigChange(std::string_view key, std::string_view value) {
+    bool parsed = false;
+    enum class Changed { None, Single, Separate, Shadow } changed{};
+    {
+      std::scoped_lock lock(mConfigMutex);
+      if (!mConfigFile)
+        return;
+      auto &config = mConfigFile->value();
+      if (key == kSingleModelKey) {
+        parsed = parseMenuBool(value, config.singleModel);
+        config.singleModel = parsed;
+        changed = Changed::Single;
+      } else if (key == kSeparateDropVisualsKey) {
+        parsed = parseMenuBool(value, config.separateDropVisuals);
+        config.separateDropVisuals = parsed;
+        changed = Changed::Separate;
+      } else if (key == kHideItemShadowKey) {
+        parsed = parseMenuBool(value, config.hideItemShadow);
+        config.hideItemShadow = parsed;
+        changed = Changed::Shadow;
+      } else {
+        return;
+      }
+      normalize(config);
+      if (!mConfigFile->save())
+        mSelf.getLogger().error("Failed to save Item Physics setting: {}",
+                                key);
+    }
+
+    switch (changed) {
+    case Changed::Single:
+      mRuntime.setSingleModel(parsed);
+      break;
+    case Changed::Separate:
+      mRuntime.setSeparateDropVisuals(parsed);
+      break;
+    case Changed::Shadow:
+      mRuntime.setHideItemShadow(parsed);
+      break;
+    case Changed::None:
+      break;
+    }
   }
 
   void unregisterMenu() {
@@ -116,6 +185,8 @@ private:
 
   ll::mod::NativeMod &mSelf;
   ItemPhysicsRuntime mRuntime;
+  std::mutex mConfigMutex;
+  std::optional<pl::config::ConfigFile<ItemPhysicsConfig>> mConfigFile;
   bool mModuleRegistered{};
 };
 

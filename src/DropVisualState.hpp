@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <utility>
 
 namespace itemphysics {
@@ -35,7 +36,8 @@ fluidMotionScale(DropFluidKind fluid) noexcept {
 class FluidVisualBase {
 public:
   float update(float nativeRenderY, float nativeTickY, float verticalSpeed,
-               std::int32_t age, DropFluidKind fluid) noexcept {
+               std::int32_t age, DropFluidKind fluid,
+               bool nativeGrounded) noexcept {
     if (!isFluid(fluid) || !std::isfinite(nativeRenderY) ||
         !std::isfinite(nativeTickY) || !std::isfinite(verticalSpeed)) {
       *this = {};
@@ -50,14 +52,24 @@ public:
 
     if (age != mLastAge) {
       const float tickDelta = nativeTickY - mLastTickY;
-      if (mBobbing && std::abs(nativeTickY - mBase) > 0.35f) {
+      // Once a real surface has been confirmed, ordinary native buoyancy
+      // jitter or a slow client correction must not release the render base
+      // and make the item sink again. Reset only for a genuine fast vertical
+      // relocation; fluid exit/type changes are handled above.
+      if (mBobbing && std::abs(nativeTickY - mBase) > 0.75f &&
+          std::abs(verticalSpeed) > 0.20f) {
         initialize(nativeTickY, age, fluid);
         return nativeRenderY;
       }
 
       if (!mBobbing) {
+        mLowestY = std::min(mLowestY, nativeTickY);
+        const bool rising = tickDelta > 0.006f || verticalSpeed > 0.012f;
+        mObservedAscent = mObservedAscent || rising;
         const bool stable = std::abs(tickDelta) <= 0.012f &&
-                            std::abs(verticalSpeed) <= 0.025f;
+                            std::abs(verticalSpeed) <= 0.025f &&
+                            !nativeGrounded && mObservedAscent &&
+                            nativeTickY - mLowestY >= 0.08f;
         mStableTicks = stable
                            ? static_cast<std::uint8_t>(
                                  std::min<unsigned>(mStableTicks + 1u, 3u))
@@ -81,20 +93,108 @@ private:
                   DropFluidKind fluid) noexcept {
     mBase = nativeTickY;
     mLastTickY = nativeTickY;
+    mLowestY = nativeTickY;
     mLastAge = age;
     mFluid = fluid;
     mStableTicks = 0;
     mInitialized = true;
     mBobbing = false;
+    mObservedAscent = false;
   }
 
   float mBase{};
   float mLastTickY{};
+  float mLowestY{};
   std::int32_t mLastAge{};
   DropFluidKind mFluid{DropFluidKind::None};
   std::uint8_t mStableTicks{};
   bool mInitialized{};
   bool mBobbing{};
+  bool mObservedAscent{};
+};
+
+// A narrowly bounded repair for the analyzed Bedrock build: fire-resistant
+// ItemActors can finish their native lava sink on a collision surface and then
+// remain there indefinitely. This detector does not touch the entry path. It
+// waits for real descent followed by three distinct stable collision ticks,
+// then requests a small upward velocity only until the recorded entry height
+// is reached. Water, burning items and remote clients never enter this state.
+class LavaBottomRecovery {
+public:
+  [[nodiscard]] std::optional<float>
+  update(float worldY, float verticalSpeed, bool nativeGrounded,
+         bool verticalCollision, std::int32_t age, bool inLava,
+         bool fireResistant = true, bool authoritative = true,
+         bool enabled = true) noexcept {
+    if (!enabled || !authoritative || !fireResistant || !inLava ||
+        !std::isfinite(worldY) || !std::isfinite(verticalSpeed)) {
+      *this = {};
+      return std::nullopt;
+    }
+
+    if (!mInitialized || age < mLastAge || age - mLastAge > 10) {
+      mEntryY = worldY;
+      mLastY = worldY;
+      mLastAge = age;
+      mInitialized = true;
+      return std::nullopt;
+    }
+    if (age == mLastAge)
+      return mRecovering ? correction(worldY) : std::nullopt;
+
+    const float deltaY = worldY - mLastY;
+    mObservedDescent = mObservedDescent ||
+                       deltaY < -0.01f || verticalSpeed < -0.03f ||
+                       mEntryY - worldY >= 0.10f;
+
+    if (mRecovering) {
+      mLastY = worldY;
+      mLastAge = age;
+      return correction(worldY);
+    }
+    if (mCompleted) {
+      mLastY = worldY;
+      mLastAge = age;
+      return std::nullopt;
+    }
+
+    const bool stableBottom =
+        mObservedDescent && (nativeGrounded || verticalCollision) &&
+        std::abs(verticalSpeed) <= 0.05f &&
+        (mStableBottomTicks == 0u || std::abs(deltaY) <= 0.01f);
+    mStableBottomTicks =
+        stableBottom
+            ? static_cast<std::uint8_t>(
+                  std::min<unsigned>(mStableBottomTicks + 1u, 3u))
+            : 0u;
+    if (mStableBottomTicks >= 3u)
+      mRecovering = true;
+
+    mLastY = worldY;
+    mLastAge = age;
+    return mRecovering ? correction(worldY) : std::nullopt;
+  }
+
+  [[nodiscard]] bool recovering() const noexcept { return mRecovering; }
+
+private:
+  [[nodiscard]] std::optional<float> correction(float worldY) noexcept {
+    if (worldY >= mEntryY - 0.03f) {
+      mRecovering = false;
+      mCompleted = true;
+      return std::nullopt;
+    }
+    return 0.06f;
+  }
+
+  float mEntryY{};
+  float mLastY{};
+  std::int32_t mLastAge{};
+  std::uint8_t mStableBottomTicks{};
+  bool mInitialized{};
+  bool mObservedDescent{};
+  bool mRecovering{};
+  bool mCompleted{};
 };
 
 [[nodiscard]] constexpr std::uint32_t
@@ -163,9 +263,26 @@ struct DropVisualPose {
   float routeScale{};
   float bobOffset{};
   float waterSampleBias{};
+  float fluidTransitSample{};
   DropFluidKind fluid{DropFluidKind::None};
   bool grounded{};
   bool fluidBobbing{};
+  bool fluidTransitSampled{};
+};
+
+// Immutable native state captured immediately before Actor::remove. It is
+// deliberately small enough to travel through the existing fixed signal ring
+// and prevents a delayed merge from trusting a stale render-space position.
+struct DropRemovalSnapshot {
+  float worldX{};
+  float worldY{};
+  float worldZ{};
+  float verticalSpeed{};
+  std::int32_t age{};
+  DropFluidKind fluid{DropFluidKind::None};
+  bool nativeGrounded{};
+  bool verticalCollision{};
+  bool valid{};
 };
 
 [[nodiscard]] constexpr bool canRetainDropPose(
@@ -173,7 +290,73 @@ struct DropVisualPose {
     const DropVisualPose &destination) noexcept {
   if (!isFluid(source.fluid))
     return source.grounded;
-  return source.fluidBobbing && source.fluid == destination.fluid;
+  return source.fluid == destination.fluid;
+}
+
+// Rebase the last render orientation/model correction onto the actor's final
+// native world position. Native final contact is authoritative on dry land;
+// same-fluid sources can continue to the surface through advanceFluidAnchor.
+[[nodiscard]] inline bool poseAtRemoval(
+    const DropVisualPose &lastRendered, float lastActorWorldY,
+    const DropRemovalSnapshot &removal, const DropVisualPose &destination,
+    DropVisualPose &result) noexcept {
+  if (!removal.valid || !std::isfinite(lastActorWorldY) ||
+      !std::isfinite(removal.worldX) || !std::isfinite(removal.worldY) ||
+      !std::isfinite(removal.worldZ) ||
+      !std::isfinite(removal.verticalSpeed))
+    return false;
+
+  result = lastRendered;
+  result.worldX = removal.worldX;
+  result.baseWorldY = removal.worldY +
+                      (lastRendered.baseWorldY - lastActorWorldY);
+  result.worldZ = removal.worldZ;
+  result.fluid = removal.fluid;
+  result.grounded = !isFluid(removal.fluid) && removal.nativeGrounded;
+  result.fluidBobbing = isFluid(removal.fluid) &&
+                        lastRendered.fluid == removal.fluid &&
+                        lastRendered.fluidBobbing;
+  result.fluidTransitSampled = false;
+
+  return canRetainDropPose(result, destination);
+}
+
+// Advance a removed liquid source toward the live survivor's confirmed
+// surface without touching gameplay physics. Delta is measured in game ticks,
+// so render FPS cannot change the ascent rate. Returns true once bobbing may
+// begin.
+[[nodiscard]] inline bool advanceFluidAnchor(
+    DropVisualPose &pose, float targetBaseY, float sample) noexcept {
+  if (!isFluid(pose.fluid) || !std::isfinite(pose.baseWorldY) ||
+      !std::isfinite(targetBaseY) || !std::isfinite(sample))
+    return false;
+
+  if (pose.fluidBobbing)
+    return true;
+  if (!pose.fluidTransitSampled) {
+    pose.fluidTransitSample = sample;
+    pose.fluidTransitSampled = true;
+    return false;
+  }
+
+  const float delta = sample - pose.fluidTransitSample;
+  pose.fluidTransitSample = sample;
+  if (!std::isfinite(delta) || delta <= 0.0f || delta > 10.0f)
+    return false;
+
+  const float distance = targetBaseY - pose.baseWorldY;
+  if (distance <= 0.001f) {
+    pose.fluidBobbing = true;
+    return true;
+  }
+
+  const float speed = pose.fluid == DropFluidKind::Lava ? 0.02f : 0.04f;
+  pose.baseWorldY += std::min(distance, speed * delta);
+  if (targetBaseY - pose.baseWorldY <= 0.001f) {
+    pose.baseWorldY = targetBaseY;
+    pose.fluidBobbing = true;
+  }
+  return pose.fluidBobbing;
 }
 
 [[nodiscard]] constexpr bool withinDropAnchorBudget(
@@ -352,6 +535,22 @@ public:
       if (index >= Capacity)
         return;
       const auto &anchor = mAnchors[index];
+      if (!anchor.used)
+        return;
+      visitor(anchor);
+      index = anchor.next;
+    }
+  }
+
+  template <typename Visitor>
+  void forEachMutable(DropVisualLineage &lineage, Visitor &&visitor)
+      noexcept(noexcept(visitor(std::declval<DropVisualAnchor &>()))) {
+    auto index = lineage.head;
+    for (std::size_t guard = 0;
+         index != kNoDropVisualAnchor && guard < Capacity; ++guard) {
+      if (index >= Capacity)
+        return;
+      auto &anchor = mAnchors[index];
       if (!anchor.used)
         return;
       visitor(anchor);
