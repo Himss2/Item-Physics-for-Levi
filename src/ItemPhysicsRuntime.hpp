@@ -282,9 +282,12 @@ private:
   LavaRecoverySlot &lavaRecoveryFor(std::uint32_t, std::uint64_t,
                                     std::uintptr_t) noexcept;
   void clearLavaRecoveryFor(std::uint32_t) noexcept;
-  void processPendingMerges(VisualState &, float, unsigned = 0) noexcept;
+  void processPendingMerges(VisualState &, float,
+                            const DropVisualPose *, float,
+                            unsigned) noexcept;
   void applyMergedLineage(VisualState &, VisualState &, std::uint16_t,
                           std::uint16_t, std::uint16_t, float,
+                          const DropVisualPose *, float,
                           MergeSignal *, MergeSignal *,
                           MergeSignal *) noexcept;
   void collapseUnresolvedCount(VisualState &, std::uint16_t,

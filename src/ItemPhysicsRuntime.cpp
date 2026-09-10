@@ -98,7 +98,10 @@ constexpr std::uint32_t kDropStateStaleRenderDistance = 8192u;
 constexpr std::uint32_t kRemoteMergeSequenceWindow = 16u;
 constexpr std::uint32_t kRemovalPoseFreshRenderDistance = 64u;
 constexpr std::uint8_t kMergeResolveAttempts = 8u;
-constexpr unsigned kMaxMergeApplicationsPerRender = 2u;
+// Correctness takes priority while resolving a rapid burst: consume up to the
+// complete per-lineage visual budget in the first survivor render. The normal
+// no-signal path still exits after one fixed-array scan.
+constexpr unsigned kMaxMergeApplicationsPerRender = 16u;
 constexpr unsigned kMaxMergeLineageDepth = 16u;
 
 constexpr const char *kShieldId = "minecraft:shield";
@@ -1634,6 +1637,8 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
 void ItemPhysicsRuntime::applyMergedLineage(
     VisualState &destination, VisualState &source, std::uint16_t sourceCount,
     std::uint16_t oldCount, std::uint16_t newCount, float destinationSample,
+    const DropVisualPose *previousDestinationPose,
+    float previousDestinationSample,
     MergeSignal *countSignal, MergeSignal *removeSignal,
     MergeSignal *exactSignal) noexcept {
   if (!destination.dropLineage.initialized)
@@ -1657,7 +1662,7 @@ void ItemPhysicsRuntime::applyMergedLineage(
       removeSignal && freshSource && sameItem &&
       poseAtRemoval(source.dropPose, source.lastActorWorldY,
                     removeSignal->removal, destination.dropPose,
-                    retainedPose);
+                    retainedPose, previousDestinationPose);
   const bool withinMergeRange =
       validRemovalPose &&
       std::abs(retainedPose.worldX - destination.dropPose.worldX) <=
@@ -1674,6 +1679,23 @@ void ItemPhysicsRuntime::applyMergedLineage(
     merged = mDropAnchors.merge(
         source.dropLineage, retainedPose, sourceCount,
         destination.dropLineage, oldCount, newCount, sampleDelta);
+  }
+
+  if (merged) {
+    const bool continuousPreviousSample =
+        std::isfinite(previousDestinationSample) &&
+        previousDestinationSample <= destinationSample &&
+        destinationSample - previousDestinationSample <=
+            kMaxContinuousDeltaTicks;
+    const float rebaseSample =
+        continuousPreviousSample
+            ? previousDestinationSample
+            : std::numeric_limits<float>::quiet_NaN();
+    mDropAnchors.forEachMutable(destination.dropLineage, [&](auto &anchor) {
+      rebaseFluidAnchorOwner(anchor.pose, destination.dropPose,
+                             previousDestinationPose,
+                             rebaseSample);
+    });
   }
 
   if (!merged) {
@@ -1716,6 +1738,8 @@ void ItemPhysicsRuntime::collapseUnresolvedCount(
 
 void ItemPhysicsRuntime::processPendingMerges(
     VisualState &destination, float destinationSample,
+    const DropVisualPose *previousDestinationPose,
+    float previousDestinationSample,
     unsigned lineageDepth) noexcept {
   if (!destination.uniqueId || !destination.dropPoseSampled ||
       lineageDepth > kMaxMergeLineageDepth)
@@ -1825,10 +1849,14 @@ void ItemPhysicsRuntime::processPendingMerges(
     // render pass. Resolve B's pending ancestry first so transferring B to C
     // cannot collapse A into B's live root.
     if (hasPendingCountChange(source->uniqueId, source->registry))
-      processPendingMerges(*source, source->lastSample, lineageDepth + 1u);
+      processPendingMerges(*source, source->lastSample, nullptr,
+                           source->lastSample,
+                           lineageDepth + 1u);
 
     applyMergedLineage(destination, *source, sourceCount, oldCount, newCount,
-                       destinationSample, countSignal, removeSignal,
+                       destinationSample, previousDestinationPose,
+                       previousDestinationSample,
+                       countSignal, removeSignal,
                        exactSignal);
   }
 }
@@ -2003,6 +2031,9 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
       separateDropVisuals ? actorUniqueId(actor) : 0;
   auto &state = stateFor(entity, age, bobOffset, sample, frameUniqueId,
                          frameRegistry);
+  const DropVisualPose previousDropPose = state.dropPose;
+  const bool previousDropPoseSampled = state.dropPoseSampled;
+  const float previousDropSample = state.lastSample;
   const bool grounded = resolveGrounded(state, actor, age, originalWorldY);
   const bool enabled = mEnabled.load(std::memory_order_relaxed);
   const bool hideShadow =
@@ -2129,6 +2160,7 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
       .yRotCosine = yRotCosine,
       .routeScale = routeScale,
       .bobOffset = bobOffset,
+      .groundOffsetY = heightOffset(traits, true),
       .waterSampleBias = static_cast<float>(state.waterBobPhase),
       .fluid = state.fluid,
       .grounded = grounded,
@@ -2159,7 +2191,10 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
         state.dropIdentitySampled && ownerWorldPositionSampled;
 
     if (state.dropPoseSampled) {
-      processPendingMerges(state, sample);
+      processPendingMerges(
+          state, sample,
+          previousDropPoseSampled ? &previousDropPose : nullptr,
+          previousDropSample, 0u);
       if (!hasPendingCountChange(state.uniqueId, state.registry))
         mDropAnchors.observe(state.dropLineage, count);
       if (isFluid(state.dropPose.fluid) && state.dropLineage.initialized) {

@@ -262,6 +262,10 @@ struct DropVisualPose {
   float yRotCosine{1.0f};
   float routeScale{};
   float bobOffset{};
+  // Exact per-route dry-ground support. A source can land and merge between
+  // two render frames; retaining the previous airborne delta would otherwise
+  // freeze that model above the block surface.
+  float groundOffsetY{};
   float waterSampleBias{};
   // Retained liquid visuals remember the survivor's last non-bob base so
   // they can copy native sink/rise displacement immediately after a merge.
@@ -303,7 +307,8 @@ struct DropRemovalSnapshot {
 [[nodiscard]] inline bool poseAtRemoval(
     const DropVisualPose &lastRendered, float lastActorWorldY,
     const DropRemovalSnapshot &removal, const DropVisualPose &destination,
-    DropVisualPose &result) noexcept {
+    DropVisualPose &result,
+    const DropVisualPose *previousDestination = nullptr) noexcept {
   if (!removal.valid || !std::isfinite(lastActorWorldY) ||
       !std::isfinite(removal.worldX) || !std::isfinite(removal.worldY) ||
       !std::isfinite(removal.worldZ) ||
@@ -312,24 +317,69 @@ struct DropRemovalSnapshot {
 
   result = lastRendered;
   result.worldX = removal.worldX;
-  result.baseWorldY = removal.worldY +
-                      (lastRendered.baseWorldY - lastActorWorldY);
   result.worldZ = removal.worldZ;
   result.fluid = removal.fluid;
   // A rapid re-throw/merge can expose an OnGround flag for one stale tick.
   // Require the independent vertical-collision component before freezing a
   // dry source, otherwise that stale flag becomes a permanent hovering anchor.
-  result.grounded = !isFluid(removal.fluid) && removal.nativeGrounded &&
-                    removal.verticalCollision;
+  const bool dryStableContact =
+      !isFluid(removal.fluid) && removal.nativeGrounded &&
+      removal.verticalCollision && removal.verticalSpeed <= 0.025f &&
+      std::abs(removal.verticalSpeed) <= 0.085f &&
+      removal.worldY <= lastActorWorldY + 0.025f;
+  result.grounded = dryStableContact;
+  result.baseWorldY = dryStableContact
+                          ? removal.worldY + lastRendered.groundOffsetY
+                          : removal.worldY +
+                                (lastRendered.baseWorldY - lastActorWorldY);
   result.fluidBobbing = isFluid(removal.fluid) &&
                         lastRendered.fluid == removal.fluid &&
                         lastRendered.fluidBobbing;
-  result.fluidFollowBaseY = destination.baseWorldY;
+  const bool reusableDestinationBase =
+      previousDestination &&
+      previousDestination->fluid == destination.fluid &&
+      std::isfinite(previousDestination->baseWorldY);
+  result.fluidFollowBaseY =
+      reusableDestinationBase ? previousDestination->baseWorldY
+                              : destination.baseWorldY;
   result.fluidFollowSampled = isFluid(removal.fluid) &&
                               removal.fluid == destination.fluid;
   result.fluidTransitSampled = false;
 
   return canRetainDropPose(result, destination);
+}
+
+// A complete source lineage can change live owners before any intervening
+// render (A -> B -> C). Rebase every same-fluid node to C's preceding base and
+// sample; otherwise inherited anchors continue following B and either pause or
+// jump by an unrelated native delta on their first visible frame.
+inline void rebaseFluidAnchorOwner(
+    DropVisualPose &pose, const DropVisualPose &destination,
+    const DropVisualPose *previousDestination,
+    float previousDestinationSample) noexcept {
+  if (!isFluid(pose.fluid) || pose.fluid != destination.fluid)
+    return;
+
+  const bool reusableDestinationBase =
+      previousDestination &&
+      previousDestination->fluid == destination.fluid &&
+      std::isfinite(previousDestination->baseWorldY);
+  pose.fluidFollowBaseY =
+      reusableDestinationBase ? previousDestination->baseWorldY
+                              : destination.baseWorldY;
+  pose.fluidFollowSampled = true;
+
+  if (reusableDestinationBase &&
+      std::isfinite(previousDestinationSample)) {
+    pose.fluidTransitSample = previousDestinationSample;
+    pose.fluidTransitSampled = true;
+  } else {
+    pose.fluidTransitSampled = false;
+  }
+
+  if (!destination.fluidBobbing ||
+      std::abs(pose.baseWorldY - destination.baseWorldY) > 0.001f)
+    pose.fluidBobbing = false;
 }
 
 // Keep a removed liquid source visually coupled to the surviving ItemActor.
