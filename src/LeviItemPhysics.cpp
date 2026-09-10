@@ -50,7 +50,7 @@ public:
       return false;
     }
     mSelf.getLogger().info(
-        "Levi Item Physics 0.16.3: persistent fluid and separate-anchor corrections loaded");
+        "Levi Item Physics 0.16.4: bottom-release and stable-anchor corrections loaded");
     return true;
   }
 

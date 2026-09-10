@@ -29,10 +29,10 @@ fluidMotionScale(DropFluidKind fluid) noexcept {
   return fluid == DropFluidKind::Lava ? 0.5f : 1.0f;
 }
 
-// Render-only surface latch. Minecraft owns the complete sink and buoyant-rise
-// path: before the actor has stayed vertically stable for three distinct game
-// ticks this returns the exact native interpolated Y. Only then is the base Y
-// frozen so our small Java-style waveform cannot double with native jitter.
+// Render-only surface latch. Before the native or bottom-released actor has
+// stayed vertically stable for three distinct game ticks, this returns its
+// exact interpolated Y. Only then is the base frozen so the small Java-style
+// waveform cannot double with native jitter.
 class FluidVisualBase {
 public:
   float update(float nativeRenderY, float nativeTickY, float verticalSpeed,
@@ -87,6 +87,9 @@ public:
   }
 
   [[nodiscard]] bool bobbing() const noexcept { return mBobbing; }
+  [[nodiscard]] bool surfaceCandidate() const noexcept {
+    return mObservedAscent;
+  }
 
 private:
   void initialize(float nativeTickY, std::int32_t age,
@@ -113,50 +116,41 @@ private:
   bool mObservedAscent{};
 };
 
-// A narrowly bounded repair for the analyzed Bedrock build: fire-resistant
-// ItemActors can finish their native lava sink on a collision surface and then
-// remain there indefinitely. This detector does not touch the entry path. It
-// waits for real descent followed by three distinct stable collision ticks,
-// then requests a small upward velocity only until the recorded entry height
-// is reached. Water, burning items and remote clients never enter this state.
-class LavaBottomRecovery {
+// A narrowly bounded repair for the analyzed Bedrock build: some ItemActors
+// finish their native water/lava sink on a collision surface and never resume
+// buoyancy. After real descent and three stable contact ticks, request one
+// upward release impulse. Minecraft then owns the full ascent and its actual
+// surface stop; no stored entry height can push the actor above the liquid.
+class FluidBottomRecovery {
 public:
   [[nodiscard]] std::optional<float>
   update(float worldY, float verticalSpeed, bool nativeGrounded,
-         bool verticalCollision, std::int32_t age, bool inLava,
-         bool fireResistant = true, bool authoritative = true,
+         bool verticalCollision, std::int32_t age, DropFluidKind fluid,
+         bool eligible = true, bool authoritative = true,
          bool enabled = true) noexcept {
-    if (!enabled || !authoritative || !fireResistant || !inLava ||
+    if (!enabled || !authoritative || !eligible || !isFluid(fluid) ||
         !std::isfinite(worldY) || !std::isfinite(verticalSpeed)) {
       *this = {};
       return std::nullopt;
     }
 
-    if (!mInitialized || age < mLastAge || age - mLastAge > 10) {
-      mEntryY = worldY;
+    if (!mInitialized || fluid != mFluid || age < mLastAge ||
+        age - mLastAge > 10) {
       mLastY = worldY;
+      mHighestY = worldY;
       mLastAge = age;
+      mFluid = fluid;
       mInitialized = true;
       return std::nullopt;
     }
     if (age == mLastAge)
-      return mRecovering ? correction(worldY) : std::nullopt;
+      return std::nullopt;
 
     const float deltaY = worldY - mLastY;
     mObservedDescent = mObservedDescent ||
                        deltaY < -0.01f || verticalSpeed < -0.03f ||
-                       mEntryY - worldY >= 0.10f;
-
-    if (mRecovering) {
-      mLastY = worldY;
-      mLastAge = age;
-      return correction(worldY);
-    }
-    if (mCompleted) {
-      mLastY = worldY;
-      mLastAge = age;
-      return std::nullopt;
-    }
+                       mHighestY - worldY >= 0.10f;
+    mHighestY = std::max(mHighestY, worldY);
 
     const bool stableBottom =
         mObservedDescent && (nativeGrounded || verticalCollision) &&
@@ -167,34 +161,32 @@ public:
             ? static_cast<std::uint8_t>(
                   std::min<unsigned>(mStableBottomTicks + 1u, 3u))
             : 0u;
-    if (mStableBottomTicks >= 3u)
-      mRecovering = true;
+
+    std::optional<float> correction;
+    if (mStableBottomTicks >= 3u) {
+      // This is an impulse, not a velocity floor. Requiring three new stable
+      // contact ticks before another impulse prevents surface hovering even
+      // if a fluid-membership component lingers briefly after exit.
+      // Both fluids need to survive the following native -0.04 gravity step;
+      // the lava half-speed requirement applies to the visual bob, not this
+      // one-time collision release.
+      correction = 0.06f;
+      mStableBottomTicks = 0;
+    }
 
     mLastY = worldY;
     mLastAge = age;
-    return mRecovering ? correction(worldY) : std::nullopt;
+    return correction;
   }
-
-  [[nodiscard]] bool recovering() const noexcept { return mRecovering; }
 
 private:
-  [[nodiscard]] std::optional<float> correction(float worldY) noexcept {
-    if (worldY >= mEntryY - 0.03f) {
-      mRecovering = false;
-      mCompleted = true;
-      return std::nullopt;
-    }
-    return 0.06f;
-  }
-
-  float mEntryY{};
   float mLastY{};
+  float mHighestY{};
   std::int32_t mLastAge{};
+  DropFluidKind mFluid{DropFluidKind::None};
   std::uint8_t mStableBottomTicks{};
   bool mInitialized{};
   bool mObservedDescent{};
-  bool mRecovering{};
-  bool mCompleted{};
 };
 
 [[nodiscard]] constexpr std::uint32_t
@@ -276,6 +268,7 @@ struct DropVisualPose {
   bool fluidBobbing{};
   bool fluidFollowSampled{};
   bool fluidTransitSampled{};
+  bool stableGroundContact{};
 };
 
 // Immutable native state captured immediately before Actor::remove. It is
@@ -324,17 +317,19 @@ struct DropRemovalSnapshot {
   // short-lived vertical-collision flag at removal, so accept that confirmed
   // pose when the actor stayed close to its last sampled Y and is not rising.
   // A source that lands between renders still requires collision evidence.
-  constexpr float kMaximumStableRemovalSpeed = 0.085f;
+  constexpr float kMaximumStableGroundSpeed = 0.025f;
+  constexpr float kMaximumLandingSpeed = 0.085f;
   constexpr float kMaximumRenderedGroundDrift = 0.075f;
-  const bool stableVerticalMotion =
-      removal.verticalSpeed <= 0.025f &&
-      std::abs(removal.verticalSpeed) <= kMaximumStableRemovalSpeed;
+  const bool notRising = removal.verticalSpeed <= 0.005f;
   const bool confirmedRenderedGround =
-      lastRendered.grounded && stableVerticalMotion &&
+      lastRendered.grounded && lastRendered.stableGroundContact &&
+      notRising &&
+      std::abs(removal.verticalSpeed) <= kMaximumStableGroundSpeed &&
       std::abs(removal.worldY - lastActorWorldY) <=
           kMaximumRenderedGroundDrift;
   const bool landedBetweenRenders =
-      removal.verticalCollision && stableVerticalMotion &&
+      removal.verticalCollision && notRising &&
+      std::abs(removal.verticalSpeed) <= kMaximumLandingSpeed &&
       removal.worldY <= lastActorWorldY + 0.025f;
   const bool dryStableContact =
       !isFluid(removal.fluid) && removal.nativeGrounded &&
