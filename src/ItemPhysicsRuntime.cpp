@@ -40,8 +40,9 @@ constexpr float kDefaultBlockScale = 0.25f;
 constexpr float kFlatStackWorldStep = 0.055f;
 constexpr float kBlockStackScaleStep = 0.32f;
 constexpr float kMaxContinuousDeltaTicks = 10.0f;
-constexpr float kFullBlockFluidSurfaceLiftY = 0.125f;
-constexpr float kOtherFluidSurfaceLiftY = 0.055f;
+// 0.15.x device-approved liquid support. Keep one visible surface baseline for
+// 2D, shaped, special and full-block routes; only the bob waveform differs.
+constexpr float kFluidSurfaceLiftY = 0.125f;
 constexpr std::uint32_t kWaterCycleTicks = 91u;
 // One-tick samples of the approved waveform: 8 ticks at the bottom, a
 // half-sine transition at approximately 0.10 radians/tick, 20 ticks at the
@@ -1930,11 +1931,7 @@ float ItemPhysicsRuntime::renderWorldY(
     DropFluidKind fluid, float sample, std::uint8_t phaseTick,
     bool fluidBobbing) const noexcept {
   const bool inFluid = isFluid(fluid);
-  const float waterSurfaceLift =
-      !inFluid ? 0.0f
-               : (traits.height == HeightClass::FullBlock
-                      ? kFullBlockFluidSurfaceLiftY
-                      : kOtherFluidSurfaceLiftY);
+  const float waterSurfaceLift = inFluid ? kFluidSurfaceLiftY : 0.0f;
   const float waterBob =
       inFluid && fluidBobbing ? waterBobOffset(sample, phaseTick, fluid) : 0.0f;
   return originalWorldY + heightOffset(traits, grounded) + waterSurfaceLift +
@@ -2165,11 +2162,16 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
       processPendingMerges(state, sample);
       if (!hasPendingCountChange(state.uniqueId, state.registry))
         mDropAnchors.observe(state.dropLineage, count);
-      if (fluidBobbing && state.dropLineage.initialized) {
+      if (isFluid(state.dropPose.fluid) && state.dropLineage.initialized) {
         mDropAnchors.forEachMutable(state.dropLineage, [&](auto &anchor) {
-          if (anchor.pose.fluid == state.dropPose.fluid)
-            (void)advanceFluidAnchor(anchor.pose, state.dropPose.baseWorldY,
-                                     sample);
+          if (anchor.pose.fluid != state.dropPose.fluid)
+            return;
+          const bool caught = advanceFluidAnchor(
+              anchor.pose, state.dropPose.baseWorldY, sample);
+          // The retained origin may catch the survivor at the bottom or during
+          // ascent, but custom bob must begin only when the live native actor
+          // has passed the existing surface-acquisition gate.
+          anchor.pose.fluidBobbing = fluidBobbing && caught;
         });
       }
       if (state.dropLineage.initialized && state.dropLineage.rootCount)

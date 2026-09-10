@@ -50,7 +50,7 @@ public:
       return false;
     }
     mSelf.getLogger().info(
-        "Levi Item Physics 0.16.0: stable liquid and persistent settings loaded");
+        "Levi Item Physics 0.16.1: fluid height and anchor sync corrections loaded");
     return true;
   }
 

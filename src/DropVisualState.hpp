@@ -263,10 +263,14 @@ struct DropVisualPose {
   float routeScale{};
   float bobOffset{};
   float waterSampleBias{};
+  // Retained liquid visuals remember the survivor's last non-bob base so
+  // they can copy native sink/rise displacement immediately after a merge.
+  float fluidFollowBaseY{};
   float fluidTransitSample{};
   DropFluidKind fluid{DropFluidKind::None};
   bool grounded{};
   bool fluidBobbing{};
+  bool fluidFollowSampled{};
   bool fluidTransitSampled{};
 };
 
@@ -312,19 +316,28 @@ struct DropRemovalSnapshot {
                       (lastRendered.baseWorldY - lastActorWorldY);
   result.worldZ = removal.worldZ;
   result.fluid = removal.fluid;
-  result.grounded = !isFluid(removal.fluid) && removal.nativeGrounded;
+  // A rapid re-throw/merge can expose an OnGround flag for one stale tick.
+  // Require the independent vertical-collision component before freezing a
+  // dry source, otherwise that stale flag becomes a permanent hovering anchor.
+  result.grounded = !isFluid(removal.fluid) && removal.nativeGrounded &&
+                    removal.verticalCollision;
   result.fluidBobbing = isFluid(removal.fluid) &&
                         lastRendered.fluid == removal.fluid &&
                         lastRendered.fluidBobbing;
+  result.fluidFollowBaseY = destination.baseWorldY;
+  result.fluidFollowSampled = isFluid(removal.fluid) &&
+                              removal.fluid == destination.fluid;
   result.fluidTransitSampled = false;
 
   return canRetainDropPose(result, destination);
 }
 
-// Advance a removed liquid source toward the live survivor's confirmed
-// surface without touching gameplay physics. Delta is measured in game ticks,
-// so render FPS cannot change the ascent rate. Returns true once bobbing may
-// begin.
+// Keep a removed liquid source visually coupled to the surviving ItemActor.
+// While Minecraft is still sinking/rising the survivor, copy its exact non-bob
+// Y displacement so the retained origin reacts on the same frame. Once that
+// target becomes stationary, close any remaining vertical separation at the
+// bounded legacy water/lava rate. Returns true only when the retained base has
+// reached the survivor base and may share its bob phase.
 [[nodiscard]] inline bool advanceFluidAnchor(
     DropVisualPose &pose, float targetBaseY, float sample) noexcept {
   if (!isFluid(pose.fluid) || !std::isfinite(pose.baseWorldY) ||
@@ -333,30 +346,55 @@ struct DropRemovalSnapshot {
 
   if (pose.fluidBobbing)
     return true;
-  if (!pose.fluidTransitSampled) {
+
+  float targetDelta = 0.0f;
+  if (pose.fluidFollowSampled) {
+    targetDelta = targetBaseY - pose.fluidFollowBaseY;
+  } else {
+    pose.fluidFollowSampled = true;
+  }
+  pose.fluidFollowBaseY = targetBaseY;
+
+  // A teleport/chunk discontinuity must rebase the reference rather than drag
+  // a frozen visual several blocks through the world. Ordinary liquid motion
+  // is far below this threshold.
+  constexpr float kMaxNativeFollowDelta = 0.75f;
+  if (!std::isfinite(targetDelta) ||
+      std::abs(targetDelta) > kMaxNativeFollowDelta) {
     pose.fluidTransitSample = sample;
     pose.fluidTransitSampled = true;
     return false;
   }
+  pose.baseWorldY += targetDelta;
 
-  const float delta = sample - pose.fluidTransitSample;
+  float delta = 0.0f;
+  if (pose.fluidTransitSampled)
+    delta = sample - pose.fluidTransitSample;
   pose.fluidTransitSample = sample;
-  if (!std::isfinite(delta) || delta <= 0.0f || delta > 10.0f)
-    return false;
+  pose.fluidTransitSampled = true;
 
   const float distance = targetBaseY - pose.baseWorldY;
-  if (distance <= 0.001f) {
+  if (std::abs(distance) <= 0.001f) {
+    pose.baseWorldY = targetBaseY;
     pose.fluidBobbing = true;
     return true;
   }
 
+  // Do not add a second ascent while the native survivor itself is moving.
+  // This is the key difference from 0.16.0's delayed fake-anchor path.
+  if (std::abs(targetDelta) > 0.001f || !std::isfinite(delta) ||
+      delta <= 0.0f || delta > 10.0f)
+    return false;
+
   const float speed = pose.fluid == DropFluidKind::Lava ? 0.02f : 0.04f;
-  pose.baseWorldY += std::min(distance, speed * delta);
-  if (targetBaseY - pose.baseWorldY <= 0.001f) {
+  const float step = speed * delta;
+  pose.baseWorldY += std::clamp(distance, -step, step);
+  if (std::abs(targetBaseY - pose.baseWorldY) <= 0.001f) {
     pose.baseWorldY = targetBaseY;
     pose.fluidBobbing = true;
+    return true;
   }
-  return pose.fluidBobbing;
+  return false;
 }
 
 [[nodiscard]] constexpr bool withinDropAnchorBudget(
