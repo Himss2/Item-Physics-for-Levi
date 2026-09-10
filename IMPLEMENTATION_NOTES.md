@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.16.3
+# Implementation notes: universal visual core 0.16.4
 
 ## Source behavior reproduced
 
@@ -540,3 +540,42 @@ while ordinary stationary ground merges once again create retained origins.
 
 Host regressions cover all three boundaries. Android gameplay remains the
 required validation for Bedrock component timing and final visual placement.
+
+## Version 0.16.4: native bottom release without surface overshoot
+
+Device evidence separated the remaining fluid failure from the `+0.125`
+render support. Most affected live actors were genuinely stationary on the
+pool bottom, so changing render height could not make them reach the surface.
+The existing lava recovery also used the actor's first detected lava Y as its
+terminal target. Because an AABB may first intersect lava while its origin is
+still above the surface, that target could physically lift fire-resistant
+items too high.
+
+`FluidBottomRecovery` replaces that target-based velocity floor. It observes a
+real descent, waits for three distinct stable native ground/vertical-collision
+ticks, then emits one `+0.06` release impulse in either fluid. This survives
+the following native `-0.04` gravity step without creating a continuing
+velocity floor. Only fire-resistant items are eligible in lava, so native
+burning and removal remain unchanged. The detector can emit another isolated
+impulse only after a fresh three-tick bottom stall; as soon as contact clears,
+Minecraft owns the remaining ascent and surface position. Authoritative and
+lifecycle guards are unchanged, and remote-client actors are never written.
+
+Fluid membership can disappear between the first real ascent and the third
+stable surface tick. `FluidVisualBase::surfaceCandidate()` now carries that
+observed-ascent evidence across stationary membership misses, allowing the
+existing surface latch and retained-anchor transit to complete instead of
+freezing underwater.
+
+Dry retained origins now require two distinct grounded render probes before
+the no-collision admission path is available. A one-tick stale on-ground state
+therefore collapses into the live group. That path also requires absolute
+vertical speed at or below `0.025`; a faster falling source needs explicit
+vertical-collision evidence through the separate between-frame landing path.
+This targets the last rapid-drop hover cases without disabling established
+ground origins.
+
+Host tests cover water and fire-resistant lava release, non-fire-resistant and
+remote passthrough, removal during the native tick, pre-bob fluid membership
+loss, the absence of a continued surface velocity floor, and two-tick dry
+ground confirmation. Android gameplay remains the final release gate.

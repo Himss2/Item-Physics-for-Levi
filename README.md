@@ -1,11 +1,11 @@
 # Levi Item Physics
 
 ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.45.1`.
-Version `0.16.3` preserves the device-approved airborne, landing, ground-height,
-head and shadow behavior. Minecraft exclusively owns liquid entry, sinking and
-ordinary buoyant ascent. The mod begins its render-only bob only after the
-native actor has risen by at least `0.08` block and then stayed at a stable
-surface Y for three game ticks.
+Version `0.16.4` preserves the device-approved airborne, landing, ground-height,
+head and shadow behavior. Minecraft owns liquid entry, sinking, ascent and the
+actual surface stop. The mod only releases an authoritative actor that has
+demonstrably stalled on a fluid-bottom collision, then begins its render-only
+bob after native ascent and three stable surface ticks.
 
 ## Implemented behavior
 
@@ -42,14 +42,16 @@ surface Y for three game ticks.
 - During liquid entry and ascent, render Y follows native interpolation plus
   the class support above, while custom bobbing remains disabled. After real
   ascent and three stable game ticks, the surface base is latched and bobbing
-  begins. A stationary surface latch survives transient loss of Bedrock's
-  `WasInWater`/`WasInLava` component; confirmed dry contact or a real vertical
-  wake resets it. Ground height offsets are not
+  begins. An observed ascent or stationary surface latch survives transient
+  loss of Bedrock's `WasInWater`/`WasInLava` component; confirmed dry contact
+  or a real vertical wake resets it. Ground height offsets are not
   applied while submerged, even if native on-ground is also present.
-- Ordinary lava items retain native burning/removal. Fire-resistant items keep
-  Minecraft's complete sink first; if an authoritative local actor then stalls
-  on a bottom collision for three ticks, a bounded `+0.06` Y-velocity repair
-  runs only until its recorded lava-entry height. Remote clients are untouched.
+- An authoritative water item that descends and then remains on bottom contact
+  for three ticks receives one `+0.06` release impulse. Fire-resistant lava
+  items use the same gate and impulse; ordinary lava items retain
+  native burning/removal. There is no remembered entry-height target or
+  permanent velocity floor, so the repair cannot drive an item to an artificial
+  point above the surface. Remote clients are untouched.
 - Java stack-copy thresholds remain `1 / 2 / 3 / 4 / 5` visible models at
   counts `1 / 2 / 17 / 33 / 49`. Every copy remains on one world-XZ plane.
 - `Single Model`, `Separate Drop Visuals`, and `Hide Item Shadow` remain
@@ -74,12 +76,13 @@ requested visual behavior without changing Minecraft's stack rules:
    represented by that drop. `Single Model` reduces each retained origin to one
    model; it does not erase the independent origins.
 5. A dry source is retained only when its immutable removal-time native
-   snapshot has on-ground evidence and either agrees with its recent rendered
-   grounded pose or has vertical-collision evidence for a between-frame
-   landing. It must not be moving upward or have drifted away from the sampled
-   ground Y. The snapshot applies that item's exact compiled ground support
-   instead of reusing its airborne zero-offset. This rejects stale throw flags
-   while allowing ordinary stationary ground merges to retain an origin. A
+   snapshot has on-ground evidence and either agrees with a grounded pose
+   confirmed across two game ticks or has vertical-collision evidence for a
+   between-frame landing. It must not be moving upward or have drifted away
+   from the sampled ground Y. The snapshot applies that item's exact compiled
+   ground support instead of reusing its airborne zero-offset. This rejects
+   one-tick throw flags while allowing stationary ground merges to retain an
+   origin. A
    same-fluid source may be retained before reaching the surface: it copies the
    survivor's real native Y displacement immediately, then closes any remaining
    gap on the same first render at `0.04` block/tick in water or `0.02` in lava.
@@ -129,13 +132,13 @@ clears all retained origins and immediately returns to the normal renderer.
   at the one native surviving `ItemActor`, by design.
 - On a remote server, an ambiguous merge is not separated visually. This
   fail-closed rule prevents unrelated drops from being paired.
-- The surface latch does not query an exact fluid mesh. It requires native
-  ascent and stable position/velocity. After confirmation it tolerates a lost
+- The surface latch does not query an exact fluid mesh. It requires observed
+  native/released ascent and stable position/velocity. It tolerates a lost
   fluid-membership component only while there is no ground/collision evidence
   and no vertical wake. Flowing and unusual fluid geometry need device testing.
-- The bounded lava repair applies only to authoritative local simulation; a
+- Fluid-bottom release applies only to authoritative local simulation; a
   client-only mod cannot change a remote server's ItemActor physics.
-- Version 0.16.3 is host-tested source, not yet validated in Android gameplay.
+- Version 0.16.4 is host-tested source, not yet validated in Android gameplay.
 
 ## Strict binary guard
 
