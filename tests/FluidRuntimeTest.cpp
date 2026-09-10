@@ -218,6 +218,38 @@ int main() {
   assert(state.fluid == itemphysics::DropFluidKind::None);
   assert(r.resolveGrounded(state, active->actor.data(), 16, 60.0f));
 
+  // Once native ascent and stability have confirmed the surface, a missing
+  // WasInLava flag must not make ordinary models suddenly fall back to their
+  // dry render height. A real vertical wake still clears the retained class.
+  active->groundPage[Fixture::entity] = 0xFFFFFFFFu;
+  active->collisionPage[Fixture::entity] = 0xFFFFFFFFu;
+  active->lavaPage[Fixture::entity] = Fixture::entity;
+  active->current.y = 60.0f;
+  active->motion.y = -0.08f;
+  R::VisualState surface{};
+  assert(!r.resolveGrounded(surface, active->actor.data(), 20, 60.0f));
+  (void)surface.fluidBase.update(60.0f, 60.0f, -0.08f, 20,
+                                 F::Lava, false);
+  active->current.y = 59.85f;
+  (void)surface.fluidBase.update(59.85f, 59.85f, -0.08f, 21,
+                                 F::Lava, false);
+  active->current.y = 59.95f;
+  (void)surface.fluidBase.update(59.95f, 59.95f, 0.10f, 22,
+                                 F::Lava, false);
+  active->current.y = 60.0f;
+  active->motion.y = 0.0f;
+  for (int age = 23; age <= 26; ++age)
+    (void)surface.fluidBase.update(60.0f, 60.0f, 0.0f, age,
+                                   F::Lava, false);
+  assert(surface.fluidBase.bobbing());
+  active->lavaPage[Fixture::entity] = 0xFFFFFFFFu;
+  for (int age = 27; age < 37; ++age)
+    assert(!r.resolveGrounded(surface, active->actor.data(), age, 60.0f));
+  assert(surface.fluid == F::Lava);
+  active->motion.y = 0.10f;
+  assert(!r.resolveGrounded(surface, active->actor.data(), 37, 60.0f));
+  assert(surface.fluid == F::None);
+
   // Stable ActorRenderData Y is not ground evidence: it is camera-relative.
   // Without native ground or vertical collision, a slowly moving actor may
   // never become a persistent dry anchor.

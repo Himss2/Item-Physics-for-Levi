@@ -202,7 +202,7 @@ int main() {
     return fail("airborne removal trusted a stale grounded render pose");
   removal.nativeGrounded = true;
   if (poseAtRemoval(lastRendered, 65.0f, removal, dryDestination, retained))
-    return fail("dry removal trusted a stale on-ground flag without collision");
+    return fail("dry removal trusted a distant stale on-ground pose");
   removal.verticalCollision = true;
   removal.verticalSpeed = 0.20f;
   if (poseAtRemoval(lastRendered, 65.0f, removal, dryDestination, retained))
@@ -217,6 +217,27 @@ int main() {
       !closeEnough(retained.baseWorldY, 63.794f) ||
       !closeEnough(retained.worldZ, 3.2f))
     return fail("grounded removal did not apply its calibrated final support");
+
+  // An ordinary item that was already rendered at rest may lose the transient
+  // collision component before native merging removes it. Its corroborating
+  // last grounded pose must still create a dry retained origin.
+  DropVisualPose stableRendered = pose(2.0f, 63.794f, 3.0f);
+  stableRendered.groundOffsetY = -0.206f;
+  removal.verticalCollision = false;
+  removal.verticalSpeed = 0.0f;
+  removal.worldY = 64.02f;
+  if (!poseAtRemoval(stableRendered, 64.0f, removal, dryDestination,
+                     retained) ||
+      !closeEnough(retained.baseWorldY, 63.814f))
+    return fail("render-confirmed dry removal required a transient collision");
+  removal.verticalSpeed = 0.10f;
+  if (poseAtRemoval(stableRendered, 64.0f, removal, dryDestination, retained))
+    return fail("rising dry removal trusted an old grounded render pose");
+  removal.verticalSpeed = 0.0f;
+  removal.worldY = 64.20f;
+  if (poseAtRemoval(stableRendered, 64.0f, removal, dryDestination, retained))
+    return fail("moved dry removal trusted an old grounded render pose");
+  removal.worldY = 64.0f;
   removal.nativeGrounded = false;
   removal.fluid = DropFluidKind::Water;
   DropVisualPose waterDestination = dryDestination;
@@ -408,6 +429,24 @@ int main() {
   if (stack20.trackedCount != 20 || pool.anchorCount(stack20) != 0 ||
       stack20.rootCount != 20)
     return fail("count decrease left a stale frozen visual");
+
+  // Lava burns can reduce the surviving stack before the live ItemActor is
+  // removed. Its retained origins remain visible until that root disappears.
+  pool.reset();
+  DropVisualLineage lavaRoot{};
+  DropVisualLineage lavaSource{};
+  pool.observe(lavaRoot, 20);
+  pool.observe(lavaSource, 10);
+  if (!pool.merge(lavaSource, pose(-2.0f, 0.0f, 2.0f), 10,
+                  lavaRoot, 20, 30))
+    return fail("valid lava lineage setup was rejected");
+  pool.reconcile(lavaRoot, 20, true);
+  if (lavaRoot.trackedCount != 20 || pool.anchorCount(lavaRoot) != 1 ||
+      lavaRoot.rootCount != 20)
+    return fail("partial lava burn removed a retained origin too early");
+  pool.reconcile(lavaRoot, 0, true);
+  if (lavaRoot.initialized || pool.anchorCount(lavaRoot) != 0)
+    return fail("dead lava root left retained origins alive");
 
   // Capacity exhaustion must fail closed: do not partially move a chain or
   // create a duplicated visual. Runtime can then fall back to one live group.
