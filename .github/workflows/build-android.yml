@@ -73,6 +73,31 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build zip file binutils
 
+      - name: Run host regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CXXFLAGS="-std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror"
+
+          g++ ${CXXFLAGS} -Isrc \
+            tests/DropVisualStateTest.cpp \
+            -o /tmp/drop-visual-test
+          /tmp/drop-visual-test
+
+          g++ ${CXXFLAGS} -Itests/support -Isrc \
+            tests/FluidRuntimeTest.cpp \
+            src/ItemPhysicsRuntime.cpp \
+            src/RttiResolver.cpp \
+            -ldl \
+            -o /tmp/fluid-runtime-test
+          /tmp/fluid-runtime-test
+
+          g++ ${CXXFLAGS} -Isrc \
+            tests/ConfigStateTest.cpp \
+            -o /tmp/config-state-test
+          /tmp/config-state-test
+
       # ============================================================
       # Configure
       # ============================================================
