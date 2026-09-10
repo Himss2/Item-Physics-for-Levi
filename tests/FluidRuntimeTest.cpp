@@ -165,8 +165,8 @@ int main() {
     assert(std::abs(r.waterBobOffset(sample * 2.0f, 0.0f, F::Lava) - bob) < 1e-6f);
   }
 
-  // Full blocks keep the approved surface lift. Flatter/shaped models use a
-  // lower liquid support so they do not hover above the water plane.
+  // Every render route keeps the device-approved 0.15.x surface lift so flat,
+  // shaped, special and full-block models share one water/lava baseline.
   R::ItemRenderTraits flat{};
   flat.height = H::FlatItem;
   R::ItemRenderTraits full{};

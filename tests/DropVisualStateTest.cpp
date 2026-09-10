@@ -40,6 +40,7 @@ int main() {
   using itemphysics::advanceFluidAnchor;
   using itemphysics::javaVisualCopyCount;
   using itemphysics::poseAtRemoval;
+  using itemphysics::rebaseFluidAnchorOwner;
   using itemphysics::renderOriginForWorldAnchor;
 
   // Fire-resistant items must complete Minecraft's native lava sink before a
@@ -183,10 +184,12 @@ int main() {
     return fail("stationary lava target did not retain half water catch-up speed");
 
   // Removal admission uses native final state, not the last render's ground
-  // latch. Airborne dry sources fail closed; grounded and fluid sources keep
-  // their final absolute world position.
+  // latch. Airborne dry sources fail closed; a source that lands between two
+  // frames receives its route's real ground support instead of retaining the
+  // previous airborne zero-offset and hovering above the block.
   DropVisualPose lastRendered = pose(2.0f, 65.2f, 3.0f);
   lastRendered.grounded = true; // deliberately stale/incorrect render latch
+  lastRendered.groundOffsetY = -0.206f;
   DropRemovalSnapshot removal{};
   removal.valid = true;
   removal.worldX = 2.2f;
@@ -201,11 +204,19 @@ int main() {
   if (poseAtRemoval(lastRendered, 65.0f, removal, dryDestination, retained))
     return fail("dry removal trusted a stale on-ground flag without collision");
   removal.verticalCollision = true;
+  removal.verticalSpeed = 0.20f;
+  if (poseAtRemoval(lastRendered, 65.0f, removal, dryDestination, retained))
+    return fail("dry removal trusted stale contact while rising");
+  removal.verticalSpeed = 0.0f;
+  removal.worldY = 65.1f;
+  if (poseAtRemoval(lastRendered, 65.0f, removal, dryDestination, retained))
+    return fail("dry removal trusted stale contact above its last actor pose");
+  removal.worldY = 64.0f;
   if (!poseAtRemoval(lastRendered, 65.0f, removal, dryDestination, retained) ||
       !closeEnough(retained.worldX, 2.2f) ||
-      !closeEnough(retained.baseWorldY, 64.2f) ||
+      !closeEnough(retained.baseWorldY, 63.794f) ||
       !closeEnough(retained.worldZ, 3.2f))
-    return fail("grounded removal did not use corroborated final native contact");
+    return fail("grounded removal did not apply its calibrated final support");
   removal.nativeGrounded = false;
   removal.fluid = DropFluidKind::Water;
   DropVisualPose waterDestination = dryDestination;
@@ -213,6 +224,42 @@ int main() {
   if (!poseAtRemoval(lastRendered, 65.0f, removal, waterDestination, retained) ||
       retained.fluidBobbing)
     return fail("rising fluid removal could not enter retained transit");
+
+  // The first retained frame must copy native survivor motion that happened
+  // since the preceding destination render. Initializing against the current
+  // base would discard this delta and create the reported one-frame pause.
+  DropVisualPose lastRenderedFluid = pose(2.0f, 60.125f, 3.0f);
+  lastRenderedFluid.fluid = DropFluidKind::Water;
+  lastRenderedFluid.grounded = false;
+  DropRemovalSnapshot fluidRemoval = removal;
+  fluidRemoval.worldY = 60.0f;
+  fluidRemoval.fluid = DropFluidKind::Water;
+  fluidRemoval.nativeGrounded = false;
+  fluidRemoval.verticalCollision = false;
+  DropVisualPose currentWaterDestination = pose(2.3f, 64.15f, 3.3f);
+  currentWaterDestination.fluid = DropFluidKind::Water;
+  DropVisualPose previousWaterDestination = currentWaterDestination;
+  previousWaterDestination.baseWorldY = 64.0f;
+  if (!poseAtRemoval(lastRenderedFluid, 60.0f, fluidRemoval,
+                     currentWaterDestination, retained,
+                     &previousWaterDestination))
+    return fail("same-fluid removal rejected the previous survivor base");
+  if (advanceFluidAnchor(retained, currentWaterDestination.baseWorldY, 30.0f) ||
+      !closeEnough(retained.baseWorldY, 60.275f))
+    return fail("first retained frame lost native survivor displacement");
+
+  // A stationary survivor also starts bounded catch-up on the merge render,
+  // and an inherited A -> B -> C anchor must stop following B immediately.
+  retained.baseWorldY = 60.0f;
+  retained.fluidBobbing = true;
+  previousWaterDestination.baseWorldY = currentWaterDestination.baseWorldY;
+  rebaseFluidAnchorOwner(retained, currentWaterDestination,
+                         &previousWaterDestination, 30.0f);
+  if (retained.fluidBobbing)
+    return fail("new fluid owner retained an unrelated settled latch");
+  if (advanceFluidAnchor(retained, currentWaterDestination.baseWorldY, 31.0f) ||
+      !closeEnough(retained.baseWorldY, 60.04f))
+    return fail("stationary fluid owner delayed first-render catch-up");
 
   // A removed actor has no physics of its own. Dry sources require final
   // ground contact. Same-fluid sources may be retained before the surface
