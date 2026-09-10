@@ -1,7 +1,7 @@
 # Levi Item Physics
 
 ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.45.1`.
-Version `0.16.2` preserves the device-approved airborne, landing, ground-height,
+Version `0.16.3` preserves the device-approved airborne, landing, ground-height,
 head and shadow behavior. Minecraft exclusively owns liquid entry, sinking and
 ordinary buoyant ascent. The mod begins its render-only bob only after the
 native actor has risen by at least `0.08` block and then stayed at a stable
@@ -42,8 +42,9 @@ surface Y for three game ticks.
 - During liquid entry and ascent, render Y follows native interpolation plus
   the class support above, while custom bobbing remains disabled. After real
   ascent and three stable game ticks, the surface base is latched and bobbing
-  begins. Only a fast relocation or fluid exit resets the latch. Ground height
-  offsets are not
+  begins. A stationary surface latch survives transient loss of Bedrock's
+  `WasInWater`/`WasInLava` component; confirmed dry contact or a real vertical
+  wake resets it. Ground height offsets are not
   applied while submerged, even if native on-ground is also present.
 - Ordinary lava items retain native burning/removal. Fire-resistant items keep
   Minecraft's complete sink first; if an authoritative local actor then stalls
@@ -73,16 +74,22 @@ requested visual behavior without changing Minecraft's stack rules:
    represented by that drop. `Single Model` reduces each retained origin to one
    model; it does not erase the independent origins.
 5. A dry source is retained only when its immutable removal-time native
-   snapshot has on-ground plus vertical-collision evidence, is not still moving
-   upward, and has not risen above its last actor pose. If contact happens
-   between two renders, the snapshot applies that item's exact compiled ground
-   support instead of reusing its airborne zero-offset. This rejects stale
-   throw flags and prevents a newly landed retained model from hovering. A
+   snapshot has on-ground evidence and either agrees with its recent rendered
+   grounded pose or has vertical-collision evidence for a between-frame
+   landing. It must not be moving upward or have drifted away from the sampled
+   ground Y. The snapshot applies that item's exact compiled ground support
+   instead of reusing its airborne zero-offset. This rejects stale throw flags
+   while allowing ordinary stationary ground merges to retain an origin. A
    same-fluid source may be retained before reaching the surface: it copies the
    survivor's real native Y displacement immediately, then closes any remaining
    gap on the same first render at `0.04` block/tick in water or `0.02` in lava.
    XZ and orientation stay frozen; custom bob still waits for the live surface
    latch.
+
+In lava, a partial native count decrease no longer consumes retained origins.
+Those visual origins stay attached to the surviving live stack and are released
+when that real ItemActor disappears. Water and dry-land count-decrease
+reconciliation keep their existing stale-ghost cleanup behavior.
 
 Local-world merges use the exact source and destination UniqueIDs captured at
 the analyzed `ItemActor::normalTick` removal call. A remote client does not
@@ -123,12 +130,12 @@ clears all retained origins and immediately returns to the normal renderer.
 - On a remote server, an ambiguous merge is not separated visually. This
   fail-closed rule prevents unrelated drops from being paired.
 - The surface latch does not query an exact fluid mesh. It requires native
-  ascent and stable position/velocity, then releases only on a relocation over
-  `0.75` block accompanied by speed over `0.20`. Flowing and unusual fluid
-  geometry need device testing.
+  ascent and stable position/velocity. After confirmation it tolerates a lost
+  fluid-membership component only while there is no ground/collision evidence
+  and no vertical wake. Flowing and unusual fluid geometry need device testing.
 - The bounded lava repair applies only to authoritative local simulation; a
   client-only mod cannot change a remote server's ItemActor physics.
-- Version 0.16.2 is host-tested source, not yet validated in Android gameplay.
+- Version 0.16.3 is host-tested source, not yet validated in Android gameplay.
 
 ## Strict binary guard
 

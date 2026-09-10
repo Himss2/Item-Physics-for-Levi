@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.16.2
+# Implementation notes: universal visual core 0.16.3
 
 ## Source behavior reproduced
 
@@ -514,3 +514,29 @@ therefore resolve before its first survivor draw instead of spreading visual
 ownership across several frames. The ordinary no-pending-signal path still
 performs one bounded fixed-array scan, and global/per-lineage memory limits are
 unchanged.
+
+## Version 0.16.3: persistent surfaces and retained origins
+
+Some ordinary block and shaped-item routes lose Bedrock's
+`WasInWater`/`WasInLava` component after reaching the surface. The earlier
+four-tick grace then cleared the render fluid class, reset `FluidVisualBase`,
+and visibly dropped the model back to its dry/native base. A positively
+confirmed bobbing surface now keeps its previous fluid class through stationary
+membership misses. This extension is deliberately unavailable before surface
+confirmation and ends on native ground/collision evidence or a vertical wake,
+so it cannot convert a stationary pool-bottom item into a surface float.
+
+Lava count loss is now separated from actor lifetime. A partial decrease of the
+surviving real stack updates its root count but preserves frozen source origins;
+the entire lineage is released when the live count reaches zero or the owning
+ItemActor state is reclaimed. Dry and water reconciliation retain their prior
+count-accurate stale-origin cleanup.
+
+Dry removal admission no longer requires a transient vertical-collision flag
+when the source was already rendered grounded and removal stays within `0.075`
+block of its last actor Y at stable velocity. A source landing between renders
+still needs collision evidence. Rising or displaced rethrows remain rejected,
+while ordinary stationary ground merges once again create retained origins.
+
+Host regressions cover all three boundaries. Android gameplay remains the
+required validation for Bedrock component timing and final visual placement.
