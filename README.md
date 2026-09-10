@@ -1,7 +1,7 @@
 # Levi Item Physics
 
 ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.45.1`.
-Version `0.16.0` preserves the device-approved airborne, landing, ground-height,
+Version `0.16.1` preserves the device-approved airborne, landing, ground-height,
 head and shadow behavior. Minecraft exclusively owns liquid entry, sinking and
 ordinary buoyant ascent. The mod begins its render-only bob only after the
 native actor has risen by at least `0.08` block and then stayed at a stable
@@ -32,8 +32,9 @@ surface Y for three game ticks.
   `+0.165` for normal skull, `+0.203` for Dragon Head, `-0.147` for Shield,
   `-0.159` for Banner, `-0.171` for Fence/Gate, and `-0.081` for Scaffolding.
 - Water and lava stop roll immediately and add only vertical surface movement.
-  Flat/shaped/special models use a `+0.055` surface lift while full blocks retain
-  the approved `+0.125` lift.
+  Every render class again uses the `0.15.x` device-approved `+0.125` liquid
+  surface lift. This removes the `0.16.0` flat/shaped/special sinking regression
+  and keeps water/lava height consistent across routes.
   The render-only wave has `+/-0.015` amplitude, an eight-tick lower hold, a
   smooth rise, a twenty-tick upper hold, and a mirrored fall. Its 91-sample
   table avoids an extra trigonometric call in the fluid path. Lava uses half
@@ -72,10 +73,13 @@ requested visual behavior without changing Minecraft's stack rules:
    represented by that drop. `Single Model` reduces each retained origin to one
    model; it does not erase the independent origins.
 5. A dry source is retained only when its immutable removal-time native
-   snapshot says it was grounded. A same-fluid source may be retained before
-   reaching the surface; its visual anchor rises at `0.04` block/tick in water
-   or `0.02` in lava toward the survivor's confirmed surface, without changing
-   XZ or orientation. Mid-air dry sources fail closed into the live group.
+   snapshot has both on-ground and vertical-collision evidence. This rejects a
+   stale one-tick ground flag during rapid throw/merge sequences. A same-fluid
+   source may be retained before reaching the surface: it copies the survivor's
+   real native Y displacement immediately, then closes any remaining gap at
+   `0.04` block/tick in water or `0.02` in lava after the survivor stabilizes.
+   XZ and orientation stay frozen; custom bob still waits for the live surface
+   latch.
 
 Local-world merges use the exact source and destination UniqueIDs captured at
 the analyzed `ItemActor::normalTick` removal call. A remote client does not
@@ -120,7 +124,7 @@ clears all retained origins and immediately returns to the normal renderer.
   geometry need device testing.
 - The bounded lava repair applies only to authoritative local simulation; a
   client-only mod cannot change a remote server's ItemActor physics.
-- Version 0.16.0 is host-tested source, not yet validated in Android gameplay.
+- Version 0.16.1 is host-tested source, not yet validated in Android gameplay.
 
 ## Strict binary guard
 
