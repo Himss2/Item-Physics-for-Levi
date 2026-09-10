@@ -1,8 +1,6 @@
 {
-  "version": 9,
-  "enabled": true,
+  "version": 10,
   "singleModel": false,
-  "hideItemShadow": true,
-  "oldRotation": false,
-  "rotationSpeed": 1.0
+  "separateDropVisuals": false,
+  "hideItemShadow": true
 }

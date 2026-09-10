@@ -6,35 +6,23 @@
   "properties": {
     "version": {
       "type": "integer",
-      "default": 9,
+      "default": 10,
       "readOnly": true
-    },
-    "enabled": {
-      "type": "boolean",
-      "title": "Enabled",
-      "default": true
     },
     "singleModel": {
       "type": "boolean",
       "title": "Single Model",
       "default": false
     },
+    "separateDropVisuals": {
+      "type": "boolean",
+      "title": "Separate Drop Visuals",
+      "default": false
+    },
     "hideItemShadow": {
       "type": "boolean",
       "title": "Hide Item Shadow",
       "default": true
-    },
-    "oldRotation": {
-      "type": "boolean",
-      "title": "Old Rotation",
-      "default": false
-    },
-    "rotationSpeed": {
-      "type": "number",
-      "title": "Tumble Speed",
-      "minimum": 0.25,
-      "maximum": 3.0,
-      "default": 1.0
     }
   }
 }
