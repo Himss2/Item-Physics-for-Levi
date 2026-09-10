@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.16.1
+# Implementation notes: universal visual core 0.16.2
 
 ## Source behavior reproduced
 
@@ -488,3 +488,29 @@ Host regressions now cover the restored common water/lava support, immediate
 retained native-Y following, bounded water/lava catch-up, and rejection of a
 dry removal whose on-ground flag is not corroborated by vertical collision.
 Android gameplay remains the final validation for visual placement and FPS.
+
+## Version 0.16.2: between-frame contact and first-render transit
+
+Rapid drops exposed two remaining timing gaps. First, a source can complete its
+native landing and merge after its last airborne render but before the next
+grounded render. Version `0.16.1` accepted the final native contact but rebased
+the last airborne render delta, which is zero. The retained model therefore
+missed the route-specific dry support and appeared above the ground. Each live
+pose now carries its exact compiled ground offset. A corroborated dry removal
+uses `removal.worldY + groundOffsetY`, while a removal that is still rising,
+exceeds the stable-motion bound, or moved above its last actor pose fails
+closed. No ground constants or matrix transforms changed.
+
+Second, retained liquid transit now receives both the survivor's preceding
+non-bob base and its preceding render sample. Native survivor displacement is
+copied on the first merge render; when that displacement is zero, the same
+render can spend the real elapsed tick fraction on the bounded `0.04` water or
+`0.02` lava catch-up. This removes the initialization-frame pause without
+advancing by render count or changing the native ItemActor.
+
+The pending-merge application bound is restored from two to sixteen, matching
+the existing per-lineage origin cap. A rapid local `A -> ... -> P` burst can
+therefore resolve before its first survivor draw instead of spreading visual
+ownership across several frames. The ordinary no-pending-signal path still
+performs one bounded fixed-array scan, and global/per-lineage memory limits are
+unchanged.

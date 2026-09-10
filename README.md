@@ -1,7 +1,7 @@
 # Levi Item Physics
 
 ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.45.1`.
-Version `0.16.1` preserves the device-approved airborne, landing, ground-height,
+Version `0.16.2` preserves the device-approved airborne, landing, ground-height,
 head and shadow behavior. Minecraft exclusively owns liquid entry, sinking and
 ordinary buoyant ascent. The mod begins its render-only bob only after the
 native actor has risen by at least `0.08` block and then stayed at a stable
@@ -73,11 +73,14 @@ requested visual behavior without changing Minecraft's stack rules:
    represented by that drop. `Single Model` reduces each retained origin to one
    model; it does not erase the independent origins.
 5. A dry source is retained only when its immutable removal-time native
-   snapshot has both on-ground and vertical-collision evidence. This rejects a
-   stale one-tick ground flag during rapid throw/merge sequences. A same-fluid
-   source may be retained before reaching the surface: it copies the survivor's
-   real native Y displacement immediately, then closes any remaining gap at
-   `0.04` block/tick in water or `0.02` in lava after the survivor stabilizes.
+   snapshot has on-ground plus vertical-collision evidence, is not still moving
+   upward, and has not risen above its last actor pose. If contact happens
+   between two renders, the snapshot applies that item's exact compiled ground
+   support instead of reusing its airborne zero-offset. This rejects stale
+   throw flags and prevents a newly landed retained model from hovering. A
+   same-fluid source may be retained before reaching the surface: it copies the
+   survivor's real native Y displacement immediately, then closes any remaining
+   gap on the same first render at `0.04` block/tick in water or `0.02` in lava.
    XZ and orientation stay frozen; custom bob still waits for the live surface
    latch.
 
@@ -91,12 +94,13 @@ ghost at the wrong position.
 
 The tracker uses fixed arrays: no heap allocation, per-copy physics, entity
 spawn, packet, block query, or world query is added. The global anchor pool is
-capped at 96 origins, each surviving lineage at 16 origins, and at most two
-pending merges are applied in one render. Additional origins fail closed into
-the live group. Stale states are reclaimed incrementally. With the toggle off, the
-two merge observers perform only their disabled branch and the renderer stays
-on the original maximum-five-copy path. With it on, geometry cost necessarily
-scales with the number of retained independent drop origins.
+capped at 96 origins, each surviving lineage at 16 origins, and up to the full
+16-origin lineage budget can be resolved in one survivor render. Additional
+origins fail closed into the live group. Stale states are reclaimed
+incrementally. With the toggle off, the two merge observers perform only their
+disabled branch and the renderer stays on the original maximum-five-copy path.
+With it on, geometry cost necessarily scales with the number of retained
+independent drop origins.
 
 Retained origins are absolute world-space positions. `ActorRenderData + 0x10`
 is used only as the current frame's render origin; the stored position is
@@ -124,7 +128,7 @@ clears all retained origins and immediately returns to the normal renderer.
   geometry need device testing.
 - The bounded lava repair applies only to authoritative local simulation; a
   client-only mod cannot change a remote server's ItemActor physics.
-- Version 0.16.1 is host-tested source, not yet validated in Android gameplay.
+- Version 0.16.2 is host-tested source, not yet validated in Android gameplay.
 
 ## Strict binary guard
 
