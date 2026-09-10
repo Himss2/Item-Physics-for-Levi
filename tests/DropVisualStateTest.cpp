@@ -34,7 +34,7 @@ int main() {
   using itemphysics::DropFluidKind;
   using itemphysics::DropVisualLineage;
   using itemphysics::DropVisualPose;
-  using itemphysics::LavaBottomRecovery;
+  using itemphysics::FluidBottomRecovery;
   using itemphysics::DropRemovalSnapshot;
   using itemphysics::RenderSpacePoint;
   using itemphysics::advanceFluidAnchor;
@@ -43,35 +43,64 @@ int main() {
   using itemphysics::rebaseFluidAnchorOwner;
   using itemphysics::renderOriginForWorldAnchor;
 
-  // Fire-resistant items must complete Minecraft's native lava sink before a
-  // bounded recovery begins. Repeated render/tick calls at the same age must
-  // not advance the detector, and the correction stops at the recorded entry
-  // surface instead of becoming a permanent velocity floor.
-  LavaBottomRecovery lavaRecovery{};
-  if (lavaRecovery.update(64.0f, -0.10f, false, false, 1, true) ||
-      lavaRecovery.update(63.7f, -0.08f, false, false, 2, true) ||
-      lavaRecovery.update(63.2f, -0.04f, true, true, 3, true) ||
-      lavaRecovery.update(63.2f, -0.04f, true, true, 3, true) ||
-      lavaRecovery.update(63.2f, -0.04f, true, true, 4, true))
+  // Stalled water/lava actors receive one release impulse only after native
+  // descent and three stable collision ticks. The detector never pushes to a
+  // remembered entry height, so it cannot lift a model above the real surface.
+  FluidBottomRecovery fluidRecovery{};
+  if (fluidRecovery.update(64.0f, -0.10f, false, false, 1,
+                           DropFluidKind::Water) ||
+      fluidRecovery.update(63.7f, -0.08f, false, false, 2,
+                           DropFluidKind::Water) ||
+      fluidRecovery.update(63.2f, -0.04f, true, true, 3,
+                           DropFluidKind::Water) ||
+      fluidRecovery.update(63.2f, -0.04f, true, true, 3,
+                           DropFluidKind::Water) ||
+      fluidRecovery.update(63.2f, -0.04f, true, true, 4,
+                           DropFluidKind::Water))
     return 30;
   const auto recoveryStart =
-      lavaRecovery.update(63.2f, -0.04f, true, true, 5, true);
+      fluidRecovery.update(63.2f, -0.04f, true, true, 5,
+                           DropFluidKind::Water);
   if (!recoveryStart || !closeEnough(*recoveryStart, 0.06f))
     return 31;
-  const auto recoveryMiddle =
-      lavaRecovery.update(63.6f, -0.01f, false, false, 6, true);
-  if (!recoveryMiddle || !closeEnough(*recoveryMiddle, 0.06f))
+  if (fluidRecovery.update(63.2f, -0.04f, true, true, 5,
+                           DropFluidKind::Water))
     return 32;
-  if (lavaRecovery.update(63.98f, 0.03f, false, false, 7, true))
+  if (fluidRecovery.update(63.26f, 0.06f, false, false, 6,
+                           DropFluidKind::Water) ||
+      fluidRecovery.update(64.0f, 0.0f, false, false, 7,
+                           DropFluidKind::Water))
     return 33;
 
-  // Disabled, non-fire-resistant and non-authoritative paths are exact
-  // passthrough and clear any prior recovery state.
-  if (lavaRecovery.update(60.0f, 0.0f, true, true, 8, false) ||
-      lavaRecovery.update(60.0f, 0.0f, true, true, 9, true,
-                          false) ||
-      lavaRecovery.update(60.0f, 0.0f, true, true, 10, true,
-                          true, false))
+  // Lava uses the same one-shot boundary. A later no-contact tick must not
+  // continue applying the old velocity floor.
+  if (fluidRecovery.update(64.0f, -0.10f, false, false, 10,
+                           DropFluidKind::Lava) ||
+      fluidRecovery.update(63.7f, -0.08f, false, false, 11,
+                           DropFluidKind::Lava) ||
+      fluidRecovery.update(63.2f, -0.04f, true, true, 12,
+                           DropFluidKind::Lava) ||
+      fluidRecovery.update(63.2f, -0.04f, true, true, 13,
+                           DropFluidKind::Lava))
+    return 35;
+  const auto lavaRelease =
+      fluidRecovery.update(63.2f, -0.04f, true, true, 14,
+                           DropFluidKind::Lava);
+  if (!lavaRelease || !closeEnough(*lavaRelease, 0.06f) ||
+      fluidRecovery.update(63.26f, 0.06f, false, false, 15,
+                           DropFluidKind::Lava))
+    return 36;
+
+  // Dry, ineligible, non-authoritative and disabled paths are passthrough and
+  // clear any prior recovery state.
+  if (fluidRecovery.update(60.0f, 0.0f, true, true, 16,
+                           DropFluidKind::None) ||
+      fluidRecovery.update(60.0f, 0.0f, true, true, 17,
+                           DropFluidKind::Lava, false) ||
+      fluidRecovery.update(60.0f, 0.0f, true, true, 18,
+                           DropFluidKind::Water, true, false) ||
+      fluidRecovery.update(60.0f, 0.0f, true, true, 19,
+                           DropFluidKind::Water, true, true, false))
     return 34;
 
   const float nan = std::numeric_limits<float>::quiet_NaN();
@@ -226,6 +255,10 @@ int main() {
   removal.verticalCollision = false;
   removal.verticalSpeed = 0.0f;
   removal.worldY = 64.02f;
+  if (poseAtRemoval(stableRendered, 64.0f, removal, dryDestination,
+                    retained))
+    return fail("single-tick dry pose created a hovering retained origin");
+  stableRendered.stableGroundContact = true;
   if (!poseAtRemoval(stableRendered, 64.0f, removal, dryDestination,
                      retained) ||
       !closeEnough(retained.baseWorldY, 63.814f))
@@ -233,6 +266,9 @@ int main() {
   removal.verticalSpeed = 0.10f;
   if (poseAtRemoval(stableRendered, 64.0f, removal, dryDestination, retained))
     return fail("rising dry removal trusted an old grounded render pose");
+  removal.verticalSpeed = -0.08f;
+  if (poseAtRemoval(stableRendered, 64.0f, removal, dryDestination, retained))
+    return fail("falling dry removal trusted an old grounded render pose");
   removal.verticalSpeed = 0.0f;
   removal.worldY = 64.20f;
   if (poseAtRemoval(stableRendered, 64.0f, removal, dryDestination, retained))

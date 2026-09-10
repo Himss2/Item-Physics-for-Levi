@@ -20,27 +20,32 @@ void put(std::array<std::byte, N> &bytes, std::size_t at, T value) {
 }
 
 // Actual profile layout at the native boundary: a registry hash table with
-// lava and on-ground sparse component pages, plus an ItemActor header.
+// water/lava and contact sparse component pages, plus an ItemActor header.
 struct Fixture {
   alignas(16) std::array<std::byte, 0x450> actor{};
   alignas(16) std::array<std::byte, 0x60> registry{};
   std::array<std::int64_t, 8> buckets{};
-  alignas(16) std::array<std::byte, 96> nodes{};
-  alignas(16) std::array<std::byte, 0x18> lavaStorage{}, groundStorage{},
-      collisionStorage{};
-  std::array<std::uintptr_t, 1> lavaPages{}, groundPages{}, collisionPages{};
-  std::array<std::uint32_t, 2048> lavaPage{}, groundPage{}, collisionPage{};
+  alignas(16) std::array<std::byte, 128> nodes{};
+  alignas(16) std::array<std::byte, 0x18> waterStorage{}, lavaStorage{},
+      groundStorage{}, collisionStorage{};
+  std::array<std::uintptr_t, 1> waterPages{}, lavaPages{}, groundPages{},
+      collisionPages{};
+  std::array<std::uint32_t, 2048> waterPage{}, lavaPage{}, groundPage{},
+      collisionPage{};
   R::Vec3Abi motion{0.1f, -0.04f, -0.2f};
   R::Vec3Abi current{2.0f, 60.0f, 3.0f};
   R::Vec3Abi previous{2.0f, 60.0f, 3.0f};
   static constexpr std::uint32_t entity = 17;
+  static constexpr std::uint32_t waterHash = 0x78E89F39;
   static constexpr std::uint32_t lavaHash = 0x832A2768;
   Fixture() {
     buckets.fill(-1);
+    waterPage.fill(0xFFFFFFFFu);
     lavaPage.fill(0xFFFFFFFFu);
     groundPage.fill(0xFFFFFFFFu);
     collisionPage.fill(0xFFFFFFFFu);
     lavaPage[entity] = entity;
+    waterPages[0] = reinterpret_cast<std::uintptr_t>(waterPage.data());
     lavaPages[0] = reinterpret_cast<std::uintptr_t>(lavaPage.data());
     groundPages[0] = reinterpret_cast<std::uintptr_t>(groundPage.data());
     collisionPages[0] =
@@ -59,10 +64,11 @@ struct Fixture {
         groundPages);
     add(2, itemphysics::profile::kVerticalCollisionFlagComponentHash,
         collisionStorage, collisionPages);
+    add(3, waterHash, waterStorage, waterPages);
     put(registry, 0x38, reinterpret_cast<std::uintptr_t>(buckets.data()));
     put(registry, 0x40, reinterpret_cast<std::uintptr_t>(buckets.data() + 8));
     put(registry, 0x50, reinterpret_cast<std::uintptr_t>(nodes.data()));
-    put(registry, 0x58, reinterpret_cast<std::uintptr_t>(nodes.data() + 96));
+    put(registry, 0x58, reinterpret_cast<std::uintptr_t>(nodes.data() + 128));
     put(actor, 0x10, static_cast<void *>(registry.data()));
     put(actor, 0x18, entity);
   }
@@ -236,18 +242,20 @@ int main() {
   active->current.y = 59.95f;
   (void)surface.fluidBase.update(59.95f, 59.95f, 0.10f, 22,
                                  F::Lava, false);
+  assert(surface.fluidBase.surfaceCandidate());
+  assert(!surface.fluidBase.bobbing());
+  active->lavaPage[Fixture::entity] = 0xFFFFFFFFu;
   active->current.y = 60.0f;
   active->motion.y = 0.0f;
-  for (int age = 23; age <= 26; ++age)
+  for (int age = 23; age < 33; ++age) {
+    assert(!r.resolveGrounded(surface, active->actor.data(), age, 60.0f));
     (void)surface.fluidBase.update(60.0f, 60.0f, 0.0f, age,
                                    F::Lava, false);
+  }
   assert(surface.fluidBase.bobbing());
-  active->lavaPage[Fixture::entity] = 0xFFFFFFFFu;
-  for (int age = 27; age < 37; ++age)
-    assert(!r.resolveGrounded(surface, active->actor.data(), age, 60.0f));
   assert(surface.fluid == F::Lava);
   active->motion.y = 0.10f;
-  assert(!r.resolveGrounded(surface, active->actor.data(), 37, 60.0f));
+  assert(!r.resolveGrounded(surface, active->actor.data(), 33, 60.0f));
   assert(surface.fluid == F::None);
 
   // Stable ActorRenderData Y is not ground evidence: it is camera-relative.
@@ -270,6 +278,9 @@ int main() {
   assert(!r.resolveGrounded(collided, active->actor.data(), 40, -8.0f));
   assert(!r.resolveGrounded(collided, active->actor.data(), 41, -8.0f));
   assert(r.resolveGrounded(collided, active->actor.data(), 42, -8.0f));
+  assert(collided.groundedRenderTicks == 1u);
+  assert(r.resolveGrounded(collided, active->actor.data(), 43, -8.0f));
+  assert(collided.groundedRenderTicks == 2u);
 
   // ECS entity slots can be reused within the same age. A new native UniqueID
   // must reset rotation, traits and retained lineage instead of inheriting a
@@ -284,17 +295,17 @@ int main() {
   assert(!secondIdentity.traitsSampled);
   assert(secondIdentity.uniqueId == 1002u);
 
-  // The lava correction calls native normalTick exactly once and remains
-  // dormant through the complete native sink. Only a fire-resistant,
-  // authoritative actor that has stalled on the bottom gets a bounded upward
-  // velocity; water/client/disabled paths remain untouched.
+  // The recovery calls native normalTick exactly once and remains dormant
+  // through native descent. Water gets one release impulse after three stable
+  // bottom ticks even for an ordinary item; it is not a persistent floor.
   constexpr std::uintptr_t itemActorVptr = 0x12345678u;
   put(active->actor, 0, itemActorVptr);
   r.mItemActorVptr = itemActorVptr;
   r.mNormalTickOriginal = nativeNormalTick;
   r.mIsClientSide = isClientSide;
   r.mIsFireResistant = isFireResistant;
-  active->lavaPage[Fixture::entity] = Fixture::entity;
+  active->lavaPage[Fixture::entity] = 0xFFFFFFFFu;
+  active->waterPage[Fixture::entity] = Fixture::entity;
   active->groundPage[Fixture::entity] = 0xFFFFFFFFu;
   active->collisionPage[Fixture::entity] = 0xFFFFFFFFu;
   const auto tick = [&](int age, float worldY, float speed,
@@ -309,6 +320,7 @@ int main() {
     r.onNormalTick(active->actor.data());
   };
   normalTickCalls = 0;
+  fireResistant = false;
   tick(1, 64.0f, -0.10f);
   tick(2, 63.7f, -0.08f);
   tick(3, 63.2f, -0.04f, true);
@@ -317,13 +329,40 @@ int main() {
   tick(5, 63.2f, -0.04f, true);
   assert(std::abs(active->motion.y - 0.06f) < 1e-6f);
   assert(normalTickCalls == 5);
+
+  // Clearing contact after the water impulse leaves the next native speed
+  // untouched. Switching to lava resets the detector; only a fire-resistant
+  // local actor receives the one-shot release.
+  tick(6, 63.26f, 0.03f);
+  assert(std::abs(active->motion.y - 0.03f) < 1e-6f);
+  active->waterPage[Fixture::entity] = 0xFFFFFFFFu;
+  active->lavaPage[Fixture::entity] = Fixture::entity;
+  fireResistant = true;
+  tick(10, 64.0f, -0.10f);
+  tick(11, 63.7f, -0.08f);
+  tick(12, 63.2f, -0.04f, true);
+  tick(13, 63.2f, -0.04f, true);
+  tick(14, 63.2f, -0.04f, true);
+  assert(std::abs(active->motion.y - 0.06f) < 1e-6f);
+  tick(15, 63.26f, 0.02f);
+  assert(std::abs(active->motion.y - 0.02f) < 1e-6f);
+
+  fireResistant = false;
+  tick(20, 64.0f, -0.10f);
+  tick(21, 63.7f, -0.08f);
+  tick(22, 63.2f, -0.04f, true);
+  tick(23, 63.2f, -0.04f, true);
+  tick(24, 63.2f, -0.04f, true);
+  assert(active->motion.y == -0.04f);
+  fireResistant = true;
+
   clientSide = true;
-  tick(6, 63.2f, -0.02f, true);
+  tick(25, 63.2f, -0.02f, true);
   assert(active->motion.y == -0.02f);
   clientSide = false;
   r.mActorRemoveOriginal = nativeRemove;
   removeDuringTick = true;
-  tick(7, 63.2f, -0.03f, true);
+  tick(26, 63.2f, -0.03f, true);
   removeDuringTick = false;
   assert(removeCalls == 1);
   assert(active->motion.y == -0.03f);
