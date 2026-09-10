@@ -1537,18 +1537,6 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
                    : (nativeInWater ? DropFluidKind::Water
                                     : DropFluidKind::None);
 
-  if (isFluid(nativeFluid)) {
-    state.fluid = nativeFluid;
-    state.fluidMissTicks = 0;
-  } else if (isFluid(state.fluid) &&
-             state.fluidMissTicks < kFluidContactGraceTicks) {
-    ++state.fluidMissTicks;
-  } else {
-    state.fluid = DropFluidKind::None;
-    state.fluidMissTicks = 0;
-  }
-  const bool inFluid = isFluid(state.fluid);
-
   float verticalSpeed = 0.0f;
   bool hasMotion = false;
   if (mGetPosDelta) {
@@ -1560,6 +1548,28 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
     }
   }
   state.lastVerticalSpeed = verticalSpeed;
+
+  // WasInWater/WasInLava can briefly disappear after a non-tool item reaches
+  // the liquid surface. Once the render-only surface has been positively
+  // latched, keep that fluid classification through stationary misses. A
+  // real dry contact or a genuine vertical wake remains an exit boundary.
+  const bool confirmedStationarySurface =
+      isFluid(state.fluid) && state.fluidBase.bobbing() &&
+      !nativeGrounded && !verticalCollision &&
+      (!hasMotion || std::abs(verticalSpeed) < kWakeVerticalSpeed);
+  if (isFluid(nativeFluid)) {
+    state.fluid = nativeFluid;
+    state.fluidMissTicks = 0;
+  } else if (isFluid(state.fluid) &&
+             state.fluidMissTicks < kFluidContactGraceTicks) {
+    ++state.fluidMissTicks;
+  } else if (confirmedStationarySurface) {
+    state.fluidMissTicks = kFluidContactGraceTicks;
+  } else {
+    state.fluid = DropFluidKind::None;
+    state.fluidMissTicks = 0;
+  }
+  const bool inFluid = isFluid(state.fluid);
 
   if (inFluid) {
     // Java's calculateFluid path keeps a floating item airborne. A stable
@@ -1729,10 +1739,14 @@ void ItemPhysicsRuntime::applyMergedLineage(
 void ItemPhysicsRuntime::collapseUnresolvedCount(
     VisualState &destination, std::uint16_t liveCount,
     MergeSignal &countSignal) noexcept {
+  const bool preserveLavaAnchors =
+      destination.dropPose.fluid == DropFluidKind::Lava;
   if (!destination.dropLineage.initialized)
-    mDropAnchors.observe(destination.dropLineage, liveCount);
+    mDropAnchors.observe(destination.dropLineage, liveCount,
+                         preserveLavaAnchors);
   else
-    mDropAnchors.reconcile(destination.dropLineage, liveCount);
+    mDropAnchors.reconcile(destination.dropLineage, liveCount,
+                           preserveLavaAnchors);
   countSignal = {};
 }
 
@@ -2196,7 +2210,9 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
           previousDropPoseSampled ? &previousDropPose : nullptr,
           previousDropSample, 0u);
       if (!hasPendingCountChange(state.uniqueId, state.registry))
-        mDropAnchors.observe(state.dropLineage, count);
+        mDropAnchors.observe(
+            state.dropLineage, count,
+            state.dropPose.fluid == DropFluidKind::Lava);
       if (isFluid(state.dropPose.fluid) && state.dropLineage.initialized) {
         mDropAnchors.forEachMutable(state.dropLineage, [&](auto &anchor) {
           if (anchor.pose.fluid != state.dropPose.fluid)

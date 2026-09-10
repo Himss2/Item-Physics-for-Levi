@@ -320,13 +320,25 @@ struct DropRemovalSnapshot {
   result.worldZ = removal.worldZ;
   result.fluid = removal.fluid;
   // A rapid re-throw/merge can expose an OnGround flag for one stale tick.
-  // Require the independent vertical-collision component before freezing a
-  // dry source, otherwise that stale flag becomes a permanent hovering anchor.
+  // A source that was already rendered on the ground may not expose the
+  // short-lived vertical-collision flag at removal, so accept that confirmed
+  // pose when the actor stayed close to its last sampled Y and is not rising.
+  // A source that lands between renders still requires collision evidence.
+  constexpr float kMaximumStableRemovalSpeed = 0.085f;
+  constexpr float kMaximumRenderedGroundDrift = 0.075f;
+  const bool stableVerticalMotion =
+      removal.verticalSpeed <= 0.025f &&
+      std::abs(removal.verticalSpeed) <= kMaximumStableRemovalSpeed;
+  const bool confirmedRenderedGround =
+      lastRendered.grounded && stableVerticalMotion &&
+      std::abs(removal.worldY - lastActorWorldY) <=
+          kMaximumRenderedGroundDrift;
+  const bool landedBetweenRenders =
+      removal.verticalCollision && stableVerticalMotion &&
+      removal.worldY <= lastActorWorldY + 0.025f;
   const bool dryStableContact =
       !isFluid(removal.fluid) && removal.nativeGrounded &&
-      removal.verticalCollision && removal.verticalSpeed <= 0.025f &&
-      std::abs(removal.verticalSpeed) <= 0.085f &&
-      removal.worldY <= lastActorWorldY + 0.025f;
+      (confirmedRenderedGround || landedBetweenRenders);
   result.grounded = dryStableContact;
   result.baseWorldY = dryStableContact
                           ? removal.worldY + lastRendered.groundOffsetY
@@ -478,8 +490,8 @@ template <std::size_t Capacity> class DropVisualAnchorPool {
 public:
   void reset() noexcept { mAnchors = {}; }
 
-  void observe(DropVisualLineage &lineage,
-               std::uint32_t currentCount) noexcept {
+  void observe(DropVisualLineage &lineage, std::uint32_t currentCount,
+               bool preserveAnchorsOnDecrease = false) noexcept {
     const auto count = clampCount(currentCount);
     if (!lineage.initialized) {
       lineage = {};
@@ -489,7 +501,7 @@ public:
       lineage.initialized = true;
       return;
     }
-    reconcile(lineage, count);
+    reconcile(lineage, count, preserveAnchorsOnDecrease);
   }
 
   [[nodiscard]] bool merge(DropVisualLineage &source,
@@ -548,11 +560,11 @@ public:
     return true;
   }
 
-  void reconcile(DropVisualLineage &lineage,
-                 std::uint32_t currentCount) noexcept {
+  void reconcile(DropVisualLineage &lineage, std::uint32_t currentCount,
+                 bool preserveAnchorsOnDecrease = false) noexcept {
     const auto count = clampCount(currentCount);
     if (!lineage.initialized) {
-      observe(lineage, count);
+      observe(lineage, count, preserveAnchorsOnDecrease);
       return;
     }
     if (count == lineage.trackedCount)
@@ -566,6 +578,20 @@ public:
       const auto increase = count - lineage.trackedCount;
       lineage.rootCount = static_cast<std::uint16_t>(
           std::min<std::uint32_t>(lineage.rootCount + increase, 255u));
+      lineage.trackedCount = count;
+      return;
+    }
+
+    // Lava can reduce the live stack count before the surviving ItemActor is
+    // finally removed. Retained origins represent independently dropped
+    // actors, not individual burning units, so keep those origins visible
+    // through a partial decrease and release them with the live actor.
+    if (preserveAnchorsOnDecrease &&
+        lineage.head != kNoDropVisualAnchor) {
+      lineage.rootCount = static_cast<std::uint16_t>(
+          std::max<std::uint32_t>(1u,
+                                  std::min<std::uint32_t>(lineage.rootCount,
+                                                          count)));
       lineage.trackedCount = count;
       return;
     }
