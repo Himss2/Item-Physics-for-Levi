@@ -25,20 +25,26 @@ struct Fixture {
   alignas(16) std::array<std::byte, 0x450> actor{};
   alignas(16) std::array<std::byte, 0x60> registry{};
   std::array<std::int64_t, 8> buckets{};
-  alignas(16) std::array<std::byte, 64> nodes{};
-  alignas(16) std::array<std::byte, 0x18> lavaStorage{}, groundStorage{};
-  std::array<std::uintptr_t, 1> lavaPages{}, groundPages{};
-  std::array<std::uint32_t, 2048> lavaPage{}, groundPage{};
+  alignas(16) std::array<std::byte, 96> nodes{};
+  alignas(16) std::array<std::byte, 0x18> lavaStorage{}, groundStorage{},
+      collisionStorage{};
+  std::array<std::uintptr_t, 1> lavaPages{}, groundPages{}, collisionPages{};
+  std::array<std::uint32_t, 2048> lavaPage{}, groundPage{}, collisionPage{};
   R::Vec3Abi motion{0.1f, -0.04f, -0.2f};
+  R::Vec3Abi current{2.0f, 60.0f, 3.0f};
+  R::Vec3Abi previous{2.0f, 60.0f, 3.0f};
   static constexpr std::uint32_t entity = 17;
   static constexpr std::uint32_t lavaHash = 0x832A2768;
   Fixture() {
     buckets.fill(-1);
     lavaPage.fill(0xFFFFFFFFu);
     groundPage.fill(0xFFFFFFFFu);
+    collisionPage.fill(0xFFFFFFFFu);
     lavaPage[entity] = entity;
     lavaPages[0] = reinterpret_cast<std::uintptr_t>(lavaPage.data());
     groundPages[0] = reinterpret_cast<std::uintptr_t>(groundPage.data());
+    collisionPages[0] =
+        reinterpret_cast<std::uintptr_t>(collisionPage.data());
     const auto add = [&](unsigned index, std::uint32_t hash, auto &storage,
                          auto &pages) {
       put(nodes, index * 32, buckets[hash & 7]);
@@ -51,10 +57,12 @@ struct Fixture {
     add(0, lavaHash, lavaStorage, lavaPages);
     add(1, itemphysics::profile::kOnGroundFlagComponentHash, groundStorage,
         groundPages);
+    add(2, itemphysics::profile::kVerticalCollisionFlagComponentHash,
+        collisionStorage, collisionPages);
     put(registry, 0x38, reinterpret_cast<std::uintptr_t>(buckets.data()));
     put(registry, 0x40, reinterpret_cast<std::uintptr_t>(buckets.data() + 8));
     put(registry, 0x50, reinterpret_cast<std::uintptr_t>(nodes.data()));
-    put(registry, 0x58, reinterpret_cast<std::uintptr_t>(nodes.data() + 64));
+    put(registry, 0x58, reinterpret_cast<std::uintptr_t>(nodes.data() + 96));
     put(actor, 0x10, static_cast<void *>(registry.data()));
     put(actor, 0x18, entity);
   }
@@ -62,15 +70,55 @@ struct Fixture {
 
 Fixture *active{};
 unsigned motionReads{};
+unsigned normalTickCalls{};
+bool clientSide{};
+bool fireResistant{true};
+bool removeDuringTick{};
+unsigned removeCalls{};
 const R::Vec3Abi *getMotion(const void *actor) {
   assert(active && actor == active->actor.data());
   ++motionReads;
   return &active->motion;
 }
+const R::Vec3Abi *getCurrent(const void *actor) {
+  assert(active && actor == active->actor.data());
+  return &active->current;
+}
+const R::Vec3Abi *getPrevious(const void *actor) {
+  assert(active && actor == active->actor.data());
+  return &active->previous;
+}
+const std::int64_t *getUniqueId(void *actor) {
+  assert(active && actor == active->actor.data());
+  static const std::int64_t id = 0x10203040;
+  return &id;
+}
+bool isClientSide(const void *actor) {
+  assert(active && actor == active->actor.data());
+  return clientSide;
+}
+bool isFireResistant(const void *stack) {
+  assert(active && stack == active->actor.data() +
+                                itemphysics::profile::kItemStackBaseOffset);
+  return fireResistant;
+}
+void nativeNormalTick(void *actor) {
+  assert(active && actor == active->actor.data());
+  ++normalTickCalls;
+  if (removeDuringTick)
+    R::dispatchActorRemove(actor, nullptr, 0);
+}
+void nativeRemove(void *actor) {
+  assert(active && actor == active->actor.data());
+  ++removeCalls;
+}
 void configure(R &r) {
   R::sInstance = &r;
   r.mProfileSupported.store(true);
   r.mGetPosDelta = getMotion;
+  r.mGetActorPosition = getCurrent;
+  r.mGetActorPreviousPosition = getPrevious;
+  r.mGetActorUniqueId = getUniqueId;
 }
 }
 
@@ -124,9 +172,17 @@ int main() {
   R::ItemRenderTraits full{};
   full.height = H::FullBlock;
   assert(std::abs(r.renderWorldY(64.0f, flat, false, F::Water,
-                                40.0f, 0) - 64.100f) < 0.00001f);
+                                40.0f, 0) - 64.070f) < 0.00001f);
   assert(std::abs(r.renderWorldY(64.0f, full, false, F::Water,
                                 40.0f, 0) - 64.140f) < 0.00001f);
+  for (H height : {H::ShapedBlock, H::HorizontalThin, H::Special}) {
+    R::ItemRenderTraits traits{};
+    traits.height = height;
+    assert(std::abs(r.renderWorldY(64.0f, traits, false, F::Water,
+                                  40.0f, 0) - 64.070f) < 0.00001f);
+  }
+  assert(std::abs(r.renderWorldY(64.0f, flat, false, F::Water,
+                                40.0f, 0, false) - 64.055f) < 0.00001f);
 
   // A 2D/shaped item must be completely prone as soon as it enters liquid;
   // a full 3D block still freezes its last airborne angle.
@@ -157,6 +213,84 @@ int main() {
     (void)r.resolveGrounded(state, active->actor.data(), age, 60.0f);
   assert(state.fluid == itemphysics::DropFluidKind::None);
   assert(r.resolveGrounded(state, active->actor.data(), 16, 60.0f));
+
+  // Stable ActorRenderData Y is not ground evidence: it is camera-relative.
+  // Without native ground or vertical collision, a slowly moving actor may
+  // never become a persistent dry anchor.
+  active->groundPage[Fixture::entity] = 0xFFFFFFFFu;
+  active->motion.y = -0.01f;
+  R::VisualState airborne{};
+  for (int age = 30; age < 38; ++age) {
+    active->current.y -= 0.02f;
+    assert(!r.resolveGrounded(airborne, active->actor.data(), age, 12.0f));
+  }
+
+  // The conservative mob-drop fallback remains available when vertical
+  // collision and stable absolute Actor world Y agree for two game ticks.
+  active->collisionPage[Fixture::entity] = Fixture::entity;
+  active->motion.y = 0.0f;
+  active->current.y = 59.0f;
+  R::VisualState collided{};
+  assert(!r.resolveGrounded(collided, active->actor.data(), 40, -8.0f));
+  assert(!r.resolveGrounded(collided, active->actor.data(), 41, -8.0f));
+  assert(r.resolveGrounded(collided, active->actor.data(), 42, -8.0f));
+
+  // ECS entity slots can be reused within the same age. A new native UniqueID
+  // must reset rotation, traits and retained lineage instead of inheriting a
+  // stale actor's state.
+  auto &firstIdentity = r.stateFor(Fixture::entity, 0, 0.1f, 0.0f,
+                                   1001u, 0x1111u);
+  firstIdentity.xRot = 2.0f;
+  firstIdentity.traitsSampled = true;
+  auto &secondIdentity = r.stateFor(Fixture::entity, 0, 0.2f, 0.0f,
+                                    1002u, 0x1111u);
+  assert(secondIdentity.xRot == 0.0f);
+  assert(!secondIdentity.traitsSampled);
+  assert(secondIdentity.uniqueId == 1002u);
+
+  // The lava correction calls native normalTick exactly once and remains
+  // dormant through the complete native sink. Only a fire-resistant,
+  // authoritative actor that has stalled on the bottom gets a bounded upward
+  // velocity; water/client/disabled paths remain untouched.
+  constexpr std::uintptr_t itemActorVptr = 0x12345678u;
+  put(active->actor, 0, itemActorVptr);
+  r.mItemActorVptr = itemActorVptr;
+  r.mNormalTickOriginal = nativeNormalTick;
+  r.mIsClientSide = isClientSide;
+  r.mIsFireResistant = isFireResistant;
+  active->lavaPage[Fixture::entity] = Fixture::entity;
+  active->groundPage[Fixture::entity] = 0xFFFFFFFFu;
+  active->collisionPage[Fixture::entity] = 0xFFFFFFFFu;
+  const auto tick = [&](int age, float worldY, float speed,
+                        bool bottom = false) {
+    put(active->actor, itemphysics::profile::kItemAgeOffset, age);
+    active->current.y = worldY;
+    active->motion.y = speed;
+    active->groundPage[Fixture::entity] =
+        bottom ? Fixture::entity : 0xFFFFFFFFu;
+    active->collisionPage[Fixture::entity] =
+        bottom ? Fixture::entity : 0xFFFFFFFFu;
+    r.onNormalTick(active->actor.data());
+  };
+  normalTickCalls = 0;
+  tick(1, 64.0f, -0.10f);
+  tick(2, 63.7f, -0.08f);
+  tick(3, 63.2f, -0.04f, true);
+  tick(4, 63.2f, -0.04f, true);
+  assert(active->motion.y == -0.04f);
+  tick(5, 63.2f, -0.04f, true);
+  assert(std::abs(active->motion.y - 0.06f) < 1e-6f);
+  assert(normalTickCalls == 5);
+  clientSide = true;
+  tick(6, 63.2f, -0.02f, true);
+  assert(active->motion.y == -0.02f);
+  clientSide = false;
+  r.mActorRemoveOriginal = nativeRemove;
+  removeDuringTick = true;
+  tick(7, 63.2f, -0.03f, true);
+  removeDuringTick = false;
+  assert(removeCalls == 1);
+  assert(active->motion.y == -0.03f);
 
   delete active;
   active = nullptr;

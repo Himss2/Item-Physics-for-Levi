@@ -34,9 +34,44 @@ int main() {
   using itemphysics::DropFluidKind;
   using itemphysics::DropVisualLineage;
   using itemphysics::DropVisualPose;
+  using itemphysics::LavaBottomRecovery;
+  using itemphysics::DropRemovalSnapshot;
   using itemphysics::RenderSpacePoint;
+  using itemphysics::advanceFluidAnchor;
   using itemphysics::javaVisualCopyCount;
+  using itemphysics::poseAtRemoval;
   using itemphysics::renderOriginForWorldAnchor;
+
+  // Fire-resistant items must complete Minecraft's native lava sink before a
+  // bounded recovery begins. Repeated render/tick calls at the same age must
+  // not advance the detector, and the correction stops at the recorded entry
+  // surface instead of becoming a permanent velocity floor.
+  LavaBottomRecovery lavaRecovery{};
+  if (lavaRecovery.update(64.0f, -0.10f, false, false, 1, true) ||
+      lavaRecovery.update(63.7f, -0.08f, false, false, 2, true) ||
+      lavaRecovery.update(63.2f, -0.04f, true, true, 3, true) ||
+      lavaRecovery.update(63.2f, -0.04f, true, true, 3, true) ||
+      lavaRecovery.update(63.2f, -0.04f, true, true, 4, true))
+    return 30;
+  const auto recoveryStart =
+      lavaRecovery.update(63.2f, -0.04f, true, true, 5, true);
+  if (!recoveryStart || !closeEnough(*recoveryStart, 0.06f))
+    return 31;
+  const auto recoveryMiddle =
+      lavaRecovery.update(63.6f, -0.01f, false, false, 6, true);
+  if (!recoveryMiddle || !closeEnough(*recoveryMiddle, 0.06f))
+    return 32;
+  if (lavaRecovery.update(63.98f, 0.03f, false, false, 7, true))
+    return 33;
+
+  // Disabled, non-fire-resistant and non-authoritative paths are exact
+  // passthrough and clear any prior recovery state.
+  if (lavaRecovery.update(60.0f, 0.0f, true, true, 8, false) ||
+      lavaRecovery.update(60.0f, 0.0f, true, true, 9, true,
+                          false) ||
+      lavaRecovery.update(60.0f, 0.0f, true, true, 10, true,
+                          true, false))
+    return 34;
 
   const float nan = std::numeric_limits<float>::quiet_NaN();
 
@@ -45,52 +80,132 @@ int main() {
   // custom bob starts only after three distinct stable game ticks.
   itemphysics::FluidVisualBase liveBase{};
   if (!closeEnough(liveBase.update(64.0f, 64.0f, -0.08f, 10,
-                                   DropFluidKind::Water), 64.0f))
+                                   DropFluidKind::Water, false), 64.0f))
     return fail("fluid entry changed the initial world height");
   if (!closeEnough(liveBase.update(63.97f, 64.0f, -0.08f, 10,
-                                   DropFluidKind::Water), 63.97f))
+                                   DropFluidKind::Water, false), 63.97f))
     return fail("repeat render was not native during liquid entry");
   if (!closeEnough(liveBase.update(63.90f, 63.80f, -0.10f, 11,
-                                   DropFluidKind::Water), 63.90f) ||
+                                   DropFluidKind::Water, false), 63.90f) ||
       !closeEnough(liveBase.update(63.85f, 63.90f, 0.10f, 12,
-                                   DropFluidKind::Water), 63.85f) ||
+                                   DropFluidKind::Water, false), 63.85f) ||
       !closeEnough(liveBase.update(63.95f, 64.00f, 0.10f, 13,
-                                   DropFluidKind::Water), 63.95f))
+                                   DropFluidKind::Water, false), 63.95f))
     return fail("native sink/rise was replaced by a visual ascent");
   if (liveBase.bobbing())
     return fail("bob started while native buoyancy was still moving");
   if (!closeEnough(liveBase.update(64.00f, 64.00f, 0.0f, 14,
-                                   DropFluidKind::Water), 64.00f) ||
+                                   DropFluidKind::Water, false), 64.00f) ||
       !closeEnough(liveBase.update(63.995f, 64.00f, 0.0f, 14,
-                                   DropFluidKind::Water), 63.995f) ||
+                                   DropFluidKind::Water, false), 63.995f) ||
       !closeEnough(liveBase.update(64.00f, 64.00f, 0.0f, 14,
-                                   DropFluidKind::Water), 64.00f) ||
+                                   DropFluidKind::Water, false), 64.00f) ||
       !closeEnough(liveBase.update(64.00f, 64.00f, 0.0f, 15,
-                                   DropFluidKind::Water), 64.00f) ||
+                                   DropFluidKind::Water, false), 64.00f) ||
       liveBase.bobbing())
     return fail("surface latch counted frames instead of game ticks");
   if (!closeEnough(liveBase.update(64.00f, 64.00f, 0.0f, 16,
-                                   DropFluidKind::Water), 64.00f) ||
+                                   DropFluidKind::Water, false), 64.00f) ||
       !liveBase.bobbing())
     return fail("stable native surface never enabled bobbing");
   if (!closeEnough(liveBase.update(63.99f, 63.99f, -0.01f, 17,
-                                   DropFluidKind::Water), 64.00f))
+                                   DropFluidKind::Water, false), 64.00f))
     return fail("native surface jitter leaked into custom bobbing");
-  if (!closeEnough(liveBase.update(62.0f, 62.0f, -0.4f, 18,
-                                   DropFluidKind::Water), 62.0f) ||
+  // A slow native drift after latching must not pull the rendered item back
+  // under water. This was the delayed potion/fish/bone sinking regression.
+  if (!closeEnough(liveBase.update(63.45f, 63.45f, -0.01f, 18,
+                                   DropFluidKind::Water, false), 64.00f) ||
+      !liveBase.bobbing())
+    return fail("small native drift released the confirmed surface");
+  // A genuine fast relocation remains a reset boundary.
+  if (!closeEnough(liveBase.update(62.0f, 62.0f, -0.4f, 19,
+                                   DropFluidKind::Water, false), 62.0f) ||
       liveBase.bobbing())
     return fail("large real relocation left a floating ghost behind");
-  if (!closeEnough(liveBase.update(60.0f, 60.0f, 0.0f, 19,
-                                   DropFluidKind::None), 60.0f) ||
+  if (!closeEnough(liveBase.update(60.0f, 60.0f, 0.0f, 20,
+                                   DropFluidKind::None, false), 60.0f) ||
       liveBase.bobbing())
     return fail("leaving fluid retained the old surface anchor");
-  if (!std::isnan(liveBase.update(nan, 60.0f, 0.0f, 20,
-                                  DropFluidKind::Lava)))
+  if (!std::isnan(liveBase.update(nan, 60.0f, 0.0f, 21,
+                                  DropFluidKind::Lava, false)))
     return fail("invalid visual position was not rejected");
 
-  // A removed actor has no physics of its own. Preserve its origin only after
-  // a dry item has landed or a liquid item has reached the custom bob phase;
-  // otherwise the last mid-air frame becomes a permanent ghost.
+  // Stable liquid at a pool bottom or mid-column is not a surface. It cannot
+  // acquire bobbing until a real upward phase has been observed first.
+  itemphysics::FluidVisualBase bottomBase{};
+  for (int age = 30; age < 40; ++age) {
+    const bool onBottom = age < 35;
+    const float tickY = age < 35 ? 50.0f : 50.02f;
+    const float speed = age == 35 ? 0.02f : 0.0f;
+    const float result = bottomBase.update(tickY, tickY, speed, age,
+                                           DropFluidKind::Lava, onBottom);
+    if (!closeEnough(result, tickY) || bottomBase.bobbing())
+      return fail("stationary underwater item was mistaken for a surface");
+  }
+
+  // Removed actors have no native physics. A retained fluid origin advances
+  // only upward toward the survivor's confirmed surface, at a time-based rate.
+  DropVisualPose retainedWater{};
+  retainedWater.worldX = 4.0f;
+  retainedWater.baseWorldY = 60.0f;
+  retainedWater.worldZ = 5.0f;
+  retainedWater.xRotSine = 0.25f;
+  retainedWater.fluid = DropFluidKind::Water;
+  if (advanceFluidAnchor(retainedWater, 64.0f, 10.0f) ||
+      !closeEnough(retainedWater.baseWorldY, 60.0f))
+    return fail("retained water transit moved on its initialization sample");
+  if (advanceFluidAnchor(retainedWater, 64.0f, 11.0f) ||
+      !closeEnough(retainedWater.baseWorldY, 60.04f))
+    return fail("retained water transit used the wrong tick rate");
+  if (!closeEnough(retainedWater.worldX, 4.0f) ||
+      !closeEnough(retainedWater.worldZ, 5.0f) ||
+      !closeEnough(retainedWater.xRotSine, 0.25f))
+    return fail("retained fluid transit changed XZ or orientation");
+  if (!advanceFluidAnchor(retainedWater, 60.05f, 12.0f) ||
+      !closeEnough(retainedWater.baseWorldY, 60.05f) ||
+      !retainedWater.fluidBobbing)
+    return fail("retained water origin did not clamp and enter bobbing");
+
+  DropVisualPose retainedLava{};
+  retainedLava.baseWorldY = 40.0f;
+  retainedLava.fluid = DropFluidKind::Lava;
+  (void)advanceFluidAnchor(retainedLava, 41.0f, 20.0f);
+  if (advanceFluidAnchor(retainedLava, 41.0f, 21.0f) ||
+      !closeEnough(retainedLava.baseWorldY, 40.02f))
+    return fail("retained lava transit did not use half water speed");
+
+  // Removal admission uses native final state, not the last render's ground
+  // latch. Airborne dry sources fail closed; grounded and fluid sources keep
+  // their final absolute world position.
+  DropVisualPose lastRendered = pose(2.0f, 65.2f, 3.0f);
+  lastRendered.grounded = true; // deliberately stale/incorrect render latch
+  DropRemovalSnapshot removal{};
+  removal.valid = true;
+  removal.worldX = 2.2f;
+  removal.worldY = 64.0f;
+  removal.worldZ = 3.2f;
+  removal.fluid = DropFluidKind::None;
+  DropVisualPose retained{};
+  DropVisualPose dryDestination = pose(2.3f, 64.0f, 3.3f);
+  if (poseAtRemoval(lastRendered, 65.0f, removal, dryDestination, retained))
+    return fail("airborne removal trusted a stale grounded render pose");
+  removal.nativeGrounded = true;
+  if (!poseAtRemoval(lastRendered, 65.0f, removal, dryDestination, retained) ||
+      !closeEnough(retained.worldX, 2.2f) ||
+      !closeEnough(retained.baseWorldY, 64.2f) ||
+      !closeEnough(retained.worldZ, 3.2f))
+    return fail("grounded removal did not use the final native world pose");
+  removal.nativeGrounded = false;
+  removal.fluid = DropFluidKind::Water;
+  DropVisualPose waterDestination = dryDestination;
+  waterDestination.fluid = DropFluidKind::Water;
+  if (!poseAtRemoval(lastRendered, 65.0f, removal, waterDestination, retained) ||
+      retained.fluidBobbing)
+    return fail("rising fluid removal could not enter retained transit");
+
+  // A removed actor has no physics of its own. Dry sources require final
+  // ground contact. Same-fluid sources may be retained before the surface
+  // because advanceFluidAnchor supplies their missing visual transit.
   DropVisualPose destinationPose = pose(0.0f, 64.0f, 0.0f);
   DropVisualPose airbornePose = pose(0.0f, 65.0f, 0.0f);
   airbornePose.grounded = false;
@@ -100,8 +215,8 @@ int main() {
   risingWaterPose.fluid = DropFluidKind::Water;
   destinationPose.fluid = DropFluidKind::Water;
   destinationPose.grounded = false;
-  if (itemphysics::canRetainDropPose(risingWaterPose, destinationPose))
-    return fail("rising water source was accepted before the surface");
+  if (!itemphysics::canRetainDropPose(risingWaterPose, destinationPose))
+    return fail("rising water source could not enter retained transit");
   risingWaterPose.fluidBobbing = true;
   if (!itemphysics::canRetainDropPose(risingWaterPose, destinationPose))
     return fail("settled water source could not retain its visual origin");
