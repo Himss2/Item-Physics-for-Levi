@@ -172,17 +172,21 @@ int main() {
   R::ItemRenderTraits full{};
   full.height = H::FullBlock;
   assert(std::abs(r.renderWorldY(64.0f, flat, false, F::Water,
-                                40.0f, 0) - 64.070f) < 0.00001f);
+                                40.0f, 0) - 64.140f) < 0.00001f);
   assert(std::abs(r.renderWorldY(64.0f, full, false, F::Water,
                                 40.0f, 0) - 64.140f) < 0.00001f);
   for (H height : {H::ShapedBlock, H::HorizontalThin, H::Special}) {
     R::ItemRenderTraits traits{};
     traits.height = height;
     assert(std::abs(r.renderWorldY(64.0f, traits, false, F::Water,
-                                  40.0f, 0) - 64.070f) < 0.00001f);
+                                  40.0f, 0) - 64.140f) < 0.00001f);
   }
   assert(std::abs(r.renderWorldY(64.0f, flat, false, F::Water,
-                                40.0f, 0, false) - 64.055f) < 0.00001f);
+                                40.0f, 0, false) - 64.125f) < 0.00001f);
+  assert(std::abs(r.renderWorldY(64.0f, flat, false, F::Lava,
+                                40.0f, 0, false) - 64.125f) < 0.00001f);
+  assert(std::abs(r.renderWorldY(64.0f, full, false, F::Lava,
+                                40.0f, 0, false) - 64.125f) < 0.00001f);
 
   // A 2D/shaped item must be completely prone as soon as it enters liquid;
   // a full 3D block still freezes its last airborne angle.

@@ -143,36 +143,44 @@ int main() {
       return fail("stationary underwater item was mistaken for a surface");
   }
 
-  // Removed actors have no native physics. A retained fluid origin advances
-  // only upward toward the survivor's confirmed surface, at a time-based rate.
+  // Removed actors have no native physics. While the survivor is still moving
+  // through liquid, a retained origin follows the survivor's real native Y
+  // displacement immediately. Once that target stops, any remaining vertical
+  // separation closes at the bounded water/lava transit rate.
   DropVisualPose retainedWater{};
   retainedWater.worldX = 4.0f;
   retainedWater.baseWorldY = 60.0f;
   retainedWater.worldZ = 5.0f;
   retainedWater.xRotSine = 0.25f;
   retainedWater.fluid = DropFluidKind::Water;
+  retainedWater.fluidFollowBaseY = 64.0f;
+  retainedWater.fluidFollowSampled = true;
   if (advanceFluidAnchor(retainedWater, 64.0f, 10.0f) ||
       !closeEnough(retainedWater.baseWorldY, 60.0f))
     return fail("retained water transit moved on its initialization sample");
-  if (advanceFluidAnchor(retainedWater, 64.0f, 11.0f) ||
-      !closeEnough(retainedWater.baseWorldY, 60.04f))
-    return fail("retained water transit used the wrong tick rate");
+  if (advanceFluidAnchor(retainedWater, 64.15f, 11.0f) ||
+      !closeEnough(retainedWater.baseWorldY, 60.15f))
+    return fail("retained water anchor did not follow native survivor ascent");
   if (!closeEnough(retainedWater.worldX, 4.0f) ||
       !closeEnough(retainedWater.worldZ, 5.0f) ||
       !closeEnough(retainedWater.xRotSine, 0.25f))
     return fail("retained fluid transit changed XZ or orientation");
-  if (!advanceFluidAnchor(retainedWater, 60.05f, 12.0f) ||
-      !closeEnough(retainedWater.baseWorldY, 60.05f) ||
-      !retainedWater.fluidBobbing)
-    return fail("retained water origin did not clamp and enter bobbing");
+  if (advanceFluidAnchor(retainedWater, 64.15f, 12.0f) ||
+      !closeEnough(retainedWater.baseWorldY, 60.19f))
+    return fail("stationary water target did not close at the bounded rate");
 
   DropVisualPose retainedLava{};
   retainedLava.baseWorldY = 40.0f;
   retainedLava.fluid = DropFluidKind::Lava;
+  retainedLava.fluidFollowBaseY = 41.0f;
+  retainedLava.fluidFollowSampled = true;
   (void)advanceFluidAnchor(retainedLava, 41.0f, 20.0f);
-  if (advanceFluidAnchor(retainedLava, 41.0f, 21.0f) ||
-      !closeEnough(retainedLava.baseWorldY, 40.02f))
-    return fail("retained lava transit did not use half water speed");
+  if (advanceFluidAnchor(retainedLava, 41.10f, 21.0f) ||
+      !closeEnough(retainedLava.baseWorldY, 40.10f))
+    return fail("retained lava anchor did not follow native survivor ascent");
+  if (advanceFluidAnchor(retainedLava, 41.10f, 22.0f) ||
+      !closeEnough(retainedLava.baseWorldY, 40.12f))
+    return fail("stationary lava target did not retain half water catch-up speed");
 
   // Removal admission uses native final state, not the last render's ground
   // latch. Airborne dry sources fail closed; grounded and fluid sources keep
@@ -190,11 +198,14 @@ int main() {
   if (poseAtRemoval(lastRendered, 65.0f, removal, dryDestination, retained))
     return fail("airborne removal trusted a stale grounded render pose");
   removal.nativeGrounded = true;
+  if (poseAtRemoval(lastRendered, 65.0f, removal, dryDestination, retained))
+    return fail("dry removal trusted a stale on-ground flag without collision");
+  removal.verticalCollision = true;
   if (!poseAtRemoval(lastRendered, 65.0f, removal, dryDestination, retained) ||
       !closeEnough(retained.worldX, 2.2f) ||
       !closeEnough(retained.baseWorldY, 64.2f) ||
       !closeEnough(retained.worldZ, 3.2f))
-    return fail("grounded removal did not use the final native world pose");
+    return fail("grounded removal did not use corroborated final native contact");
   removal.nativeGrounded = false;
   removal.fluid = DropFluidKind::Water;
   DropVisualPose waterDestination = dryDestination;
