@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.15.2
+# Implementation notes: universal visual core 0.16.0
 
 ## Source behavior reproduced
 
@@ -10,8 +10,9 @@ The Bedrock implementation follows the same boundary:
 
 1. Hook `ItemRenderer::render` once.
 2. Read `OnGroundFlagComponent` from the actor ECS registry. If a mob-drop path
-   omits it, require stable world Y on four ItemActor age ticks, or two when
-   `VerticalCollisionFlagComponent` confirms contact. Once latched, only actual
+   omits it, require stable absolute world Y plus
+   `VerticalCollisionFlagComponent` for two ItemActor age ticks. Once latched,
+   only actual
    ItemActor vertical velocity can release it; camera sneak cannot. A live or
    four-tick-grace `WasInWaterFlagComponent` or `WasInLavaFlagComponent`
    explicitly excludes stable surface Y from this ground fallback.
@@ -394,3 +395,65 @@ fingerprints still match the supplied `libminecraftpe.so` SHA exactly. Host
 tests cover native-Y passthrough, tick-based surface acquisition, relocation
 reset, liquid orientation, per-class surface height, anchor eligibility and
 the 16-origin budget. Android gameplay and FPS remain the required final test.
+
+## Version 0.16.0: five regression corrections
+
+The live liquid tracker is now an ascent-gated state machine. Entry, sinking
+and native rise use the current interpolated actor height and do not receive
+the custom bob. Surface acquisition is sampled once per `ItemActor::age`,
+requires at least `0.08` block of recovery from the lowest observed point, and
+then requires three stable non-grounded ticks. A small bottom bounce therefore
+cannot be mistaken for the surface. Once acquired, slow native correction no
+longer drags potion, fish, bone or other flat models underwater; only a fast
+relocation over `0.75` block at speed over `0.20`, a time discontinuity, or
+fluid exit resets it. Non-full models use `+0.055` liquid support and full
+blocks keep `+0.125`; all compiled dry-ground values are unchanged.
+
+Removed same-fluid sources may now survive a merge before reaching the
+surface. Their retained render-only pose advances upward toward the live
+survivor's confirmed non-bob base at `0.04` block/tick in water or `0.02` in
+lava. Sampling uses `age + partialTick`, clamps without overshoot, and does not
+change XZ, orientation, Minecraft position, count, pickup or networking. The
+wave begins only at the target. Traversal remains inside the existing fixed
+96-node global pool and 16-node per-lineage limit.
+
+Merge admission no longer trusts the last render frame. `Actor::remove`
+captures an immutable native position, velocity, age, ground, collision and
+fluid snapshot before forwarding the original. The last render's model-space
+correction is rebased onto that final absolute world position. Dry roots
+require native ground at removal; same-fluid roots enter the visual ascent;
+missing, stale, non-finite, wrong-item, wrong-identity, ambiguous and out-of-
+range evidence fails closed into the live group. ECS entity-slot reuse is
+validated against UniqueID plus registry. The mob-drop ground fallback now
+uses absolute `Actor::getPosition` Y and requires vertical collision for two
+distinct game ticks, so camera motion and airborne apices cannot create a
+permanent floating anchor.
+
+The fire-resistant lava repair returns in a bounded form. Exact fingerprints
+guard `ItemActor::normalTick` (`0xF124154`), `Actor::isClientSide`
+(`0xEC8E9D8`) and the native stack fire-resistance predicate (`0xF63FC00`).
+The original tick always runs exactly once. The state records natural descent,
+waits for three position-stable bottom-collision ticks while velocity remains
+inside the native `-0.04` gravity residual range, then
+applies `posDelta.y = max(posDelta.y, 0.06)` only until the first recorded lava
+height. It never affects water, burning items, disabled modules or remote
+clients, and it is disabled if the remove-lifecycle observer is unavailable.
+A thread-local removal watch prevents post-original access to an actor removed
+inside its tick.
+
+Mod Menu persistence uses `pl::config::ConfigFile<ItemPhysicsConfig>` schema
+version 10. Only `singleModel`, `separateDropVisuals` and `hideItemShadow` are
+owned by this file; Levi remains the single owner of the master module toggle.
+Load supplies the menu's current values, each callback updates the renderer's
+atomic flag and saves under a mutex, and Preloader's temporary-file/rename path
+provides crash-safe replacement. Obsolete v9 fields are discarded during the
+versioned rewrite.
+
+Host regression tests cover surface gating, delayed native drift, bottom
+bounce rejection, retained water/lava transit, removal-time admission,
+absolute ground fallback, entity identity reuse, every compiled height class,
+liquid prone orientation, bounded lava recovery, native tick call-through,
+client gating and removal during tick. Production units compile with strict
+warnings using host boundary doubles, and every fingerprint matches the exact
+supplied SHA-256 library. Android hook installation, device gameplay, FPS and
+the stripped `614400`-byte size gate still require the Android CI/device run.

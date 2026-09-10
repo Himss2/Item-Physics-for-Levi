@@ -1,10 +1,11 @@
 # Levi Item Physics
 
 ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.45.1`.
-Version `0.15.2` preserves the device-approved airborne, landing, ground-height,
+Version `0.16.0` preserves the device-approved airborne, landing, ground-height,
 head and shadow behavior. Minecraft exclusively owns liquid entry, sinking and
-buoyant ascent; the mod begins its render-only bob only after the native actor
-has stayed at a stable surface Y for three game ticks.
+ordinary buoyant ascent. The mod begins its render-only bob only after the
+native actor has risen by at least `0.08` block and then stayed at a stable
+surface Y for three game ticks.
 
 ## Implemented behavior
 
@@ -31,22 +32,27 @@ has stayed at a stable surface Y for three game ticks.
   `+0.165` for normal skull, `+0.203` for Dragon Head, `-0.147` for Shield,
   `-0.159` for Banner, `-0.171` for Fence/Gate, and `-0.081` for Scaffolding.
 - Water and lava stop roll immediately and add only vertical surface movement.
-  Flat/shaped/special models use a `+0.085` surface lift while full blocks retain
+  Flat/shaped/special models use a `+0.055` surface lift while full blocks retain
   the approved `+0.125` lift.
   The render-only wave has `+/-0.015` amplitude, an eight-tick lower hold, a
   smooth rise, a twenty-tick upper hold, and a mirrored fall. Its 91-sample
   table avoids an extra trigonometric call in the fluid path. Lava uses half
   the water waveform speed.
-- During liquid entry and ascent, render Y is the exact native interpolated Y;
-  there is no visual catch-up or velocity override. After three stable game
-  ticks, that surface base is latched and the custom bob begins. A large real
-  relocation or fluid exit resets the latch. Ground height offsets are not
+- During liquid entry and ascent, render Y follows native interpolation plus
+  the class support above, while custom bobbing remains disabled. After real
+  ascent and three stable game ticks, the surface base is latched and bobbing
+  begins. Only a fast relocation or fluid exit resets the latch. Ground height
+  offsets are not
   applied while submerged, even if native on-ground is also present.
-- Lava behavior is fully native. Fire-resistant items use Minecraft's own sink,
-  ascent, collision and networking; ordinary items use native burning/removal.
+- Ordinary lava items retain native burning/removal. Fire-resistant items keep
+  Minecraft's complete sink first; if an authoritative local actor then stalls
+  on a bottom collision for three ticks, a bounded `+0.06` Y-velocity repair
+  runs only until its recorded lava-entry height. Remote clients are untouched.
 - Java stack-copy thresholds remain `1 / 2 / 3 / 4 / 5` visible models at
   counts `1 / 2 / 17 / 33 / 49`. Every copy remains on one world-XZ plane.
-- `Single Model` and `Hide Item Shadow` remain immediate Mod Menu toggles.
+- `Single Model`, `Separate Drop Visuals`, and `Hide Item Shadow` remain
+  immediate Mod Menu toggles. Their last values are saved in the versioned
+  native config and restored when a later session registers the menu.
 
 ## Separate Drop Visuals
 
@@ -65,10 +71,11 @@ requested visual behavior without changing Minecraft's stack rules:
 4. Each origin uses Java's normal 1-to-5 copy threshold for the count originally
    represented by that drop. `Single Model` reduces each retained origin to one
    model; it does not erase the independent origins.
-5. A source is retained only after it is grounded, or after its native liquid
-   transit has completed and surface bobbing has begun. Mid-air and still-rising
-   sources collapse into the surviving live group, preventing permanent ghost
-   models. Surface origins retain their independent bob phase.
+5. A dry source is retained only when its immutable removal-time native
+   snapshot says it was grounded. A same-fluid source may be retained before
+   reaching the surface; its visual anchor rises at `0.04` block/tick in water
+   or `0.02` in lava toward the survivor's confirmed surface, without changing
+   XZ or orientation. Mid-air dry sources fail closed into the live group.
 
 Local-world merges use the exact source and destination UniqueIDs captured at
 the analyzed `ItemActor::normalTick` removal call. A remote client does not
@@ -107,10 +114,13 @@ clears all retained origins and immediately returns to the normal renderer.
   at the one native surviving `ItemActor`, by design.
 - On a remote server, an ambiguous merge is not separated visually. This
   fail-closed rule prevents unrelated drops from being paired.
-- The surface latch does not query an exact fluid mesh. It waits for native
-  vertical position and velocity to stabilize, then resets if native Y relocates
-  by more than `0.35` block. Flowing and unusual fluid geometry need device test.
-- Version 0.15.2 is host-tested source, not yet validated in Android gameplay.
+- The surface latch does not query an exact fluid mesh. It requires native
+  ascent and stable position/velocity, then releases only on a relocation over
+  `0.75` block accompanied by speed over `0.20`. Flowing and unusual fluid
+  geometry need device testing.
+- The bounded lava repair applies only to authoritative local simulation; a
+  client-only mod cannot change a remote server's ItemActor physics.
+- Version 0.16.0 is host-tested source, not yet validated in Android gameplay.
 
 ## Strict binary guard
 
@@ -122,8 +132,11 @@ The hooks activate only for the analyzed library:
   `0xA29F708`
 - `ItemActor::handleEntityEvent`: RTTI `9ItemActor`, vtable `+0x228`, RVA
   `0xF12537C`
+- `ItemActor::normalTick`: RVA `0xF124154`
 - `Actor::remove`: ItemActor vtable `+0x60`, RVA `0xEC8FC7C`
 - Actor UniqueID accessor: RVA `0xEC8B12C`
+- Actor client-side predicate: RVA `0xEC8E9D8`
+- Native item fire-resistance predicate: RVA `0xF63FC00`
 - Native merge/removal sequence: RVA `0xF1245D8`, return site `0xF1245EC`
 
 Runtime verifies the GNU Build ID, resolved vtable targets, and exact
@@ -147,6 +160,8 @@ g++ -std=c++20 -O2 -Isrc tests/DropVisualStateTest.cpp -o /tmp/drop-state-test
 /tmp/drop-state-test
 g++ -std=c++20 -O2 -Itests/support -Isrc tests/FluidRuntimeTest.cpp src/ItemPhysicsRuntime.cpp src/RttiResolver.cpp -ldl -o /tmp/fluid-runtime-test
 /tmp/fluid-runtime-test
+g++ -std=c++20 -O2 -Isrc tests/ConfigStateTest.cpp -o /tmp/config-state-test
+/tmp/config-state-test
 ```
 
 ## Build
@@ -181,12 +196,15 @@ remain at its last position and orientation instead of moving to the first
 item. Test chained `A -> B -> C` merges, separately dropped multi-item stacks,
 partial transfers near stack limits, pickup/despawn of the survivor, water
 and lava merges at several depths, `Single Model`, toggle-off cleanup, and
-toggle-on restart. A still-sinking/rising source may safely collapse into the
-live group, but it must never leave an anchor in mid-air or underwater. In lava,
-compare a surviving fireproof item with an ordinary burning item: native physics
-must sink then raise the former, while the latter and its visuals disappear.
+toggle-on restart. A same-fluid retained source must rise smoothly to the live
+survivor surface; a dry airborne source must collapse rather than remain in
+mid-air. In lava, compare a surviving fireproof item with an ordinary burning
+item: both must sink naturally first; only a stalled local fireproof item may
+receive bounded recovery, while the ordinary item and its visuals disappear.
 Check a deep pool, shallow pool, ceiling, fluid exit, and mod disable. Compare
 live and retained fluid bob with Separate Drop Visuals on/off;
 move and sneak the camera to check world anchoring. In multiplayer,
 create two simultaneous same-item merges; an ambiguous pair may collapse to one
 live group but must never create a visual at an unrelated source position.
+Finally change all three toggles, restart the game, and confirm the same values
+are shown and applied before dropping the first item.

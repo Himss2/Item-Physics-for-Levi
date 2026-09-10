@@ -54,10 +54,19 @@ target_include_directories(
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 
-# The visual core intentionally has no JSON/reflection dependency. fmt is the
-# only support library retained because it is part of the preloader logger API.
-# c++_shared stays external in LeviLaunchroid, keeping this .so small.
-target_link_libraries(levi_item_physics PRIVATE preloader fmt::fmt)
+# ConfigFile is header-only, but its reflection/JSON include directories are
+# private dependencies of preloader. Link the three interface targets directly
+# so ItemPhysicsConfig.hpp compiles without copying dependency paths. LTO and
+# section GC retain only the three booleans' serializer in the final .so.
+target_link_libraries(
+  levi_item_physics
+  PRIVATE
+  preloader
+  fmt::fmt
+  nlohmann_json::nlohmann_json
+  Boost::pfr
+  magic_enum::magic_enum
+)
 
 find_library(LOG_LIB log)
 find_library(DL_LIB dl)
