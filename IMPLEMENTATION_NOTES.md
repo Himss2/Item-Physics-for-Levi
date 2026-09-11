@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.16.4
+# Implementation notes: universal visual core 0.16.5
 
 ## Source behavior reproduced
 
@@ -515,67 +515,33 @@ ownership across several frames. The ordinary no-pending-signal path still
 performs one bounded fixed-array scan, and global/per-lineage memory limits are
 unchanged.
 
-## Version 0.16.3: persistent surfaces and retained origins
+## Version 0.16.5: v0.16.2 rollback with native-owner fluid anchors
 
-Some ordinary block and shaped-item routes lose Bedrock's
-`WasInWater`/`WasInLava` component after reaching the surface. The earlier
-four-tick grace then cleared the render fluid class, reset `FluidVisualBase`,
-and visibly dropped the model back to its dry/native base. A positively
-confirmed bobbing surface now keeps its previous fluid class through stationary
-membership misses. This extension is deliberately unavailable before surface
-confirmation and ends on native ground/collision evidence or a vertical wake,
-so it cannot convert a stationary pool-bottom item into a surface float.
+This release is rebuilt directly from the `0.16.2` source after device testing
+showed that the generalized `0.16.4` water/lava bottom-recovery path increased
+load and worsened liquid motion. None of the `0.16.4` water velocity writes,
+extra water component lookup, generalized fluid-recovery table, persistent
+surface-candidate state, or lava count-preservation experiment is included.
+Water ItemActors therefore use Minecraft's native `normalTick` physics without
+any position or velocity write from this mod. The narrowly bounded, fire-proof
+lava recovery already present in `0.16.2` is unchanged.
 
-Lava count loss is now separated from actor lifetime. A partial decrease of the
-surviving real stack updates its root count but preserves frozen source origins;
-the entire lineage is released when the live count reaches zero or the owning
-ItemActor state is reclaimed. Dry and water reconciliation retain their prior
-count-accurate stale-origin cleanup.
+Fake anchors are render-only and cannot own a real Minecraft physics body.
+Instead of simulating a second `0.04`/`0.02` block-per-tick ascent, every
+same-fluid anchor now adopts the surviving real ItemActor's exact non-bob world
+Y each render. This makes live and retained origins react together and reach
+the same native surface while preserving each origin's independent X/Z and
+orientation. The live surface latch remains the sole gate for the existing
+`+/-0.015` bob waveform.
 
-Dry removal admission no longer requires a transient vertical-collision flag
-when the source was already rendered grounded and removal stays within `0.075`
-block of its last actor Y at stable velocity. A source landing between renders
-still needs collision evidence. Rising or displaced rethrows remain rejected,
-while ordinary stationary ground merges once again create retained origins.
+Water retains the class-independent `+0.125` visual support. Lava alone uses a
+class-independent `+0.055` support, lowering every render route by `0.070`
+block without touching gameplay position or velocity. Ground calibrations and
+all item classification remain unchanged.
 
-Host regressions cover all three boundaries. Android gameplay remains the
-required validation for Bedrock component timing and final visual placement.
-
-## Version 0.16.4: native bottom release without surface overshoot
-
-Device evidence separated the remaining fluid failure from the `+0.125`
-render support. Most affected live actors were genuinely stationary on the
-pool bottom, so changing render height could not make them reach the surface.
-The existing lava recovery also used the actor's first detected lava Y as its
-terminal target. Because an AABB may first intersect lava while its origin is
-still above the surface, that target could physically lift fire-resistant
-items too high.
-
-`FluidBottomRecovery` replaces that target-based velocity floor. It observes a
-real descent, waits for three distinct stable native ground/vertical-collision
-ticks, then emits one `+0.06` release impulse in either fluid. This survives
-the following native `-0.04` gravity step without creating a continuing
-velocity floor. Only fire-resistant items are eligible in lava, so native
-burning and removal remain unchanged. The detector can emit another isolated
-impulse only after a fresh three-tick bottom stall; as soon as contact clears,
-Minecraft owns the remaining ascent and surface position. Authoritative and
-lifecycle guards are unchanged, and remote-client actors are never written.
-
-Fluid membership can disappear between the first real ascent and the third
-stable surface tick. `FluidVisualBase::surfaceCandidate()` now carries that
-observed-ascent evidence across stationary membership misses, allowing the
-existing surface latch and retained-anchor transit to complete instead of
-freezing underwater.
-
-Dry retained origins now require two distinct grounded render probes before
-the no-collision admission path is available. A one-tick stale on-ground state
-therefore collapses into the live group. That path also requires absolute
-vertical speed at or below `0.025`; a faster falling source needs explicit
-vertical-collision evidence through the separate between-frame landing path.
-This targets the last rapid-drop hover cases without disabling established
-ground origins.
-
-Host tests cover water and fire-resistant lava release, non-fire-resistant and
-remote passthrough, removal during the native tick, pre-bob fluid membership
-loss, the absence of a continued surface velocity floor, and two-tick dry
-ground confirmation. Android gameplay remains the final release gate.
+The only post-`0.16.2` dry behavior retained is the device-approved rapid-drop
+anchor admission. A no-collision removal path requires two distinct grounded
+render ticks, absolute vertical speed at most `0.025`, and no more than `0.075`
+block drift. A source landing between renders still requires native collision;
+rising, fast-falling, displaced, or one-tick stale poses collapse into the live
+group rather than becoming hovering anchors.
