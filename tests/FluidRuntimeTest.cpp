@@ -75,12 +75,11 @@ struct Fixture {
 };
 
 Fixture *active{};
+Fixture *destination{};
 unsigned motionReads{};
-unsigned normalTickCalls{};
-bool clientSide{};
-bool fireResistant{true};
-bool removeDuringTick{};
 unsigned removeCalls{};
+constexpr std::int64_t sourceUniqueId = 0x10203040;
+constexpr std::int64_t destinationUniqueId = 0x50607080;
 const R::Vec3Abi *getMotion(const void *actor) {
   assert(active && actor == active->actor.data());
   ++motionReads;
@@ -95,24 +94,13 @@ const R::Vec3Abi *getPrevious(const void *actor) {
   return &active->previous;
 }
 const std::int64_t *getUniqueId(void *actor) {
-  assert(active && actor == active->actor.data());
-  static const std::int64_t id = 0x10203040;
-  return &id;
-}
-bool isClientSide(const void *actor) {
-  assert(active && actor == active->actor.data());
-  return clientSide;
-}
-bool isFireResistant(const void *stack) {
-  assert(active && stack == active->actor.data() +
-                                itemphysics::profile::kItemStackBaseOffset);
-  return fireResistant;
-}
-void nativeNormalTick(void *actor) {
-  assert(active && actor == active->actor.data());
-  ++normalTickCalls;
-  if (removeDuringTick)
-    R::dispatchActorRemove(actor, nullptr, 0);
+  assert(active);
+  if (actor == active->actor.data())
+    return &sourceUniqueId;
+  if (destination && actor == destination->actor.data())
+    return &destinationUniqueId;
+  assert(false && "unexpected actor in UniqueID fixture");
+  return nullptr;
 }
 void nativeRemove(void *actor) {
   assert(active && actor == active->actor.data());
@@ -267,62 +255,73 @@ int main() {
   assert(!secondIdentity.traitsSampled);
   assert(secondIdentity.uniqueId == 1002u);
 
-  // The optional lava correction calls native normalTick exactly once. Water
-  // must remain entirely native even after the same descent and bottom-contact
-  // sequence that activates the lava-only recovery.
-  constexpr std::uintptr_t itemActorVptr = 0x12345678u;
-  put(active->actor, 0, itemActorVptr);
-  r.mItemActorVptr = itemActorVptr;
-  r.mNormalTickOriginal = nativeNormalTick;
-  r.mIsClientSide = isClientSide;
-  r.mIsFireResistant = isFireResistant;
-  active->lavaPage[Fixture::entity] = Fixture::entity;
+  // Reading native water/lava state for rendering must never mutate the
+  // actor's velocity. Minecraft remains the sole fluid-physics authority.
   active->groundPage[Fixture::entity] = 0xFFFFFFFFu;
-  active->collisionPage[Fixture::entity] = 0xFFFFFFFFu;
-  const auto tick = [&](int age, float worldY, float speed,
-                        bool bottom = false) {
-    put(active->actor, itemphysics::profile::kItemAgeOffset, age);
-    active->current.y = worldY;
-    active->motion.y = speed;
-    active->groundPage[Fixture::entity] =
-        bottom ? Fixture::entity : 0xFFFFFFFFu;
-    active->collisionPage[Fixture::entity] =
-        bottom ? Fixture::entity : 0xFFFFFFFFu;
-    r.onNormalTick(active->actor.data());
-  };
-  normalTickCalls = 0;
-  active->lavaPage[Fixture::entity] = 0xFFFFFFFFu;
+  active->collisionPage[Fixture::entity] = Fixture::entity;
   active->waterPage[Fixture::entity] = Fixture::entity;
-  tick(1, 64.0f, -0.10f);
-  tick(2, 63.7f, -0.08f);
-  tick(3, 63.2f, -0.04f, true);
-  tick(4, 63.2f, -0.04f, true);
-  tick(5, 63.2f, -0.04f, true);
-  assert(active->motion.y == -0.04f);
-  assert(normalTickCalls == 5);
-
-  // Fire-resistant lava retains the narrowly bounded v0.16.2 recovery.
-  normalTickCalls = 0;
+  active->lavaPage[Fixture::entity] = 0xFFFFFFFFu;
+  active->motion.y = -0.04f;
+  R::VisualState nativeWater{};
+  for (int age = 50; age < 55; ++age) {
+    active->current.y += 0.05f;
+    assert(!r.resolveGrounded(nativeWater, active->actor.data(), age, 8.0f));
+    assert(active->motion.y == -0.04f);
+  }
   active->waterPage[Fixture::entity] = 0xFFFFFFFFu;
   active->lavaPage[Fixture::entity] = Fixture::entity;
-  tick(1, 64.0f, -0.10f);
-  tick(2, 63.7f, -0.08f);
-  tick(3, 63.2f, -0.04f, true);
-  tick(4, 63.2f, -0.04f, true);
-  assert(active->motion.y == -0.04f);
-  tick(5, 63.2f, -0.04f, true);
-  assert(std::abs(active->motion.y - 0.06f) < 1e-6f);
-  assert(normalTickCalls == 5);
-  clientSide = true;
-  tick(6, 63.2f, -0.02f, true);
-  assert(active->motion.y == -0.02f);
-  clientSide = false;
+  active->motion.y = -0.04f;
+  R::VisualState nativeLava{};
+  for (int age = 60; age < 65; ++age) {
+    active->current.y += 0.025f;
+    assert(!r.resolveGrounded(nativeLava, active->actor.data(), age, 8.0f));
+    assert(active->motion.y == -0.04f);
+  }
+
+  // The Actor::remove bridge used by Separate Drop Visuals remains an exact
+  // passthrough while tracking is disabled.
   r.mActorRemoveOriginal = nativeRemove;
-  removeDuringTick = true;
-  tick(7, 63.2f, -0.03f, true);
-  removeDuringTick = false;
+  R::sInstance = &r;
+  R::dispatchActorRemove(active->actor.data(), nullptr, 0);
   assert(removeCalls == 1);
-  assert(active->motion.y == -0.03f);
+
+  // Enabling tracking must retain both merge signals and still call the native
+  // remove exactly once. This guards the merge-only hook after deleting the
+  // unrelated ItemActor::normalTick fluid-physics detour.
+  destination = new Fixture;
+  constexpr std::uintptr_t itemActorVptr = 0x12345678u;
+  put(active->actor, 0, itemActorVptr);
+  put(destination->actor, 0, itemActorVptr);
+  put(active->actor, itemphysics::profile::kItemCountOffset,
+      static_cast<std::uint8_t>(2));
+  put(destination->actor, itemphysics::profile::kItemCountOffset,
+      static_cast<std::uint8_t>(5));
+  put(active->actor, itemphysics::profile::kItemAgeOffset,
+      static_cast<std::int32_t>(64));
+  r.mItemActorVptr = itemActorVptr;
+  r.mMinecraftBase = 0x10000000u;
+  r.mSeparateDropVisuals.store(true, std::memory_order_relaxed);
+  R::dispatchActorRemove(
+      active->actor.data(), destination->actor.data(),
+      r.mMinecraftBase + itemphysics::profile::kMergeRemoveReturnRva);
+  assert(removeCalls == 2);
+  assert(r.mHookSignalCount == 2u);
+  assert(r.mHookSignals[0].kind == R::MergeSignalKind::ExactPair);
+  assert(r.mHookSignals[0].actorId ==
+         static_cast<std::uint64_t>(sourceUniqueId));
+  assert(r.mHookSignals[0].otherId ==
+         static_cast<std::uint64_t>(destinationUniqueId));
+  assert(r.mHookSignals[0].count == 2u);
+  assert(r.mHookSignals[0].oldCount == 3u);
+  assert(r.mHookSignals[0].newCount == 5u);
+  assert(r.mHookSignals[1].kind == R::MergeSignalKind::Removed);
+  assert(r.mHookSignals[1].actorId ==
+         static_cast<std::uint64_t>(sourceUniqueId));
+  assert(r.mHookSignals[1].count == 2u);
+  assert(r.mHookSignals[1].removal.valid);
+
+  delete destination;
+  destination = nullptr;
 
   delete active;
   active = nullptr;

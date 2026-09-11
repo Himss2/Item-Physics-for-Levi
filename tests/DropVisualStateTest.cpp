@@ -34,7 +34,6 @@ int main() {
   using itemphysics::DropFluidKind;
   using itemphysics::DropVisualLineage;
   using itemphysics::DropVisualPose;
-  using itemphysics::LavaBottomRecovery;
   using itemphysics::DropRemovalSnapshot;
   using itemphysics::RenderSpacePoint;
   using itemphysics::advanceFluidAnchor;
@@ -42,37 +41,6 @@ int main() {
   using itemphysics::poseAtRemoval;
   using itemphysics::rebaseFluidAnchorOwner;
   using itemphysics::renderOriginForWorldAnchor;
-
-  // Fire-resistant items must complete Minecraft's native lava sink before a
-  // bounded recovery begins. Repeated render/tick calls at the same age must
-  // not advance the detector, and the correction stops at the recorded entry
-  // surface instead of becoming a permanent velocity floor.
-  LavaBottomRecovery lavaRecovery{};
-  if (lavaRecovery.update(64.0f, -0.10f, false, false, 1, true) ||
-      lavaRecovery.update(63.7f, -0.08f, false, false, 2, true) ||
-      lavaRecovery.update(63.2f, -0.04f, true, true, 3, true) ||
-      lavaRecovery.update(63.2f, -0.04f, true, true, 3, true) ||
-      lavaRecovery.update(63.2f, -0.04f, true, true, 4, true))
-    return 30;
-  const auto recoveryStart =
-      lavaRecovery.update(63.2f, -0.04f, true, true, 5, true);
-  if (!recoveryStart || !closeEnough(*recoveryStart, 0.06f))
-    return 31;
-  const auto recoveryMiddle =
-      lavaRecovery.update(63.6f, -0.01f, false, false, 6, true);
-  if (!recoveryMiddle || !closeEnough(*recoveryMiddle, 0.06f))
-    return 32;
-  if (lavaRecovery.update(63.98f, 0.03f, false, false, 7, true))
-    return 33;
-
-  // Disabled, non-fire-resistant and non-authoritative paths are exact
-  // passthrough and clear any prior recovery state.
-  if (lavaRecovery.update(60.0f, 0.0f, true, true, 8, false) ||
-      lavaRecovery.update(60.0f, 0.0f, true, true, 9, true,
-                          false) ||
-      lavaRecovery.update(60.0f, 0.0f, true, true, 10, true,
-                          true, false))
-    return 34;
 
   const float nan = std::numeric_limits<float>::quiet_NaN();
 
@@ -110,19 +78,20 @@ int main() {
       !liveBase.bobbing())
     return fail("stable native surface never enabled bobbing");
   if (!closeEnough(liveBase.update(63.99f, 63.99f, -0.01f, 17,
-                                   DropFluidKind::Water, false), 64.00f))
-    return fail("native surface jitter leaked into custom bobbing");
-  // A slow native drift after latching must not pull the rendered item back
-  // under water. This was the delayed potion/fish/bone sinking regression.
-  if (!closeEnough(liveBase.update(63.45f, 63.45f, -0.01f, 18,
-                                   DropFluidKind::Water, false), 64.00f) ||
+                                   DropFluidKind::Water, false), 63.99f) ||
       !liveBase.bobbing())
-    return fail("small native drift released the confirmed surface");
-  // A genuine fast relocation remains a reset boundary.
+    return fail("bobbing replaced native surface Y");
+  // The bob gate may survive small native corrections, but it must never own
+  // an absolute world Y. This prevents a visual from separating from the
+  // actual pickup actor after surface acquisition.
+  if (!closeEnough(liveBase.update(63.45f, 63.45f, -0.01f, 18,
+                                   DropFluidKind::Water, false), 63.45f) ||
+      !liveBase.bobbing())
+    return fail("bobbing retained an obsolete water Y");
   if (!closeEnough(liveBase.update(62.0f, 62.0f, -0.4f, 19,
                                    DropFluidKind::Water, false), 62.0f) ||
       liveBase.bobbing())
-    return fail("large real relocation left a floating ghost behind");
+    return fail("native water relocation did not remain authoritative");
   if (!closeEnough(liveBase.update(60.0f, 60.0f, 0.0f, 20,
                                    DropFluidKind::None, false), 60.0f) ||
       liveBase.bobbing())
@@ -130,6 +99,82 @@ int main() {
   if (!std::isnan(liveBase.update(nan, 60.0f, 0.0f, 21,
                                   DropFluidKind::Lava, false)))
     return fail("invalid visual position was not rejected");
+
+  // Device regression: an item can pause for three ticks below the surface,
+  // then continue Minecraft's slow native ascent. The old absolute-Y latch
+  // left the model at 60 while its pickup actor reached 64; restarting the
+  // process only appeared to fix it because the stale visual state vanished.
+  itemphysics::FluidVisualBase prematureWater{};
+  if (!closeEnough(prematureWater.update(59.80f, 59.80f, -0.10f, 1,
+                                         DropFluidKind::Water, false),
+                   59.80f) ||
+      !closeEnough(prematureWater.update(59.90f, 59.90f, 0.10f, 2,
+                                         DropFluidKind::Water, false),
+                   59.90f) ||
+      !closeEnough(prematureWater.update(60.00f, 60.00f, 0.10f, 3,
+                                         DropFluidKind::Water, false),
+                   60.00f) ||
+      !closeEnough(prematureWater.update(60.00f, 60.00f, 0.00f, 4,
+                                         DropFluidKind::Water, false),
+                   60.00f) ||
+      !closeEnough(prematureWater.update(60.00f, 60.00f, 0.00f, 5,
+                                         DropFluidKind::Water, false),
+                   60.00f) ||
+      !closeEnough(prematureWater.update(60.00f, 60.00f, 0.00f, 6,
+                                         DropFluidKind::Water, false),
+                   60.00f) ||
+      !prematureWater.bobbing())
+    return fail("water surface pause did not arm the bob gate");
+  if (!closeEnough(prematureWater.update(60.12f, 60.15f, 0.15f, 7,
+                                         DropFluidKind::Water, false),
+                   60.12f) ||
+      !closeEnough(prematureWater.update(63.97f, 64.00f, 0.15f, 33,
+                                         DropFluidKind::Water, false),
+                   63.97f))
+    return fail("slow native ascent left the water visual below its actor");
+  itemphysics::FluidVisualBase restartedWater{};
+  const float retainedResult = prematureWater.update(
+      64.00f, 64.00f, 0.0f, 34, DropFluidKind::Water, false);
+  const float restartedResult = restartedWater.update(
+      64.00f, 64.00f, 0.0f, 34, DropFluidKind::Water, false);
+  if (!closeEnough(retainedResult, 64.00f) ||
+      !closeEnough(restartedResult, 64.00f) ||
+      !closeEnough(retainedResult, restartedResult))
+    return fail("fluid visual position changed after a process restart");
+
+  itemphysics::FluidVisualBase prematureLava{};
+  if (!closeEnough(prematureLava.update(39.80f, 39.80f, -0.10f, 1,
+                                        DropFluidKind::Lava, false),
+                   39.80f) ||
+      !closeEnough(prematureLava.update(39.90f, 39.90f, 0.10f, 2,
+                                        DropFluidKind::Lava, false),
+                   39.90f) ||
+      !closeEnough(prematureLava.update(40.00f, 40.00f, 0.10f, 3,
+                                        DropFluidKind::Lava, false),
+                   40.00f) ||
+      !closeEnough(prematureLava.update(40.00f, 40.00f, 0.00f, 4,
+                                        DropFluidKind::Lava, false),
+                   40.00f) ||
+      !closeEnough(prematureLava.update(40.00f, 40.00f, 0.00f, 5,
+                                        DropFluidKind::Lava, false),
+                   40.00f) ||
+      !closeEnough(prematureLava.update(40.00f, 40.00f, 0.00f, 6,
+                                        DropFluidKind::Lava, false),
+                   40.00f) ||
+      !prematureLava.bobbing() ||
+      !closeEnough(prematureLava.update(43.97f, 44.00f, 0.10f, 7,
+                                        DropFluidKind::Lava, false),
+                   43.97f))
+    return fail("slow native ascent left the lava visual below its actor");
+  itemphysics::FluidVisualBase restartedLava{};
+  const float retainedLavaResult = prematureLava.update(
+      44.00f, 44.00f, 0.0f, 8, DropFluidKind::Lava, false);
+  const float restartedLavaResult = restartedLava.update(
+      44.00f, 44.00f, 0.0f, 8, DropFluidKind::Lava, false);
+  if (!closeEnough(retainedLavaResult, 44.00f) ||
+      !closeEnough(restartedLavaResult, 44.00f) ||
+      !closeEnough(retainedLavaResult, restartedLavaResult))
+    return fail("lava visual position changed after a process restart");
 
   // Stable liquid at a pool bottom or mid-column is not a surface. It cannot
   // acquire bobbing until a real upward phase has been observed first.
