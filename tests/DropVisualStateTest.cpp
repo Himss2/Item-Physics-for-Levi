@@ -34,7 +34,7 @@ int main() {
   using itemphysics::DropFluidKind;
   using itemphysics::DropVisualLineage;
   using itemphysics::DropVisualPose;
-  using itemphysics::FluidBottomRecovery;
+  using itemphysics::LavaBottomRecovery;
   using itemphysics::DropRemovalSnapshot;
   using itemphysics::RenderSpacePoint;
   using itemphysics::advanceFluidAnchor;
@@ -43,64 +43,35 @@ int main() {
   using itemphysics::rebaseFluidAnchorOwner;
   using itemphysics::renderOriginForWorldAnchor;
 
-  // Stalled water/lava actors receive one release impulse only after native
-  // descent and three stable collision ticks. The detector never pushes to a
-  // remembered entry height, so it cannot lift a model above the real surface.
-  FluidBottomRecovery fluidRecovery{};
-  if (fluidRecovery.update(64.0f, -0.10f, false, false, 1,
-                           DropFluidKind::Water) ||
-      fluidRecovery.update(63.7f, -0.08f, false, false, 2,
-                           DropFluidKind::Water) ||
-      fluidRecovery.update(63.2f, -0.04f, true, true, 3,
-                           DropFluidKind::Water) ||
-      fluidRecovery.update(63.2f, -0.04f, true, true, 3,
-                           DropFluidKind::Water) ||
-      fluidRecovery.update(63.2f, -0.04f, true, true, 4,
-                           DropFluidKind::Water))
+  // Fire-resistant items must complete Minecraft's native lava sink before a
+  // bounded recovery begins. Repeated render/tick calls at the same age must
+  // not advance the detector, and the correction stops at the recorded entry
+  // surface instead of becoming a permanent velocity floor.
+  LavaBottomRecovery lavaRecovery{};
+  if (lavaRecovery.update(64.0f, -0.10f, false, false, 1, true) ||
+      lavaRecovery.update(63.7f, -0.08f, false, false, 2, true) ||
+      lavaRecovery.update(63.2f, -0.04f, true, true, 3, true) ||
+      lavaRecovery.update(63.2f, -0.04f, true, true, 3, true) ||
+      lavaRecovery.update(63.2f, -0.04f, true, true, 4, true))
     return 30;
   const auto recoveryStart =
-      fluidRecovery.update(63.2f, -0.04f, true, true, 5,
-                           DropFluidKind::Water);
+      lavaRecovery.update(63.2f, -0.04f, true, true, 5, true);
   if (!recoveryStart || !closeEnough(*recoveryStart, 0.06f))
     return 31;
-  if (fluidRecovery.update(63.2f, -0.04f, true, true, 5,
-                           DropFluidKind::Water))
+  const auto recoveryMiddle =
+      lavaRecovery.update(63.6f, -0.01f, false, false, 6, true);
+  if (!recoveryMiddle || !closeEnough(*recoveryMiddle, 0.06f))
     return 32;
-  if (fluidRecovery.update(63.26f, 0.06f, false, false, 6,
-                           DropFluidKind::Water) ||
-      fluidRecovery.update(64.0f, 0.0f, false, false, 7,
-                           DropFluidKind::Water))
+  if (lavaRecovery.update(63.98f, 0.03f, false, false, 7, true))
     return 33;
 
-  // Lava uses the same one-shot boundary. A later no-contact tick must not
-  // continue applying the old velocity floor.
-  if (fluidRecovery.update(64.0f, -0.10f, false, false, 10,
-                           DropFluidKind::Lava) ||
-      fluidRecovery.update(63.7f, -0.08f, false, false, 11,
-                           DropFluidKind::Lava) ||
-      fluidRecovery.update(63.2f, -0.04f, true, true, 12,
-                           DropFluidKind::Lava) ||
-      fluidRecovery.update(63.2f, -0.04f, true, true, 13,
-                           DropFluidKind::Lava))
-    return 35;
-  const auto lavaRelease =
-      fluidRecovery.update(63.2f, -0.04f, true, true, 14,
-                           DropFluidKind::Lava);
-  if (!lavaRelease || !closeEnough(*lavaRelease, 0.06f) ||
-      fluidRecovery.update(63.26f, 0.06f, false, false, 15,
-                           DropFluidKind::Lava))
-    return 36;
-
-  // Dry, ineligible, non-authoritative and disabled paths are passthrough and
-  // clear any prior recovery state.
-  if (fluidRecovery.update(60.0f, 0.0f, true, true, 16,
-                           DropFluidKind::None) ||
-      fluidRecovery.update(60.0f, 0.0f, true, true, 17,
-                           DropFluidKind::Lava, false) ||
-      fluidRecovery.update(60.0f, 0.0f, true, true, 18,
-                           DropFluidKind::Water, true, false) ||
-      fluidRecovery.update(60.0f, 0.0f, true, true, 19,
-                           DropFluidKind::Water, true, true, false))
+  // Disabled, non-fire-resistant and non-authoritative paths are exact
+  // passthrough and clear any prior recovery state.
+  if (lavaRecovery.update(60.0f, 0.0f, true, true, 8, false) ||
+      lavaRecovery.update(60.0f, 0.0f, true, true, 9, true,
+                          false) ||
+      lavaRecovery.update(60.0f, 0.0f, true, true, 10, true,
+                          true, false))
     return 34;
 
   const float nan = std::numeric_limits<float>::quiet_NaN();
@@ -173,10 +144,9 @@ int main() {
       return fail("stationary underwater item was mistaken for a surface");
   }
 
-  // Removed actors have no native physics. While the survivor is still moving
-  // through liquid, a retained origin follows the survivor's real native Y
-  // displacement immediately. Once that target stops, any remaining vertical
-  // separation closes at the bounded water/lava transit rate.
+  // Removed actors have no native physics of their own. Both water and lava
+  // anchors therefore adopt the surviving real actor's absolute native Y on
+  // every render, with no independent catch-up speed or initialization delay.
   DropVisualPose retainedWater{};
   retainedWater.worldX = 4.0f;
   retainedWater.baseWorldY = 60.0f;
@@ -185,32 +155,34 @@ int main() {
   retainedWater.fluid = DropFluidKind::Water;
   retainedWater.fluidFollowBaseY = 64.0f;
   retainedWater.fluidFollowSampled = true;
-  if (advanceFluidAnchor(retainedWater, 64.0f, 10.0f) ||
-      !closeEnough(retainedWater.baseWorldY, 60.0f))
-    return fail("retained water transit moved on its initialization sample");
-  if (advanceFluidAnchor(retainedWater, 64.15f, 11.0f) ||
-      !closeEnough(retainedWater.baseWorldY, 60.15f))
-    return fail("retained water anchor did not follow native survivor ascent");
+  if (!advanceFluidAnchor(retainedWater, 64.0f, 10.0f) ||
+      !closeEnough(retainedWater.baseWorldY, 64.0f))
+    return fail("retained water anchor did not adopt native owner Y");
+  if (!advanceFluidAnchor(retainedWater, 64.15f, 11.0f) ||
+      !closeEnough(retainedWater.baseWorldY, 64.15f))
+    return fail("retained water anchor did not follow native owner ascent");
   if (!closeEnough(retainedWater.worldX, 4.0f) ||
       !closeEnough(retainedWater.worldZ, 5.0f) ||
       !closeEnough(retainedWater.xRotSine, 0.25f))
     return fail("retained fluid transit changed XZ or orientation");
-  if (advanceFluidAnchor(retainedWater, 64.15f, 12.0f) ||
-      !closeEnough(retainedWater.baseWorldY, 60.19f))
-    return fail("stationary water target did not close at the bounded rate");
+  if (!advanceFluidAnchor(retainedWater, 64.15f, 12.0f) ||
+      !closeEnough(retainedWater.baseWorldY, 64.15f))
+    return fail("stationary native water owner moved its anchor");
 
   DropVisualPose retainedLava{};
   retainedLava.baseWorldY = 40.0f;
   retainedLava.fluid = DropFluidKind::Lava;
   retainedLava.fluidFollowBaseY = 41.0f;
   retainedLava.fluidFollowSampled = true;
-  (void)advanceFluidAnchor(retainedLava, 41.0f, 20.0f);
-  if (advanceFluidAnchor(retainedLava, 41.10f, 21.0f) ||
-      !closeEnough(retainedLava.baseWorldY, 40.10f))
-    return fail("retained lava anchor did not follow native survivor ascent");
-  if (advanceFluidAnchor(retainedLava, 41.10f, 22.0f) ||
-      !closeEnough(retainedLava.baseWorldY, 40.12f))
-    return fail("stationary lava target did not retain half water catch-up speed");
+  if (!advanceFluidAnchor(retainedLava, 41.0f, 20.0f) ||
+      !closeEnough(retainedLava.baseWorldY, 41.0f))
+    return fail("retained lava anchor did not adopt native owner Y");
+  if (!advanceFluidAnchor(retainedLava, 41.10f, 21.0f) ||
+      !closeEnough(retainedLava.baseWorldY, 41.10f))
+    return fail("retained lava anchor did not follow native owner ascent");
+  if (!advanceFluidAnchor(retainedLava, 41.10f, 22.0f) ||
+      !closeEnough(retainedLava.baseWorldY, 41.10f))
+    return fail("stationary native lava owner moved its anchor");
 
   // Removal admission uses native final state, not the last render's ground
   // latch. Airborne dry sources fail closed; a source that lands between two
@@ -231,7 +203,7 @@ int main() {
     return fail("airborne removal trusted a stale grounded render pose");
   removal.nativeGrounded = true;
   if (poseAtRemoval(lastRendered, 65.0f, removal, dryDestination, retained))
-    return fail("dry removal trusted a distant stale on-ground pose");
+    return fail("dry removal trusted a stale on-ground flag without collision");
   removal.verticalCollision = true;
   removal.verticalSpeed = 0.20f;
   if (poseAtRemoval(lastRendered, 65.0f, removal, dryDestination, retained))
@@ -247,10 +219,12 @@ int main() {
       !closeEnough(retained.worldZ, 3.2f))
     return fail("grounded removal did not apply its calibrated final support");
 
-  // An ordinary item that was already rendered at rest may lose the transient
-  // collision component before native merging removes it. Its corroborating
-  // last grounded pose must still create a dry retained origin.
+  // Keep the device-approved rapid ground-spam path: a source already
+  // rendered at rest for two game ticks may be retained after the transient
+  // collision component disappears. One stale ground tick, movement, rising
+  // and fast falling must still fail closed instead of creating a hover.
   DropVisualPose stableRendered = pose(2.0f, 63.794f, 3.0f);
+  stableRendered.grounded = true;
   stableRendered.groundOffsetY = -0.206f;
   removal.verticalCollision = false;
   removal.verticalSpeed = 0.0f;
@@ -262,17 +236,18 @@ int main() {
   if (!poseAtRemoval(stableRendered, 64.0f, removal, dryDestination,
                      retained) ||
       !closeEnough(retained.baseWorldY, 63.814f))
-    return fail("render-confirmed dry removal required a transient collision");
+    return fail("confirmed dry anchor required a transient collision flag");
   removal.verticalSpeed = 0.10f;
   if (poseAtRemoval(stableRendered, 64.0f, removal, dryDestination, retained))
-    return fail("rising dry removal trusted an old grounded render pose");
+    return fail("rising dry removal trusted an old grounded pose");
   removal.verticalSpeed = -0.08f;
   if (poseAtRemoval(stableRendered, 64.0f, removal, dryDestination, retained))
-    return fail("falling dry removal trusted an old grounded render pose");
+    return fail("fast-falling dry removal trusted an old grounded pose");
   removal.verticalSpeed = 0.0f;
   removal.worldY = 64.20f;
   if (poseAtRemoval(stableRendered, 64.0f, removal, dryDestination, retained))
-    return fail("moved dry removal trusted an old grounded render pose");
+    return fail("displaced dry removal trusted an old grounded pose");
+
   removal.worldY = 64.0f;
   removal.nativeGrounded = false;
   removal.fluid = DropFluidKind::Water;
@@ -301,12 +276,14 @@ int main() {
                      currentWaterDestination, retained,
                      &previousWaterDestination))
     return fail("same-fluid removal rejected the previous survivor base");
-  if (advanceFluidAnchor(retained, currentWaterDestination.baseWorldY, 30.0f) ||
-      !closeEnough(retained.baseWorldY, 60.275f))
-    return fail("first retained frame lost native survivor displacement");
+  if (!advanceFluidAnchor(retained, currentWaterDestination.baseWorldY,
+                          30.0f) ||
+      !closeEnough(retained.baseWorldY,
+                   currentWaterDestination.baseWorldY))
+    return fail("retained fluid origin did not use the native owner Y");
 
-  // A stationary survivor also starts bounded catch-up on the merge render,
-  // and an inherited A -> B -> C anchor must stop following B immediately.
+  // An inherited A -> B -> C anchor must immediately switch to C's native Y.
+  // There is no independent render-side buoyancy or delayed catch-up path.
   retained.baseWorldY = 60.0f;
   retained.fluidBobbing = true;
   previousWaterDestination.baseWorldY = currentWaterDestination.baseWorldY;
@@ -314,9 +291,12 @@ int main() {
                          &previousWaterDestination, 30.0f);
   if (retained.fluidBobbing)
     return fail("new fluid owner retained an unrelated settled latch");
-  if (advanceFluidAnchor(retained, currentWaterDestination.baseWorldY, 31.0f) ||
-      !closeEnough(retained.baseWorldY, 60.04f))
-    return fail("stationary fluid owner delayed first-render catch-up");
+  currentWaterDestination.baseWorldY = 64.35f;
+  if (!advanceFluidAnchor(retained, currentWaterDestination.baseWorldY,
+                          31.0f) ||
+      !closeEnough(retained.baseWorldY,
+                   currentWaterDestination.baseWorldY))
+    return fail("retained origin did not follow the new native owner");
 
   // A removed actor has no physics of its own. Dry sources require final
   // ground contact. Same-fluid sources may be retained before the surface
@@ -465,24 +445,6 @@ int main() {
   if (stack20.trackedCount != 20 || pool.anchorCount(stack20) != 0 ||
       stack20.rootCount != 20)
     return fail("count decrease left a stale frozen visual");
-
-  // Lava burns can reduce the surviving stack before the live ItemActor is
-  // removed. Its retained origins remain visible until that root disappears.
-  pool.reset();
-  DropVisualLineage lavaRoot{};
-  DropVisualLineage lavaSource{};
-  pool.observe(lavaRoot, 20);
-  pool.observe(lavaSource, 10);
-  if (!pool.merge(lavaSource, pose(-2.0f, 0.0f, 2.0f), 10,
-                  lavaRoot, 20, 30))
-    return fail("valid lava lineage setup was rejected");
-  pool.reconcile(lavaRoot, 20, true);
-  if (lavaRoot.trackedCount != 20 || pool.anchorCount(lavaRoot) != 1 ||
-      lavaRoot.rootCount != 20)
-    return fail("partial lava burn removed a retained origin too early");
-  pool.reconcile(lavaRoot, 0, true);
-  if (lavaRoot.initialized || pool.anchorCount(lavaRoot) != 0)
-    return fail("dead lava root left retained origins alive");
 
   // Capacity exhaustion must fail closed: do not partially move a chain or
   // create a duplicated visual. Runtime can then fall back to one live group.
