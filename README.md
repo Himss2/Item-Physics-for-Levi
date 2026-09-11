@@ -1,10 +1,11 @@
 # Levi Item Physics
 
 ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.45.1`.
-Version `0.16.5` is deliberately rebuilt from the lighter `0.16.2` baseline.
+Version `0.16.6` is deliberately rebuilt from the lighter `0.16.2` baseline.
 It preserves the device-approved airborne, landing, ground-height, head,
 shadow and rapid dry-anchor behavior. Minecraft exclusively owns water entry,
-sinking and buoyant ascent; the renderer never writes water velocity.
+sinking, buoyant ascent and absolute fluid Y; the mod never writes fluid
+position or velocity.
 
 ## Implemented behavior
 
@@ -40,14 +41,13 @@ sinking and buoyant ascent; the renderer never writes water velocity.
   the water waveform speed.
 - During liquid entry and ascent, render Y follows native interpolation plus
   the class support above, while custom bobbing remains disabled. After real
-  ascent and three stable game ticks, the surface base is latched and bobbing
-  begins. Only a fast relocation or fluid exit resets the latch. Ground height
-  offsets are not
-  applied while submerged, even if native on-ground is also present.
-- Ordinary lava items retain native burning/removal. Fire-resistant items keep
-  Minecraft's complete sink first; if an authoritative local actor then stalls
-  on a bottom collision for three ticks, a bounded `+0.06` Y-velocity repair
-  runs only until its recorded lava-entry height. Remote clients are untouched.
+  ascent and three stable game ticks, only the bob waveform is enabled. Its
+  relative offset is always composed onto the current native interpolated Y;
+  no absolute surface position is cached. Ground height offsets are not applied
+  while submerged, even if native on-ground is also present.
+- Ordinary and fire-resistant lava items retain Minecraft's complete native
+  movement, burning, removal, pickup, and network behavior. There is no
+  `ItemActor::normalTick` hook and no mod-side fluid velocity correction.
 - Java stack-copy thresholds remain `1 / 2 / 3 / 4 / 5` visible models at
   counts `1 / 2 / 17 / 33 / 49`. Every copy remains on one world-XZ plane.
 - `Single Model`, `Separate Drop Visuals`, and `Hide Item Shadow` remain
@@ -77,7 +77,7 @@ requested visual behavior without changing Minecraft's stack rules:
    anti-hover behavior. A same-fluid source uses the surviving real actor as
    its native vertical driver: every anchor adopts that actor's exact non-bob Y
    on the same render. XZ and orientation remain independent, while custom bob
-   still waits for the live surface latch.
+   still waits for the live bob gate.
 
 Local-world merges use the exact source and destination UniqueIDs captured at
 the analyzed `ItemActor::normalTick` removal call. A remote client does not
@@ -88,8 +88,8 @@ case deliberately collapses to the surviving live group instead of showing a
 ghost at the wrong position.
 
 The tracker uses fixed arrays: no heap allocation, per-copy physics, entity
-spawn, packet, block query, or world query is added. No v0.16.4 water recovery,
-extra water component probe, or fluid-bottom state is present. The anchor pool is
+spawn, packet, block query, or world query is added. No water/lava recovery,
+fluid-bottom state, or per-ItemActor tick detour is present. The anchor pool is
 capped at 96 origins, each surviving lineage at 16 origins, and up to the full
 16-origin lineage budget can be resolved in one survivor render. Additional
 origins fail closed into the live group. Stale states are reclaimed
@@ -119,13 +119,10 @@ clears all retained origins and immediately returns to the normal renderer.
   visual anchor.
 - On a remote server, an ambiguous merge is not separated visually. This
   fail-closed rule prevents unrelated drops from being paired.
-- The surface latch does not query an exact fluid mesh. It requires native
-  ascent and stable position/velocity, then releases only on a relocation over
-  `0.75` block accompanied by speed over `0.20`. Flowing and unusual fluid
-  geometry need device testing.
-- The bounded lava repair applies only to authoritative local simulation; a
-  client-only mod cannot change a remote server's ItemActor physics.
-- Version 0.16.5 is host-tested source, not yet validated in Android gameplay.
+- The bob gate does not query an exact fluid mesh. It waits for native ascent
+  and stable position/velocity, but never owns the rendered absolute Y. Flowing
+  and unusual fluid geometry still need device testing.
+- Version 0.16.6 is host-tested source, not yet validated in Android gameplay.
 
 ## Strict binary guard
 
@@ -137,11 +134,8 @@ The hooks activate only for the analyzed library:
   `0xA29F708`
 - `ItemActor::handleEntityEvent`: RTTI `9ItemActor`, vtable `+0x228`, RVA
   `0xF12537C`
-- `ItemActor::normalTick`: RVA `0xF124154`
 - `Actor::remove`: ItemActor vtable `+0x60`, RVA `0xEC8FC7C`
 - Actor UniqueID accessor: RVA `0xEC8B12C`
-- Actor client-side predicate: RVA `0xEC8E9D8`
-- Native item fire-resistance predicate: RVA `0xF63FC00`
 - Native merge/removal sequence: RVA `0xF1245D8`, return site `0xF1245EC`
 
 Runtime verifies the GNU Build ID, resolved vtable targets, and exact
@@ -205,8 +199,8 @@ toggle-on restart. Every same-fluid retained source must share the live
 survivor's native vertical motion and surface Y without delay; a dry airborne
 source must collapse rather than remain in
 mid-air. In lava, compare a surviving fireproof item with an ordinary burning
-item: both must sink naturally first; only a stalled local fireproof item may
-receive bounded recovery, while the ordinary item and its visuals disappear.
+item: both must use native movement, while the ordinary item and its visuals
+disappear together when Minecraft burns/removes the real stack.
 Check a deep pool, shallow pool, ceiling, fluid exit, and mod disable. Compare
 live and retained fluid bob with Separate Drop Visuals on/off;
 move and sneak the camera to check world anchoring. In multiplayer,
@@ -214,3 +208,7 @@ create two simultaneous same-item merges; an ambiguous pair may collapse to one
 live group but must never create a visual at an unrelated source position.
 Finally change all three toggles, restart the game, and confirm the same values
 are shown and applied before dropping the first item.
+
+After installing a newly built native package, fully terminate and restart the
+game process before testing. Leaving and re-entering only the world does not
+reload an already mapped `.so` or clear process-local visual state.

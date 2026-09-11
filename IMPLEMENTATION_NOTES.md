@@ -1,4 +1,4 @@
-# Implementation notes: universal visual core 0.16.5
+# Implementation notes: universal visual core 0.16.6
 
 ## Source behavior reproduced
 
@@ -18,7 +18,9 @@ The Bedrock implementation follows the same boundary:
    explicitly excludes stable surface Y from this ground fallback.
 3. Advance one scalar rotation from `age + partialTick` only while airborne and
    outside fluid. In water or lava, retain the last scalar angle and compose
-   Bedrock's ItemActor position with a small render-only sampled vertical wave.
+   Bedrock's current interpolated ItemActor position with a small render-only
+   sampled vertical wave. The wave gate stores timing state only; it never owns
+   or freezes an absolute world Y.
 4. Choose block or flat pivot; never choose a separate airborne motion family.
    Classification controls ground height and whether a thin structural model
    takes its corrected contact pose after—not before—contact. Horizontal block
@@ -545,3 +547,37 @@ render ticks, absolute vertical speed at most `0.025`, and no more than `0.075`
 block drift. A source landing between renders still requires native collision;
 rising, fast-falling, displaced, or one-tick stale poses collapse into the live
 group rather than becoming hovering anchors.
+
+## Version 0.16.6: native-authoritative fluid Y
+
+Device pickup testing isolated the remaining water/lava failure to rendering,
+not gameplay physics: the native ItemActor and pickup volume had already reached
+the surface while the model remained below. Restarting the full game process
+immediately realigned old items because it discarded `FluidVisualBase` state.
+
+The cause was an absolute surface latch. After one observed ascent and three
+stable ticks, it stored `mBase` and returned that value instead of Minecraft's
+subsequent interpolated Y. Its release condition required both more than `0.75`
+block of displacement from the stored base and vertical speed above `0.20`;
+ordinary native buoyancy could therefore continue slowly without ever releasing
+the stale visual.
+
+`FluidVisualBase` is now a bob-state-only gate. It retains the existing ascent,
+three-tick stability, fluid-change, discontinuity and grounded checks, but every
+valid call returns the current native interpolated Y. A confirmed surface can
+keep the approved `+/-0.015` waveform active without separating the model from
+the real pickup actor. Fast vertical relocation restarts bob acquisition using
+the per-tick native delta rather than distance from a frozen base.
+
+The bounded fire-resistant lava recovery inherited from `0.16.2` is removed.
+There is no longer an `ItemActor::normalTick` detour, recovery table,
+client-authority probe, fire-resistance probe, uncached lava-component scan, or
+mod-side velocity write. Minecraft now owns water and lava physics completely;
+the renderer adds only the class-independent `+0.125` water or `+0.055` lava
+support and, once gated, the relative waveform.
+
+Same-fluid retained anchors continue to adopt the surviving native actor's
+current non-bob Y on every render. Their independent X/Z and orientation, the
+dry two-grounded-tick spam-drop admission, all calibrated ground heights,
+rotation, shadows, copy thresholds, menu settings and merge lifecycle hooks are
+unchanged from `0.16.5`.
