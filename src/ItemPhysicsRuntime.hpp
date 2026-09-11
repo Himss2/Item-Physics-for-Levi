@@ -185,8 +185,8 @@ private:
     void *relativeShadow{};
   };
 
-  struct FluidRecoverySlot {
-    FluidBottomRecovery recovery{};
+  struct LavaRecoverySlot {
+    LavaBottomRecovery recovery{};
     std::uint64_t uniqueId{};
     std::uintptr_t registry{};
     std::uint32_t entity{};
@@ -216,8 +216,8 @@ private:
   static constexpr std::size_t kMaxDropAnchorsPerLineage = 16;
   static constexpr std::size_t kHookSignalCapacity = 64;
   static constexpr std::size_t kPendingSignalCapacity = 128;
-  static constexpr std::size_t kFluidRecoveryCapacity = 128;
-  static constexpr std::size_t kFluidRecoveryProbeCount = 4;
+  static constexpr std::size_t kLavaRecoveryCapacity = 128;
+  static constexpr std::size_t kLavaRecoveryProbeCount = 4;
 
   static ItemPhysicsRuntime *sInstance;
   static void renderDetour(void *, void *, void *);
@@ -280,9 +280,9 @@ private:
       std::uint64_t, std::uintptr_t = 0) noexcept;
   [[nodiscard]] bool hasPendingCountChange(std::uint64_t,
                                            std::uintptr_t) const noexcept;
-  FluidRecoverySlot &fluidRecoveryFor(std::uint32_t, std::uint64_t,
-                                      std::uintptr_t) noexcept;
-  void clearFluidRecoveryFor(std::uint32_t) noexcept;
+  LavaRecoverySlot &lavaRecoveryFor(std::uint32_t, std::uint64_t,
+                                    std::uintptr_t) noexcept;
+  void clearLavaRecoveryFor(std::uint32_t) noexcept;
   void processPendingMerges(VisualState &, float,
                             const DropVisualPose *, float,
                             unsigned) noexcept;
@@ -337,8 +337,7 @@ private:
   std::unique_ptr<pl::memory::HookHandle> mActorRemoveHook;
   std::unique_ptr<pl::memory::HookHandle> mNormalTickHook;
   std::array<VisualState, kStateCapacity> mStates{};
-  std::array<FluidRecoverySlot, kFluidRecoveryCapacity>
-      mFluidRecoveryStates{};
+  std::array<LavaRecoverySlot, kLavaRecoveryCapacity> mLavaRecoveryStates{};
   DropVisualAnchorPool<kDropAnchorCapacity> mDropAnchors{};
   std::array<MergeSignal, kHookSignalCapacity> mHookSignals{};
   std::array<MergeSignal, kPendingSignalCapacity> mPendingSignals{};

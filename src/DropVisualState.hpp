@@ -29,10 +29,10 @@ fluidMotionScale(DropFluidKind fluid) noexcept {
   return fluid == DropFluidKind::Lava ? 0.5f : 1.0f;
 }
 
-// Render-only surface latch. Before the native or bottom-released actor has
-// stayed vertically stable for three distinct game ticks, this returns its
-// exact interpolated Y. Only then is the base frozen so the small Java-style
-// waveform cannot double with native jitter.
+// Render-only surface latch. Minecraft owns the complete sink and buoyant-rise
+// path: before the actor has stayed vertically stable for three distinct game
+// ticks this returns the exact native interpolated Y. Only then is the base Y
+// frozen so our small Java-style waveform cannot double with native jitter.
 class FluidVisualBase {
 public:
   float update(float nativeRenderY, float nativeTickY, float verticalSpeed,
@@ -87,9 +87,6 @@ public:
   }
 
   [[nodiscard]] bool bobbing() const noexcept { return mBobbing; }
-  [[nodiscard]] bool surfaceCandidate() const noexcept {
-    return mObservedAscent;
-  }
 
 private:
   void initialize(float nativeTickY, std::int32_t age,
@@ -116,41 +113,50 @@ private:
   bool mObservedAscent{};
 };
 
-// A narrowly bounded repair for the analyzed Bedrock build: some ItemActors
-// finish their native water/lava sink on a collision surface and never resume
-// buoyancy. After real descent and three stable contact ticks, request one
-// upward release impulse. Minecraft then owns the full ascent and its actual
-// surface stop; no stored entry height can push the actor above the liquid.
-class FluidBottomRecovery {
+// A narrowly bounded repair for the analyzed Bedrock build: fire-resistant
+// ItemActors can finish their native lava sink on a collision surface and then
+// remain there indefinitely. This detector does not touch the entry path. It
+// waits for real descent followed by three distinct stable collision ticks,
+// then requests a small upward velocity only until the recorded entry height
+// is reached. Water, burning items and remote clients never enter this state.
+class LavaBottomRecovery {
 public:
   [[nodiscard]] std::optional<float>
   update(float worldY, float verticalSpeed, bool nativeGrounded,
-         bool verticalCollision, std::int32_t age, DropFluidKind fluid,
-         bool eligible = true, bool authoritative = true,
+         bool verticalCollision, std::int32_t age, bool inLava,
+         bool fireResistant = true, bool authoritative = true,
          bool enabled = true) noexcept {
-    if (!enabled || !authoritative || !eligible || !isFluid(fluid) ||
+    if (!enabled || !authoritative || !fireResistant || !inLava ||
         !std::isfinite(worldY) || !std::isfinite(verticalSpeed)) {
       *this = {};
       return std::nullopt;
     }
 
-    if (!mInitialized || fluid != mFluid || age < mLastAge ||
-        age - mLastAge > 10) {
+    if (!mInitialized || age < mLastAge || age - mLastAge > 10) {
+      mEntryY = worldY;
       mLastY = worldY;
-      mHighestY = worldY;
       mLastAge = age;
-      mFluid = fluid;
       mInitialized = true;
       return std::nullopt;
     }
     if (age == mLastAge)
-      return std::nullopt;
+      return mRecovering ? correction(worldY) : std::nullopt;
 
     const float deltaY = worldY - mLastY;
     mObservedDescent = mObservedDescent ||
                        deltaY < -0.01f || verticalSpeed < -0.03f ||
-                       mHighestY - worldY >= 0.10f;
-    mHighestY = std::max(mHighestY, worldY);
+                       mEntryY - worldY >= 0.10f;
+
+    if (mRecovering) {
+      mLastY = worldY;
+      mLastAge = age;
+      return correction(worldY);
+    }
+    if (mCompleted) {
+      mLastY = worldY;
+      mLastAge = age;
+      return std::nullopt;
+    }
 
     const bool stableBottom =
         mObservedDescent && (nativeGrounded || verticalCollision) &&
@@ -161,32 +167,34 @@ public:
             ? static_cast<std::uint8_t>(
                   std::min<unsigned>(mStableBottomTicks + 1u, 3u))
             : 0u;
-
-    std::optional<float> correction;
-    if (mStableBottomTicks >= 3u) {
-      // This is an impulse, not a velocity floor. Requiring three new stable
-      // contact ticks before another impulse prevents surface hovering even
-      // if a fluid-membership component lingers briefly after exit.
-      // Both fluids need to survive the following native -0.04 gravity step;
-      // the lava half-speed requirement applies to the visual bob, not this
-      // one-time collision release.
-      correction = 0.06f;
-      mStableBottomTicks = 0;
-    }
+    if (mStableBottomTicks >= 3u)
+      mRecovering = true;
 
     mLastY = worldY;
     mLastAge = age;
-    return correction;
+    return mRecovering ? correction(worldY) : std::nullopt;
   }
 
+  [[nodiscard]] bool recovering() const noexcept { return mRecovering; }
+
 private:
+  [[nodiscard]] std::optional<float> correction(float worldY) noexcept {
+    if (worldY >= mEntryY - 0.03f) {
+      mRecovering = false;
+      mCompleted = true;
+      return std::nullopt;
+    }
+    return 0.06f;
+  }
+
+  float mEntryY{};
   float mLastY{};
-  float mHighestY{};
   std::int32_t mLastAge{};
-  DropFluidKind mFluid{DropFluidKind::None};
   std::uint8_t mStableBottomTicks{};
   bool mInitialized{};
   bool mObservedDescent{};
+  bool mRecovering{};
+  bool mCompleted{};
 };
 
 [[nodiscard]] constexpr std::uint32_t
@@ -313,10 +321,10 @@ struct DropRemovalSnapshot {
   result.worldZ = removal.worldZ;
   result.fluid = removal.fluid;
   // A rapid re-throw/merge can expose an OnGround flag for one stale tick.
-  // A source that was already rendered on the ground may not expose the
-  // short-lived vertical-collision flag at removal, so accept that confirmed
-  // pose when the actor stayed close to its last sampled Y and is not rising.
-  // A source that lands between renders still requires collision evidence.
+  // A source already rendered on the ground may lose its short-lived
+  // vertical-collision component before removal, so accept that path only
+  // after two distinct grounded render ticks and tight motion/position gates.
+  // Landing between renders still requires explicit collision evidence.
   constexpr float kMaximumStableGroundSpeed = 0.025f;
   constexpr float kMaximumLandingSpeed = 0.085f;
   constexpr float kMaximumRenderedGroundDrift = 0.075f;
@@ -389,69 +397,24 @@ inline void rebaseFluidAnchorOwner(
     pose.fluidBobbing = false;
 }
 
-// Keep a removed liquid source visually coupled to the surviving ItemActor.
-// While Minecraft is still sinking/rising the survivor, copy its exact non-bob
-// Y displacement so the retained origin reacts on the same frame. Once that
-// target becomes stationary, close any remaining vertical separation at the
-// bounded legacy water/lava rate. Returns true only when the retained base has
-// reached the survivor base and may share its bob phase.
+// A retained origin has no Actor and therefore cannot run Minecraft physics on
+// its own. Use the surviving real ItemActor as its native vertical driver:
+// every retained origin adopts the survivor's exact non-bob Y on the same
+// render while X/Z and orientation remain independent. This removes the old
+// render-side catch-up simulation and guarantees that anchors reach the same
+// native water/lava surface as the real item.
 [[nodiscard]] inline bool advanceFluidAnchor(
     DropVisualPose &pose, float targetBaseY, float sample) noexcept {
   if (!isFluid(pose.fluid) || !std::isfinite(pose.baseWorldY) ||
       !std::isfinite(targetBaseY) || !std::isfinite(sample))
     return false;
 
-  if (pose.fluidBobbing)
-    return true;
-
-  float targetDelta = 0.0f;
-  if (pose.fluidFollowSampled) {
-    targetDelta = targetBaseY - pose.fluidFollowBaseY;
-  } else {
-    pose.fluidFollowSampled = true;
-  }
+  pose.baseWorldY = targetBaseY;
   pose.fluidFollowBaseY = targetBaseY;
-
-  // A teleport/chunk discontinuity must rebase the reference rather than drag
-  // a frozen visual several blocks through the world. Ordinary liquid motion
-  // is far below this threshold.
-  constexpr float kMaxNativeFollowDelta = 0.75f;
-  if (!std::isfinite(targetDelta) ||
-      std::abs(targetDelta) > kMaxNativeFollowDelta) {
-    pose.fluidTransitSample = sample;
-    pose.fluidTransitSampled = true;
-    return false;
-  }
-  pose.baseWorldY += targetDelta;
-
-  float delta = 0.0f;
-  if (pose.fluidTransitSampled)
-    delta = sample - pose.fluidTransitSample;
+  pose.fluidFollowSampled = true;
   pose.fluidTransitSample = sample;
   pose.fluidTransitSampled = true;
-
-  const float distance = targetBaseY - pose.baseWorldY;
-  if (std::abs(distance) <= 0.001f) {
-    pose.baseWorldY = targetBaseY;
-    pose.fluidBobbing = true;
-    return true;
-  }
-
-  // Do not add a second ascent while the native survivor itself is moving.
-  // This is the key difference from 0.16.0's delayed fake-anchor path.
-  if (std::abs(targetDelta) > 0.001f || !std::isfinite(delta) ||
-      delta <= 0.0f || delta > 10.0f)
-    return false;
-
-  const float speed = pose.fluid == DropFluidKind::Lava ? 0.02f : 0.04f;
-  const float step = speed * delta;
-  pose.baseWorldY += std::clamp(distance, -step, step);
-  if (std::abs(targetBaseY - pose.baseWorldY) <= 0.001f) {
-    pose.baseWorldY = targetBaseY;
-    pose.fluidBobbing = true;
-    return true;
-  }
-  return false;
+  return true;
 }
 
 [[nodiscard]] constexpr bool withinDropAnchorBudget(
@@ -485,8 +448,8 @@ template <std::size_t Capacity> class DropVisualAnchorPool {
 public:
   void reset() noexcept { mAnchors = {}; }
 
-  void observe(DropVisualLineage &lineage, std::uint32_t currentCount,
-               bool preserveAnchorsOnDecrease = false) noexcept {
+  void observe(DropVisualLineage &lineage,
+               std::uint32_t currentCount) noexcept {
     const auto count = clampCount(currentCount);
     if (!lineage.initialized) {
       lineage = {};
@@ -496,7 +459,7 @@ public:
       lineage.initialized = true;
       return;
     }
-    reconcile(lineage, count, preserveAnchorsOnDecrease);
+    reconcile(lineage, count);
   }
 
   [[nodiscard]] bool merge(DropVisualLineage &source,
@@ -555,11 +518,11 @@ public:
     return true;
   }
 
-  void reconcile(DropVisualLineage &lineage, std::uint32_t currentCount,
-                 bool preserveAnchorsOnDecrease = false) noexcept {
+  void reconcile(DropVisualLineage &lineage,
+                 std::uint32_t currentCount) noexcept {
     const auto count = clampCount(currentCount);
     if (!lineage.initialized) {
-      observe(lineage, count, preserveAnchorsOnDecrease);
+      observe(lineage, count);
       return;
     }
     if (count == lineage.trackedCount)
@@ -573,20 +536,6 @@ public:
       const auto increase = count - lineage.trackedCount;
       lineage.rootCount = static_cast<std::uint16_t>(
           std::min<std::uint32_t>(lineage.rootCount + increase, 255u));
-      lineage.trackedCount = count;
-      return;
-    }
-
-    // Lava can reduce the live stack count before the surviving ItemActor is
-    // finally removed. Retained origins represent independently dropped
-    // actors, not individual burning units, so keep those origins visible
-    // through a partial decrease and release them with the live actor.
-    if (preserveAnchorsOnDecrease &&
-        lineage.head != kNoDropVisualAnchor) {
-      lineage.rootCount = static_cast<std::uint16_t>(
-          std::max<std::uint32_t>(1u,
-                                  std::min<std::uint32_t>(lineage.rootCount,
-                                                          count)));
       lineage.trackedCount = count;
       return;
     }

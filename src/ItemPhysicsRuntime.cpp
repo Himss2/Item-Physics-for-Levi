@@ -40,9 +40,11 @@ constexpr float kDefaultBlockScale = 0.25f;
 constexpr float kFlatStackWorldStep = 0.055f;
 constexpr float kBlockStackScaleStep = 0.32f;
 constexpr float kMaxContinuousDeltaTicks = 10.0f;
-// 0.15.x device-approved liquid support. Keep one visible surface baseline for
-// 2D, shaped, special and full-block routes; only the bob waveform differs.
-constexpr float kFluidSurfaceLiftY = 0.125f;
+// Keep the device-approved 0.15.x water support. Lava uses one lower visual
+// baseline for every render route so its denser surface does not leave models
+// hovering; neither value changes the native ItemActor position or velocity.
+constexpr float kWaterSurfaceLiftY = 0.125f;
+constexpr float kLavaSurfaceLiftY = 0.055f;
 constexpr std::uint32_t kWaterCycleTicks = 91u;
 // One-tick samples of the approved waveform: 8 ticks at the bottom, a
 // half-sine transition at approximately 0.10 radians/tick, 20 ticks at the
@@ -532,7 +534,7 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
       pl::memory::HookPriority::Normal);
   if (!mNormalTickHook->installed() || !mNormalTickOriginal) {
     mod.getLogger().warn(
-        "Fluid bottom recovery unavailable: normalTick hook failed");
+        "Fire-resistant lava recovery unavailable: normalTick hook failed");
     if (mNormalTickHook)
       mNormalTickHook->reset();
     mNormalTickHook.reset();
@@ -553,7 +555,7 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
     mActorEventOriginal = nullptr;
     if (mNormalTickHook) {
       mod.getLogger().warn(
-          "Fluid bottom recovery disabled: lifecycle hook unavailable");
+          "Fire-resistant lava recovery disabled: lifecycle hook unavailable");
       mNormalTickHook->reset();
       mNormalTickHook.reset();
       mNormalTickOriginal = nullptr;
@@ -576,7 +578,7 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
       mActorEventOriginal = nullptr;
       if (mNormalTickHook) {
         mod.getLogger().warn(
-            "Fluid bottom recovery disabled: remove hook unavailable");
+            "Fire-resistant lava recovery disabled: remove hook unavailable");
         mNormalTickHook->reset();
         mNormalTickHook.reset();
         mNormalTickOriginal = nullptr;
@@ -658,7 +660,7 @@ void ItemPhysicsRuntime::uninstall() {
 
 void ItemPhysicsRuntime::clearStates() noexcept {
   mStates = {};
-  mFluidRecoveryStates = {};
+  mLavaRecoveryStates = {};
   mDropAnchors.reset();
   mPendingSignals = {};
   while (mSignalLock.test_and_set(std::memory_order_acquire)) {
@@ -866,7 +868,8 @@ void ItemPhysicsRuntime::onNormalTick(void *actor) {
   if (removed || !actor ||
       !mProfileSupported.load(std::memory_order_relaxed) ||
       *reinterpret_cast<const std::uintptr_t *>(actor) != mItemActorVptr ||
-      !mGetActorPosition || !mGetPosDelta || !mIsClientSide)
+      !mGetActorPosition || !mGetPosDelta || !mIsClientSide ||
+      !mIsFireResistant)
     return;
 
   ++mNormalTickCounter;
@@ -874,32 +877,26 @@ void ItemPhysicsRuntime::onNormalTick(void *actor) {
   const auto entity = *reinterpret_cast<const std::uint32_t *>(
       address + profile::kActorEntityIdOffset);
   const bool enabled = mEnabled.load(std::memory_order_relaxed);
-  const bool inWater =
-      hasComponent(actor, kWasInWaterFlagComponentHash, false);
   const bool inLava =
       hasComponent(actor, kWasInLavaFlagComponentHash, false);
-  const DropFluidKind fluid =
-      inLava ? DropFluidKind::Lava
-             : (inWater ? DropFluidKind::Water : DropFluidKind::None);
-  if (!enabled || !isFluid(fluid)) {
-    clearFluidRecoveryFor(entity);
+  if (!enabled || !inLava) {
+    clearLavaRecoveryFor(entity);
     return;
   }
   const bool authoritative = !mIsClientSide(actor);
-  const bool lavaEligible =
-      fluid != DropFluidKind::Lava ||
-      (mIsFireResistant &&
-       mIsFireResistant(reinterpret_cast<const void *>(
-           address + profile::kItemStackBaseOffset)));
-  if (!authoritative || !lavaEligible) {
-    clearFluidRecoveryFor(entity);
+  const bool fireResistant =
+      authoritative &&
+      mIsFireResistant(reinterpret_cast<const void *>(
+          address + profile::kItemStackBaseOffset));
+  if (!authoritative || !fireResistant) {
+    clearLavaRecoveryFor(entity);
     return;
   }
 
   const auto registry = *reinterpret_cast<const std::uintptr_t *>(
       address + profile::kActorRegistryOffset);
   const auto uniqueId = actorUniqueId(actor);
-  auto &slot = fluidRecoveryFor(entity, uniqueId, registry);
+  auto &slot = lavaRecoveryFor(entity, uniqueId, registry);
   const auto *position = mGetActorPosition(actor);
   const auto *motion = mGetPosDelta(actor);
   if (!position || !motion || !std::isfinite(position->y) ||
@@ -916,8 +913,8 @@ void ItemPhysicsRuntime::onNormalTick(void *actor) {
           address + profile::kItemAgeOffset),
       0);
   const auto correction = slot.recovery.update(
-      position->y, motion->y, nativeGrounded, verticalCollision, age, fluid,
-      lavaEligible, authoritative, enabled);
+      position->y, motion->y, nativeGrounded, verticalCollision, age, inLava,
+      fireResistant, authoritative, enabled);
   if (correction && motion->y < *correction)
     const_cast<Vec3Abi *>(motion)->y = *correction;
 }
@@ -1039,14 +1036,12 @@ bool ItemPhysicsRuntime::hasPendingCountChange(
   return false;
 }
 
-ItemPhysicsRuntime::FluidRecoverySlot &
-ItemPhysicsRuntime::fluidRecoveryFor(std::uint32_t entity,
-                                     std::uint64_t uniqueId,
-                                     std::uintptr_t registry) noexcept {
-  static_assert((kFluidRecoveryCapacity & (kFluidRecoveryCapacity - 1u)) ==
-                0u);
-  const auto initialize = [&](FluidRecoverySlot &slot)
-      -> FluidRecoverySlot & {
+ItemPhysicsRuntime::LavaRecoverySlot &
+ItemPhysicsRuntime::lavaRecoveryFor(std::uint32_t entity,
+                                    std::uint64_t uniqueId,
+                                    std::uintptr_t registry) noexcept {
+  static_assert((kLavaRecoveryCapacity & (kLavaRecoveryCapacity - 1u)) == 0u);
+  const auto initialize = [&](LavaRecoverySlot &slot) -> LavaRecoverySlot & {
     slot = {};
     slot.entity = entity;
     slot.uniqueId = uniqueId;
@@ -1058,12 +1053,12 @@ ItemPhysicsRuntime::fluidRecoveryFor(std::uint32_t entity,
 
   const std::size_t first =
       (static_cast<std::size_t>(entity) * 2654435761u) &
-      (kFluidRecoveryCapacity - 1u);
-  FluidRecoverySlot *oldest = &mFluidRecoveryStates[first];
+      (kLavaRecoveryCapacity - 1u);
+  LavaRecoverySlot *oldest = &mLavaRecoveryStates[first];
   std::uint32_t oldestDistance = 0;
-  for (std::size_t probe = 0; probe < kFluidRecoveryProbeCount; ++probe) {
-    auto &slot = mFluidRecoveryStates[
-        (first + probe) & (kFluidRecoveryCapacity - 1u)];
+  for (std::size_t probe = 0; probe < kLavaRecoveryProbeCount; ++probe) {
+    auto &slot = mLavaRecoveryStates[
+        (first + probe) & (kLavaRecoveryCapacity - 1u)];
     if (!slot.used)
       return initialize(slot);
     if (slot.entity == entity) {
@@ -1088,14 +1083,14 @@ ItemPhysicsRuntime::fluidRecoveryFor(std::uint32_t entity,
   return initialize(*oldest);
 }
 
-void ItemPhysicsRuntime::clearFluidRecoveryFor(
+void ItemPhysicsRuntime::clearLavaRecoveryFor(
     std::uint32_t entity) noexcept {
   const std::size_t first =
       (static_cast<std::size_t>(entity) * 2654435761u) &
-      (kFluidRecoveryCapacity - 1u);
-  for (std::size_t probe = 0; probe < kFluidRecoveryProbeCount; ++probe) {
-    auto &slot = mFluidRecoveryStates[
-        (first + probe) & (kFluidRecoveryCapacity - 1u)];
+      (kLavaRecoveryCapacity - 1u);
+  for (std::size_t probe = 0; probe < kLavaRecoveryProbeCount; ++probe) {
+    auto &slot = mLavaRecoveryStates[
+        (first + probe) & (kLavaRecoveryCapacity - 1u)];
     if (slot.used && slot.entity == entity) {
       slot = {};
       return;
@@ -1544,6 +1539,18 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
                    : (nativeInWater ? DropFluidKind::Water
                                     : DropFluidKind::None);
 
+  if (isFluid(nativeFluid)) {
+    state.fluid = nativeFluid;
+    state.fluidMissTicks = 0;
+  } else if (isFluid(state.fluid) &&
+             state.fluidMissTicks < kFluidContactGraceTicks) {
+    ++state.fluidMissTicks;
+  } else {
+    state.fluid = DropFluidKind::None;
+    state.fluidMissTicks = 0;
+  }
+  const bool inFluid = isFluid(state.fluid);
+
   float verticalSpeed = 0.0f;
   bool hasMotion = false;
   if (mGetPosDelta) {
@@ -1555,29 +1562,6 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
     }
   }
   state.lastVerticalSpeed = verticalSpeed;
-
-  // WasInWater/WasInLava can briefly disappear after a non-tool item begins
-  // rising or reaches the liquid surface. Carry that observed ascent through
-  // stationary misses so surface acquisition and retained-anchor transit can
-  // finish. Real dry contact or a genuine vertical wake remains an exit.
-  const bool confirmedStationarySurface =
-      isFluid(state.fluid) &&
-      (state.fluidBase.bobbing() || state.fluidBase.surfaceCandidate()) &&
-      !nativeGrounded && !verticalCollision &&
-      (!hasMotion || std::abs(verticalSpeed) < kWakeVerticalSpeed);
-  if (isFluid(nativeFluid)) {
-    state.fluid = nativeFluid;
-    state.fluidMissTicks = 0;
-  } else if (isFluid(state.fluid) &&
-             state.fluidMissTicks < kFluidContactGraceTicks) {
-    ++state.fluidMissTicks;
-  } else if (confirmedStationarySurface) {
-    state.fluidMissTicks = kFluidContactGraceTicks;
-  } else {
-    state.fluid = DropFluidKind::None;
-    state.fluidMissTicks = 0;
-  }
-  const bool inFluid = isFluid(state.fluid);
 
   if (inFluid) {
     // Java's calculateFluid path keeps a floating item airborne. A stable
@@ -1754,14 +1738,10 @@ void ItemPhysicsRuntime::applyMergedLineage(
 void ItemPhysicsRuntime::collapseUnresolvedCount(
     VisualState &destination, std::uint16_t liveCount,
     MergeSignal &countSignal) noexcept {
-  const bool preserveLavaAnchors =
-      destination.dropPose.fluid == DropFluidKind::Lava;
   if (!destination.dropLineage.initialized)
-    mDropAnchors.observe(destination.dropLineage, liveCount,
-                         preserveLavaAnchors);
+    mDropAnchors.observe(destination.dropLineage, liveCount);
   else
-    mDropAnchors.reconcile(destination.dropLineage, liveCount,
-                           preserveLavaAnchors);
+    mDropAnchors.reconcile(destination.dropLineage, liveCount);
   countSignal = {};
 }
 
@@ -1988,10 +1968,13 @@ float ItemPhysicsRuntime::renderWorldY(
     DropFluidKind fluid, float sample, std::uint8_t phaseTick,
     bool fluidBobbing) const noexcept {
   const bool inFluid = isFluid(fluid);
-  const float waterSurfaceLift = inFluid ? kFluidSurfaceLiftY : 0.0f;
+  const float fluidSurfaceLift =
+      fluid == DropFluidKind::Water
+          ? kWaterSurfaceLiftY
+          : (fluid == DropFluidKind::Lava ? kLavaSurfaceLiftY : 0.0f);
   const float waterBob =
       inFluid && fluidBobbing ? waterBobOffset(sample, phaseTick, fluid) : 0.0f;
-  return originalWorldY + heightOffset(traits, grounded) + waterSurfaceLift +
+  return originalWorldY + heightOffset(traits, grounded) + fluidSurfaceLift +
          waterBob;
 }
 
@@ -2226,9 +2209,7 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
           previousDropPoseSampled ? &previousDropPose : nullptr,
           previousDropSample, 0u);
       if (!hasPendingCountChange(state.uniqueId, state.registry))
-        mDropAnchors.observe(
-            state.dropLineage, count,
-            state.dropPose.fluid == DropFluidKind::Lava);
+        mDropAnchors.observe(state.dropLineage, count);
       if (isFluid(state.dropPose.fluid) && state.dropLineage.initialized) {
         mDropAnchors.forEachMutable(state.dropLineage, [&](auto &anchor) {
           if (anchor.pose.fluid != state.dropPose.fluid)
