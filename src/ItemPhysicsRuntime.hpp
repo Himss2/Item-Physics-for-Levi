@@ -62,7 +62,6 @@ public:
   using MatrixRefDtorFn = void (*)(MatrixStackRefAbi *);
   using ActorEventFn = void (*)(void *, std::uint32_t, std::uint32_t);
   using ActorRemoveFn = void (*)(void *);
-  using NormalTickFn = void (*)(void *);
   using GetActorUniqueIdFn = const std::int64_t *(*)(void *);
 
   // Called by the AArch64 entry bridge before forwarding Actor::remove.
@@ -185,15 +184,6 @@ private:
     void *relativeShadow{};
   };
 
-  struct LavaRecoverySlot {
-    LavaBottomRecovery recovery{};
-    std::uint64_t uniqueId{};
-    std::uintptr_t registry{};
-    std::uint32_t entity{};
-    std::uint32_t lastSeen{};
-    bool used{};
-  };
-
   using GetPosDeltaFn = const Vec3Abi *(*)(const void *);
   using GetActorPositionFn = const Vec3Abi *(*)(const void *);
   using GetBlockTypeForRenderingFn = const void *(*)(const void *);
@@ -208,28 +198,22 @@ private:
   using RelativeShadowStorageFn = void *(*)(void *, std::uint32_t);
   using RelativeShadowEmplaceFn = ShadowStorageEmplaceResultAbi (*)(
       void *, const std::uint32_t *, bool, const float *);
-  using ActorBoolFn = bool (*)(const void *);
-
   static constexpr std::size_t kStateCapacity = 512;
   static constexpr std::size_t kStateProbeCount = 8;
   static constexpr std::size_t kDropAnchorCapacity = 96;
   static constexpr std::size_t kMaxDropAnchorsPerLineage = 16;
   static constexpr std::size_t kHookSignalCapacity = 64;
   static constexpr std::size_t kPendingSignalCapacity = 128;
-  static constexpr std::size_t kLavaRecoveryCapacity = 128;
-  static constexpr std::size_t kLavaRecoveryProbeCount = 4;
 
   static ItemPhysicsRuntime *sInstance;
   static void renderDetour(void *, void *, void *);
   static void renderItemGroupDetour(void *, void *, void *, std::uint32_t,
                                     std::uint32_t, float, float);
   static void actorEventDetour(void *, std::uint32_t, std::uint32_t);
-  static void normalTickDetour(void *);
 
   void onRender(void *, void *, void *);
   void onRenderItemGroup(void *, void *, void *, std::uint32_t, std::uint32_t,
                          float, float);
-  void onNormalTick(void *);
 
   [[nodiscard]] bool verifyProfile(const ResolvedVirtual &,
                                    const ResolvedVirtual &,
@@ -280,9 +264,6 @@ private:
       std::uint64_t, std::uintptr_t = 0) noexcept;
   [[nodiscard]] bool hasPendingCountChange(std::uint64_t,
                                            std::uintptr_t) const noexcept;
-  LavaRecoverySlot &lavaRecoveryFor(std::uint32_t, std::uint64_t,
-                                    std::uintptr_t) noexcept;
-  void clearLavaRecoveryFor(std::uint32_t) noexcept;
   void processPendingMerges(VisualState &, float,
                             const DropVisualPose *, float,
                             unsigned) noexcept;
@@ -305,7 +286,6 @@ private:
   std::uintptr_t mRenderItemGroupTarget{};
   std::uintptr_t mActorEventTarget{};
   std::uintptr_t mActorRemoveTarget{};
-  std::uintptr_t mNormalTickTarget{};
   std::uintptr_t mItemActorVptr{};
 
   RenderFn mOriginal{};
@@ -316,7 +296,6 @@ private:
   MatrixRefDtorFn mMatrixRefDtor{};
   ActorEventFn mActorEventOriginal{};
   ActorRemoveFn mActorRemoveOriginal{};
-  NormalTickFn mNormalTickOriginal{};
   GetActorUniqueIdFn mGetActorUniqueId{};
   GetPosDeltaFn mGetPosDelta{};
   GetActorPositionFn mGetActorPosition{};
@@ -328,16 +307,12 @@ private:
   IsBlockShape3DFn mIsBlockShape3D{};
   RelativeShadowStorageFn mGetRelativeShadowStorage{};
   RelativeShadowEmplaceFn mEmplaceRelativeShadow{};
-  ActorBoolFn mIsClientSide{};
-  ActorBoolFn mIsFireResistant{};
 
   std::unique_ptr<pl::memory::HookHandle> mHook;
   std::unique_ptr<pl::memory::HookHandle> mRenderItemGroupHook;
   std::unique_ptr<pl::memory::HookHandle> mActorEventHook;
   std::unique_ptr<pl::memory::HookHandle> mActorRemoveHook;
-  std::unique_ptr<pl::memory::HookHandle> mNormalTickHook;
   std::array<VisualState, kStateCapacity> mStates{};
-  std::array<LavaRecoverySlot, kLavaRecoveryCapacity> mLavaRecoveryStates{};
   DropVisualAnchorPool<kDropAnchorCapacity> mDropAnchors{};
   std::array<MergeSignal, kHookSignalCapacity> mHookSignals{};
   std::array<MergeSignal, kPendingSignalCapacity> mPendingSignals{};
@@ -349,7 +324,6 @@ private:
   std::uint16_t mStateSweepCursor{};
   mutable ComponentStorageCache mComponentStorageCache{};
   std::uint32_t mRenderCounter{};
-  std::uint32_t mNormalTickCounter{};
 };
 
 } // namespace itemphysics

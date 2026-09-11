@@ -112,8 +112,6 @@ constexpr const char *kDragonHeadId = "minecraft:dragon_head";
 
 thread_local bool gForceSingleCopy = false;
 thread_local float *gObservedModelScale = nullptr;
-thread_local void *gNormalTickActor = nullptr;
-thread_local bool gNormalTickActorRemoved = false;
 
 // Every original drop group submits at most five Java-style copies. Retained
 // origins reuse stored sine/cosine pairs, so their copy count never multiplies
@@ -390,10 +388,6 @@ bool ItemPhysicsRuntime::verifyProfile(const ResolvedVirtual &resolved,
            itemActor.target == expectedItemEvent &&
            matchesFingerprint(resolved.module, itemActor.target,
                               profile::kItemActorEventFingerprint)},
-      {base + profile::kItemActorNormalTickRva, "ItemActor::normalTick",
-       matchesFingerprint(resolved.module,
-                          base + profile::kItemActorNormalTickRva,
-                          profile::kItemActorNormalTickFingerprint)},
       {resolvedRemove, "Actor::remove",
        resolvedRemove == base + profile::kActorRemoveRva &&
            matchesFingerprint(resolved.module, resolvedRemove,
@@ -402,15 +396,6 @@ bool ItemPhysicsRuntime::verifyProfile(const ResolvedVirtual &resolved,
        matchesFingerprint(resolved.module,
                           base + profile::kGetActorUniqueIdRva,
                           profile::kGetActorUniqueIdFingerprint)},
-      {base + profile::kActorIsClientSideRva, "Actor::isClientSide",
-       matchesFingerprint(resolved.module,
-                          base + profile::kActorIsClientSideRva,
-                          profile::kActorIsClientSideFingerprint)},
-      {base + profile::kItemStackIsFireResistantRva,
-       "ItemStackBase::isFireResistant",
-       matchesFingerprint(resolved.module,
-                          base + profile::kItemStackIsFireResistantRva,
-                          profile::kItemStackIsFireResistantFingerprint)},
       {base + profile::kMergeRemoveSequenceRva,
        "ItemActor native merge/remove sequence",
        matchesFingerprint(resolved.module,
@@ -460,7 +445,6 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
       mMinecraftBase + profile::kRenderItemGroupLikeRva;
   mItemActorVptr = itemActor->vptr;
   mActorEventTarget = itemActor->target;
-  mNormalTickTarget = mMinecraftBase + profile::kItemActorNormalTickRva;
   mActorRemoveTarget = *reinterpret_cast<const std::uintptr_t *>(
       mItemActorVptr + profile::kItemActorRemoveVtableOffset);
   mGetWorldMatrix = reinterpret_cast<GetWorldMatrixFn>(
@@ -473,10 +457,6 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
       mMinecraftBase + profile::kMatrixStackRefDtorRva);
   mGetActorUniqueId = reinterpret_cast<GetActorUniqueIdFn>(
       mMinecraftBase + profile::kGetActorUniqueIdRva);
-  mIsClientSide = reinterpret_cast<ActorBoolFn>(
-      mMinecraftBase + profile::kActorIsClientSideRva);
-  mIsFireResistant = reinterpret_cast<ActorBoolFn>(
-      mMinecraftBase + profile::kItemStackIsFireResistantRva);
   mGetBlockTypeForRendering = reinterpret_cast<GetBlockTypeForRenderingFn>(
       mMinecraftBase + profile::kGetBlockTypeForRenderingRva);
   mGetPosDelta = reinterpret_cast<GetPosDeltaFn>(
@@ -527,20 +507,6 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
     return false;
   }
 
-  mNormalTickHook = std::make_unique<pl::memory::HookHandle>(
-      reinterpret_cast<void *>(mNormalTickTarget),
-      reinterpret_cast<void *>(&ItemPhysicsRuntime::normalTickDetour),
-      reinterpret_cast<void **>(&mNormalTickOriginal),
-      pl::memory::HookPriority::Normal);
-  if (!mNormalTickHook->installed() || !mNormalTickOriginal) {
-    mod.getLogger().warn(
-        "Fire-resistant lava recovery unavailable: normalTick hook failed");
-    if (mNormalTickHook)
-      mNormalTickHook->reset();
-    mNormalTickHook.reset();
-    mNormalTickOriginal = nullptr;
-  }
-
   mActorEventHook = std::make_unique<pl::memory::HookHandle>(
       reinterpret_cast<void *>(mActorEventTarget),
       reinterpret_cast<void *>(&ItemPhysicsRuntime::actorEventDetour),
@@ -553,13 +519,6 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
       mActorEventHook->reset();
     mActorEventHook.reset();
     mActorEventOriginal = nullptr;
-    if (mNormalTickHook) {
-      mod.getLogger().warn(
-          "Fire-resistant lava recovery disabled: lifecycle hook unavailable");
-      mNormalTickHook->reset();
-      mNormalTickHook.reset();
-      mNormalTickOriginal = nullptr;
-    }
   } else {
     mActorRemoveHook = std::make_unique<pl::memory::HookHandle>(
         reinterpret_cast<void *>(mActorRemoveTarget),
@@ -576,13 +535,6 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
       mActorEventHook->reset();
       mActorEventHook.reset();
       mActorEventOriginal = nullptr;
-      if (mNormalTickHook) {
-        mod.getLogger().warn(
-            "Fire-resistant lava recovery disabled: remove hook unavailable");
-        mNormalTickHook->reset();
-        mNormalTickHook.reset();
-        mNormalTickOriginal = nullptr;
-      }
     } else {
       mSeparateDropTrackingAvailable.store(true, std::memory_order_relaxed);
     }
@@ -603,10 +555,6 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
 void ItemPhysicsRuntime::uninstall() {
   mProfileSupported.store(false, std::memory_order_relaxed);
   mSeparateDropTrackingAvailable.store(false, std::memory_order_relaxed);
-  if (mNormalTickHook) {
-    mNormalTickHook->reset();
-    mNormalTickHook.reset();
-  }
   if (mActorRemoveHook) {
     mActorRemoveHook->reset();
     mActorRemoveHook.reset();
@@ -634,7 +582,6 @@ void ItemPhysicsRuntime::uninstall() {
   mMatrixRefDtor = nullptr;
   mActorEventOriginal = nullptr;
   mActorRemoveOriginal = nullptr;
-  mNormalTickOriginal = nullptr;
   mGetActorUniqueId = nullptr;
   mGetPosDelta = nullptr;
   mGetActorPosition = nullptr;
@@ -646,21 +593,17 @@ void ItemPhysicsRuntime::uninstall() {
   mIsBlockShape3D = nullptr;
   mGetRelativeShadowStorage = nullptr;
   mEmplaceRelativeShadow = nullptr;
-  mIsClientSide = nullptr;
-  mIsFireResistant = nullptr;
   mMinecraftBase = 0;
   mRenderTarget = 0;
   mRenderItemGroupTarget = 0;
   mActorEventTarget = 0;
   mActorRemoveTarget = 0;
-  mNormalTickTarget = 0;
   mItemActorVptr = 0;
   clearStates();
 }
 
 void ItemPhysicsRuntime::clearStates() noexcept {
   mStates = {};
-  mLavaRecoveryStates = {};
   mDropAnchors.reset();
   mPendingSignals = {};
   while (mSignalLock.test_and_set(std::memory_order_acquire)) {
@@ -674,7 +617,6 @@ void ItemPhysicsRuntime::clearStates() noexcept {
   mClearDropVisualsRequested.store(false, std::memory_order_relaxed);
   mComponentStorageCache = {};
   mRenderCounter = 0;
-  mNormalTickCounter = 0;
   mStateSweepCursor = 0;
 }
 
@@ -732,18 +674,8 @@ void ItemPhysicsRuntime::actorEventDetour(void *actor, std::uint32_t event,
   });
 }
 
-void ItemPhysicsRuntime::normalTickDetour(void *actor) {
-  auto *const instance = sInstance;
-  const auto original = instance ? instance->mNormalTickOriginal : nullptr;
-  if (!original)
-    return;
-  instance->onNormalTick(actor);
-}
-
 void ItemPhysicsRuntime::dispatchActorRemove(void *actor, void *destination,
                                              std::uintptr_t caller) {
-  if (actor && actor == gNormalTickActor)
-    gNormalTickActorRemoved = true;
   auto *const instance = sInstance;
   const auto original = instance ? instance->mActorRemoveOriginal : nullptr;
   if (!original)
@@ -847,76 +779,6 @@ void ItemPhysicsRuntime::onRenderItemGroup(
 
   original(self, ctx, itemData, gForceSingleCopy ? 1u : count, flags, scale,
            animation);
-}
-
-void ItemPhysicsRuntime::onNormalTick(void *actor) {
-  const auto original = mNormalTickOriginal;
-  if (!original)
-    return;
-
-  // Actor::remove can run inside ItemActor::normalTick during burning,
-  // despawn, pickup or a native merge. Never inspect the actor after that.
-  void *const previousTickActor = gNormalTickActor;
-  const bool previousRemoved = gNormalTickActorRemoved;
-  gNormalTickActor = actor;
-  gNormalTickActorRemoved = false;
-  original(actor);
-  const bool removed = gNormalTickActorRemoved;
-  gNormalTickActor = previousTickActor;
-  gNormalTickActorRemoved = previousRemoved;
-
-  if (removed || !actor ||
-      !mProfileSupported.load(std::memory_order_relaxed) ||
-      *reinterpret_cast<const std::uintptr_t *>(actor) != mItemActorVptr ||
-      !mGetActorPosition || !mGetPosDelta || !mIsClientSide ||
-      !mIsFireResistant)
-    return;
-
-  ++mNormalTickCounter;
-  const auto address = reinterpret_cast<std::uintptr_t>(actor);
-  const auto entity = *reinterpret_cast<const std::uint32_t *>(
-      address + profile::kActorEntityIdOffset);
-  const bool enabled = mEnabled.load(std::memory_order_relaxed);
-  const bool inLava =
-      hasComponent(actor, kWasInLavaFlagComponentHash, false);
-  if (!enabled || !inLava) {
-    clearLavaRecoveryFor(entity);
-    return;
-  }
-  const bool authoritative = !mIsClientSide(actor);
-  const bool fireResistant =
-      authoritative &&
-      mIsFireResistant(reinterpret_cast<const void *>(
-          address + profile::kItemStackBaseOffset));
-  if (!authoritative || !fireResistant) {
-    clearLavaRecoveryFor(entity);
-    return;
-  }
-
-  const auto registry = *reinterpret_cast<const std::uintptr_t *>(
-      address + profile::kActorRegistryOffset);
-  const auto uniqueId = actorUniqueId(actor);
-  auto &slot = lavaRecoveryFor(entity, uniqueId, registry);
-  const auto *position = mGetActorPosition(actor);
-  const auto *motion = mGetPosDelta(actor);
-  if (!position || !motion || !std::isfinite(position->y) ||
-      !std::isfinite(motion->y)) {
-    slot.recovery = {};
-    return;
-  }
-  const bool nativeGrounded = hasComponent(
-      actor, profile::kOnGroundFlagComponentHash, false);
-  const bool verticalCollision = hasComponent(
-      actor, profile::kVerticalCollisionFlagComponentHash, false);
-  const auto age = std::max(
-      *reinterpret_cast<const std::int32_t *>(
-          address + profile::kItemAgeOffset),
-      0);
-  const auto correction = slot.recovery.update(
-      position->y, motion->y, nativeGrounded, verticalCollision, age, inLava,
-      fireResistant, authoritative, enabled);
-  if (correction && motion->y < *correction)
-    const_cast<Vec3Abi *>(motion)->y = *correction;
 }
 
 std::uint64_t ItemPhysicsRuntime::actorUniqueId(void *actor) const noexcept {
@@ -1034,68 +896,6 @@ bool ItemPhysicsRuntime::hasPendingCountChange(
       return true;
   }
   return false;
-}
-
-ItemPhysicsRuntime::LavaRecoverySlot &
-ItemPhysicsRuntime::lavaRecoveryFor(std::uint32_t entity,
-                                    std::uint64_t uniqueId,
-                                    std::uintptr_t registry) noexcept {
-  static_assert((kLavaRecoveryCapacity & (kLavaRecoveryCapacity - 1u)) == 0u);
-  const auto initialize = [&](LavaRecoverySlot &slot) -> LavaRecoverySlot & {
-    slot = {};
-    slot.entity = entity;
-    slot.uniqueId = uniqueId;
-    slot.registry = registry;
-    slot.lastSeen = mNormalTickCounter;
-    slot.used = true;
-    return slot;
-  };
-
-  const std::size_t first =
-      (static_cast<std::size_t>(entity) * 2654435761u) &
-      (kLavaRecoveryCapacity - 1u);
-  LavaRecoverySlot *oldest = &mLavaRecoveryStates[first];
-  std::uint32_t oldestDistance = 0;
-  for (std::size_t probe = 0; probe < kLavaRecoveryProbeCount; ++probe) {
-    auto &slot = mLavaRecoveryStates[
-        (first + probe) & (kLavaRecoveryCapacity - 1u)];
-    if (!slot.used)
-      return initialize(slot);
-    if (slot.entity == entity) {
-      const bool identityChanged =
-          uniqueId && registry && slot.uniqueId && slot.registry &&
-          (slot.uniqueId != uniqueId || slot.registry != registry);
-      if (identityChanged)
-        return initialize(slot);
-      if (uniqueId && registry && (!slot.uniqueId || !slot.registry)) {
-        slot.uniqueId = uniqueId;
-        slot.registry = registry;
-      }
-      slot.lastSeen = mNormalTickCounter;
-      return slot;
-    }
-    const auto distance = mNormalTickCounter - slot.lastSeen;
-    if (distance >= oldestDistance) {
-      oldestDistance = distance;
-      oldest = &slot;
-    }
-  }
-  return initialize(*oldest);
-}
-
-void ItemPhysicsRuntime::clearLavaRecoveryFor(
-    std::uint32_t entity) noexcept {
-  const std::size_t first =
-      (static_cast<std::size_t>(entity) * 2654435761u) &
-      (kLavaRecoveryCapacity - 1u);
-  for (std::size_t probe = 0; probe < kLavaRecoveryProbeCount; ++probe) {
-    auto &slot = mLavaRecoveryStates[
-        (first + probe) & (kLavaRecoveryCapacity - 1u)];
-    if (slot.used && slot.entity == entity) {
-      slot = {};
-      return;
-    }
-  }
 }
 
 void *ItemPhysicsRuntime::findComponentStorage(void *actor,
