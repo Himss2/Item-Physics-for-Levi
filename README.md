@@ -1,8 +1,9 @@
 # Levi Item Physics
 
-ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.45.1`.
-Version `0.16.6` is deliberately rebuilt from the lighter `0.16.2` baseline.
-It preserves the device-approved airborne, landing, ground-height, head,
+ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.51.1`.
+Version `0.16.7` updates only the strict binary compatibility profile from the
+device-approved `0.16.6` behavior, which was rebuilt from the lighter `0.16.2`
+baseline. It preserves the airborne, landing, ground-height, head,
 shadow and rapid dry-anchor behavior. Minecraft exclusively owns water entry,
 sinking, buoyant ascent and absolute fluid Y; the mod never writes fluid
 position or velocity.
@@ -122,21 +123,21 @@ clears all retained origins and immediately returns to the normal renderer.
 - The bob gate does not query an exact fluid mesh. It waits for native ascent
   and stable position/velocity, but never owns the rendered absolute Y. Flowing
   and unusual fluid geometry still need device testing.
-- Version 0.16.6 is host-tested source, not yet validated in Android gameplay.
+- Version 0.16.7 is host-tested source, not yet validated in Android gameplay.
 
 ## Strict binary guard
 
 The hooks activate only for the analyzed library:
 
-- SHA-256: `444e77434bdd3789a0d90978d06336a99831e78e52955e528258cc375dfa0557`
-- Build ID: `868e275cb295e9a275bb29d2258edc2f7dc48761`
+- SHA-256: `b8a6351503d330628335a80e8131acd45291fa9a747465f0f34a31b2346847b4`
+- Build ID: `712509dc14ccc233e91f267937dfb46ecdcc4b68`
 - `ItemRenderer::render`: RTTI `12ItemRenderer`, vtable `+0x18`, RVA
-  `0xA29F708`
+  `0xA7120DC`
 - `ItemActor::handleEntityEvent`: RTTI `9ItemActor`, vtable `+0x228`, RVA
-  `0xF12537C`
-- `Actor::remove`: ItemActor vtable `+0x60`, RVA `0xEC8FC7C`
-- Actor UniqueID accessor: RVA `0xEC8B12C`
-- Native merge/removal sequence: RVA `0xF1245D8`, return site `0xF1245EC`
+  `0xFA29B18`
+- `Actor::remove`: ItemActor vtable `+0x60`, RVA `0xF56BE58`
+- Actor UniqueID accessor: RVA `0xF566F74`
+- Native merge/removal sequence: RVA `0xFA28D7C`, return site `0xFA28D90`
 
 Runtime verifies the GNU Build ID, resolved vtable targets, and exact
 instruction fingerprints before installing any hook. A mismatch leaves the mod

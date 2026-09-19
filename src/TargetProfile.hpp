@@ -8,8 +8,8 @@
 namespace itemphysics::profile {
 
 // Strict profile for the supplied arm64-v8a libminecraftpe.so:
-// SHA-256 444e77434bdd3789a0d90978d06336a99831e78e52955e528258cc375dfa0557
-// Build ID 868e275cb295e9a275bb29d2258edc2f7dc48761
+// SHA-256 b8a6351503d330628335a80e8131acd45291fa9a747465f0f34a31b2346847b4
+// Build ID 712509dc14ccc233e91f267937dfb46ecdcc4b68
 inline constexpr std::string_view kMinecraftModule = "libminecraftpe.so";
 inline constexpr std::string_view kItemRendererRtti = "12ItemRenderer";
 inline constexpr std::string_view kItemActorRtti = "9ItemActor";
@@ -17,8 +17,8 @@ inline constexpr std::size_t kItemRendererRenderVtableOffset = 0x18;
 inline constexpr std::size_t kItemActorRemoveVtableOffset = 0x60;
 inline constexpr std::size_t kItemActorEventVtableOffset = 0x228;
 inline constexpr std::array<std::uint8_t, 20> kBuildId = {
-    0x86, 0x8E, 0x27, 0x5C, 0xB2, 0x95, 0xE9, 0xA2, 0x75, 0xBB,
-    0x29, 0xD2, 0x25, 0x8E, 0xDC, 0x2F, 0x7D, 0xC4, 0x87, 0x61};
+    0x71, 0x25, 0x09, 0xDC, 0x14, 0xCC, 0xC2, 0x33, 0xE9, 0x1F,
+    0x26, 0x79, 0x37, 0xDF, 0xB4, 0x6E, 0xCD, 0xCC, 0x4B, 0x68};
 
 inline constexpr std::ptrdiff_t kActorRegistryOffset = 0x10;
 inline constexpr std::ptrdiff_t kActorEntityIdOffset = 0x18;
@@ -35,29 +35,29 @@ inline constexpr std::ptrdiff_t kItemIdentifierOffset = 0xF0;
 inline constexpr std::ptrdiff_t kBlockTypeOffset = 0x68;
 inline constexpr std::size_t kBlockTypeGetVisualShapeVtableOffset = 0x50;
 
-inline constexpr std::uintptr_t kItemRendererRenderRva = 0x0A29F708;
-inline constexpr std::uintptr_t kRenderItemGroupLikeRva = 0x0A29F338;
-inline constexpr std::uintptr_t kGetWorldMatrixRva = 0x0A5C67C8;
-inline constexpr std::uintptr_t kGetPartialTickRva = 0x0A5C678C;
-inline constexpr std::uintptr_t kMatrixStackPushRva = 0x107CBFFC;
-inline constexpr std::uintptr_t kMatrixStackRefDtorRva = 0x107CC6C0;
-inline constexpr std::uintptr_t kGetBlockTypeForRenderingRva = 0x0F642ADC;
-inline constexpr std::uintptr_t kGetActorPositionRva = 0x0EC7A020;
-inline constexpr std::uintptr_t kGetActorPreviousPositionRva = 0x0EC8EAAC;
-inline constexpr std::uintptr_t kGetPosDeltaRva = 0x0EC82A68;
-inline constexpr std::uintptr_t kBlockGraphicsGetForBlockTypeRva = 0x0A2189DC;
-inline constexpr std::uintptr_t kBlockGraphicsGetForBlockRva = 0x0A2189F0;
-inline constexpr std::uintptr_t kBlockGraphicsGetBlockShapeRva = 0x0A219718;
-inline constexpr std::uintptr_t kIsBlockShape3DRva = 0x0A280E68;
-inline constexpr std::uintptr_t kRelativeShadowStorageRva = 0x0E96A7E4;
-inline constexpr std::uintptr_t kRelativeShadowEmplaceRva = 0x0E96B68C;
-inline constexpr std::uintptr_t kItemActorEventRva = 0x0F12537C;
-inline constexpr std::uintptr_t kActorRemoveRva = 0x0EC8FC7C;
-inline constexpr std::uintptr_t kGetActorUniqueIdRva = 0x0EC8B12C;
-inline constexpr std::uintptr_t kMergeRemoveSequenceRva = 0x0F1245D8;
-// ItemActor::normalTick calls source->remove() at 0xF1245E8. At the
+inline constexpr std::uintptr_t kItemRendererRenderRva = 0x0A7120DC;
+inline constexpr std::uintptr_t kRenderItemGroupLikeRva = 0x0A711D0C;
+inline constexpr std::uintptr_t kGetWorldMatrixRva = 0x0A953460;
+inline constexpr std::uintptr_t kGetPartialTickRva = 0x0A953424;
+inline constexpr std::uintptr_t kMatrixStackPushRva = 0x110AF780;
+inline constexpr std::uintptr_t kMatrixStackRefDtorRva = 0x110AFE44;
+inline constexpr std::uintptr_t kGetBlockTypeForRenderingRva = 0x0FFA4454;
+inline constexpr std::uintptr_t kGetActorPositionRva = 0x0F563FB0;
+inline constexpr std::uintptr_t kGetActorPreviousPositionRva = 0x0F56AC88;
+inline constexpr std::uintptr_t kGetPosDeltaRva = 0x0F55E894;
+inline constexpr std::uintptr_t kBlockGraphicsGetForBlockTypeRva = 0x0A65FA9C;
+inline constexpr std::uintptr_t kBlockGraphicsGetForBlockRva = 0x0A65FAB0;
+inline constexpr std::uintptr_t kBlockGraphicsGetBlockShapeRva = 0x0A6607D8;
+inline constexpr std::uintptr_t kIsBlockShape3DRva = 0x0A6C82F4;
+inline constexpr std::uintptr_t kRelativeShadowStorageRva = 0x0F1AC494;
+inline constexpr std::uintptr_t kRelativeShadowEmplaceRva = 0x0F1AD33C;
+inline constexpr std::uintptr_t kItemActorEventRva = 0x0FA29B18;
+inline constexpr std::uintptr_t kActorRemoveRva = 0x0F56BE58;
+inline constexpr std::uintptr_t kGetActorUniqueIdRva = 0x0F566F74;
+inline constexpr std::uintptr_t kMergeRemoveSequenceRva = 0x0FA28D7C;
+// ItemActor::normalTick calls source->remove() at 0xFA28D8C. At the
 // following instruction x25 is still the source and x24 the destination.
-inline constexpr std::uintptr_t kMergeRemoveReturnRva = 0x0F1245EC;
+inline constexpr std::uintptr_t kMergeRemoveReturnRva = 0x0FA28D90;
 
 inline constexpr std::uint32_t kOnGroundFlagComponentHash = 0xC29078A0u;
 inline constexpr std::uint32_t kVerticalCollisionFlagComponentHash =
@@ -68,10 +68,10 @@ inline constexpr std::uint32_t kRelativeShadowOffsetComponentHash =
 inline constexpr std::array<std::uint32_t, 24> kRenderFingerprint = {
     0xD103C3FFu, 0x6D072BEBu, 0x6D0823E9u, 0xA9097BFDu,
     0xF90053FBu, 0xA90B67FAu, 0xA90C5FF8u, 0xA90D57F6u,
-    0xA90E4FF4u, 0x910243FDu, 0xD53BD05Bu, 0xAA0003F5u,
-    0xAA0203E0u, 0xF9401768u, 0xAA0203F8u, 0xAA0103F3u,
-    0xF81D83A8u, 0x9401E94Bu, 0xB40022C0u, 0x52800801u,
-    0xAA0003F4u, 0x9527B25Eu, 0x36002240u, 0x394ECE88u};
+    0xA90E4FF4u, 0x910243FDu, 0xD53BD05Bu, 0xF9401768u,
+    0xF81D83A8u, 0xF9400053u, 0xB40022B3u, 0xAA0103F4u,
+    0xAA0003F5u, 0xAA1303E0u, 0x52800801u, 0xAA0203F8u,
+    0x9539577Cu, 0x360021C0u, 0x394ECE68u, 0x34002188u};
 
 inline constexpr std::array<std::uint32_t, 8>
     kRenderItemGroupFingerprint = {
@@ -110,17 +110,17 @@ inline constexpr std::array<std::uint32_t, 3> kGetPosDeltaFingerprint = {
 
 inline constexpr std::array<std::uint32_t, 5>
     kBlockGraphicsGetForBlockTypeFingerprint = {
-        0xA9BF7BFDu, 0x910003FDu, 0x9556EC78u, 0xA8C17BFDu, 0x17FFFFA1u};
+        0xA9BF7BFDu, 0x910003FDu, 0x956AA550u, 0xA8C17BFDu, 0x17FFFFA1u};
 
 inline constexpr std::array<std::uint32_t, 5>
     kBlockGraphicsGetForBlockFingerprint = {
-        0xA9BF7BFDu, 0x910003FDu, 0xF9403400u, 0x9556EC72u, 0x955A115Fu};
+        0xA9BF7BFDu, 0x910003FDu, 0xF9403400u, 0x956AA54Au, 0x956E29F5u};
 
 inline constexpr std::array<std::uint32_t, 2>
     kBlockGraphicsGetBlockShapeFingerprint = {0xB9401000u, 0xD65F03C0u};
 
 inline constexpr std::array<std::uint32_t, 10> kIsBlockShape3DFingerprint = {
-    0x7102781Fu, 0x54000148u, 0x2A0003E8u, 0xB0FC4EC9u, 0x9117E929u,
+    0x7102781Fu, 0x54000148u, 0x2A0003E8u, 0xF0FC3449u, 0x91397929u,
     0x100000AAu, 0x3868692Bu, 0x8B0B094Au, 0x52800020u, 0xD61F0140u};
 
 inline constexpr std::array<std::uint32_t, 12>
@@ -137,7 +137,7 @@ inline constexpr std::array<std::uint32_t, 12>
 
 inline constexpr std::array<std::uint32_t, 7> kItemActorEventFingerprint = {
     0x12001C28u, 0x7101151Fu, 0x54000081u, 0x910E4000u,
-    0x12001C41u, 0x14146547u, 0x17EDD3E5u};
+    0x12001C41u, 0x1415DD63u, 0x17ED3385u};
 
 inline constexpr std::array<std::uint32_t, 12> kActorRemoveFingerprint = {
     0xD10203FFu, 0xA9047BFDu, 0xF9002BF7u, 0xA90657F6u,
@@ -153,7 +153,7 @@ inline constexpr std::array<std::uint32_t, 12>
 inline constexpr std::array<std::uint32_t, 10>
     kMergeRemoveSequenceFingerprint = {
         0x1A89B108u, 0xB9042B08u, 0xF9400328u, 0xF9403108u,
-        0xD63F0100u, 0xAA1903E0u, 0x97ED7D27u, 0xF9400008u,
+        0xD63F0100u, 0xAA1903E0u, 0x97ECDABFu, 0xF9400008u,
         0x394ECB03u, 0x910063E4u};
 
 } // namespace itemphysics::profile

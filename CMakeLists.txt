@@ -114,4 +114,4 @@ else()
   message(WARNING "IPO/LTO unavailable: ${IPO_ERROR}")
 endif()
 
-message(STATUS "Levi Item Physics: ABI=${ANDROID_ABI}, platform=${ANDROID_PLATFORM}, strict 1.26.45.1 visual profile")
+message(STATUS "Levi Item Physics: ABI=${ANDROID_ABI}, platform=${ANDROID_PLATFORM}, strict 1.26.51.1 visual profile")

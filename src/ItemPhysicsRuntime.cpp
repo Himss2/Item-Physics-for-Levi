@@ -306,7 +306,7 @@ bool ItemPhysicsRuntime::verifyProfile(const ResolvedVirtual &resolved,
   if (!resolved.module.hasBuildId ||
       resolved.module.buildId != profile::kBuildId) {
     mod.getLogger().warn(
-        "Minecraft 1.26.45.1 profile mismatch: GNU Build ID");
+        "Minecraft 1.26.51.1 profile mismatch: GNU Build ID");
     return false;
   }
 
@@ -405,7 +405,7 @@ bool ItemPhysicsRuntime::verifyProfile(const ResolvedVirtual &resolved,
 
   for (const auto &check : checks) {
     if (!check.matched || !resolved.module.executable(check.address)) {
-      mod.getLogger().warn("Minecraft 1.26.45.1 profile mismatch: {}",
+      mod.getLogger().warn("Minecraft 1.26.51.1 profile mismatch: {}",
                            check.name);
       return false;
     }
@@ -544,11 +544,11 @@ bool ItemPhysicsRuntime::install(ll::mod::NativeMod &mod) {
   if (mSeparateDropTrackingAvailable.load(std::memory_order_relaxed))
     mod.getLogger().info(
         "Item Physics visual core and separate-drop tracking active for "
-        "Minecraft 1.26.45.1");
+        "Minecraft 1.26.51.1");
   else
     mod.getLogger().info(
         "Item Physics visual core active without separate-drop tracking for "
-        "Minecraft 1.26.45.1");
+        "Minecraft 1.26.51.1");
   return true;
 }
 

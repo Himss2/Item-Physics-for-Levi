@@ -1,4 +1,12 @@
-# Implementation notes: universal visual core 0.16.6
+# Implementation notes: universal visual core 0.16.7
+
+## Version 0.16.7: Minecraft 1.26.51.1 compatibility
+
+This release changes only the authenticated ARM64 binary profile: GNU Build
+ID, RVAs, exact instruction fingerprints, and compatibility metadata. Runtime
+physics, rendering transforms, configuration, fluid behavior, retained-anchor
+behavior, field offsets, component hashes, RTTI names, and vtable slots are
+unchanged from `0.16.6`.
 
 ## Source behavior reproduced
 
@@ -263,28 +271,28 @@ per-copy trigonometric work. The stripped library remains subject to the same
 
 ## Analyzed target
 
-- Minecraft: `1.26.45.1`, ARM64
-- SHA-256: `444e77434bdd3789a0d90978d06336a99831e78e52955e528258cc375dfa0557`
-- Build ID: `868e275cb295e9a275bb29d2258edc2f7dc48761`
-- ItemActor constructor: `0xF123A24`, allocation size `0x450`
-- ItemRenderer render: RTTI slot `+0x18`, RVA `0xA29F708`
-- Render-group helper: `0xA29F338`
-- Context world matrix: `0xA5C67C8`
-- Context partial tick: `0xA5C678C` (`ldr s0, [x0, #0xB0]; ret`)
-- Matrix push/destructor: `0x107CBFFC` / `0x107CC6C0`
-- ItemStackBase block-render query: `0xF642ADC`
+- Minecraft: `1.26.51.1`, ARM64
+- SHA-256: `b8a6351503d330628335a80e8131acd45291fa9a747465f0f34a31b2346847b4`
+- Build ID: `712509dc14ccc233e91f267937dfb46ecdcc4b68`
+- ItemActor constructor: `0xFA281E0`, allocation size `0x450`
+- ItemRenderer render: RTTI slot `+0x18`, RVA `0xA7120DC`
+- Render-group helper: `0xA711D0C`
+- Context world matrix: `0xA953460`
+- Context partial tick: `0xA953424` (`ldr s0, [x0, #0xB0]; ret`)
+- Matrix push/destructor: `0x110AF780` / `0x110AFE44`
+- ItemStackBase block-render query: `0xFFA4454`
 - On-ground component hash: `0xC29078A0`
 - Vertical-collision component hash: `0xC6A02A9A`
 - Was-in-water component hash: `0x78E89F39`
 - Was-in-lava component hash: `0x832A2768`
-- Actor position delta: `0xEC82A68`
-- Actor current/previous position: `0xEC7A020` / `0xEC8EAAC`
-- BlockGraphics helpers: `0xA2189DC`, `0xA2189F0`, `0xA219718`, `0xA280E68`
-- Relative-shadow storage/emplace: `0xE96A7E4` / `0xE96B68C`
-- ItemActor event handler: `0xF12537C` (vtable `+0x228`)
-- Actor remove: `0xEC8FC7C` (ItemActor vtable `+0x60`)
-- Actor UniqueID accessor: `0xEC8B12C`
-- Native merge/remove sequence: `0xF1245D8`, return `0xF1245EC`
+- Actor position delta: `0xF55E894`
+- Actor current/previous position: `0xF563FB0` / `0xF56AC88`
+- BlockGraphics helpers: `0xA65FA9C`, `0xA65FAB0`, `0xA6607D8`, `0xA6C82F4`
+- Relative-shadow storage/emplace: `0xF1AC494` / `0xF1AD33C`
+- ItemActor event handler: `0xFA29B18` (vtable `+0x228`)
+- Actor remove: `0xF56BE58` (ItemActor vtable `+0x60`)
+- Actor UniqueID accessor: `0xF566F74`
+- Native merge/remove sequence: `0xFA28D7C`, return `0xFA28D90`
 
 Relevant ItemActor fields are guarded indirectly by the constructor/render
 profile and are centralized in `TargetProfile.hpp`: age `+0x428`, bob offset
