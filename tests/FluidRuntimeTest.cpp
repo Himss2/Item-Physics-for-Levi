@@ -78,6 +78,8 @@ Fixture *active{};
 Fixture *destination{};
 unsigned motionReads{};
 unsigned removeCalls{};
+const void *expectedBlockTypeHandle{};
+int graphicsMarker{};
 constexpr std::int64_t sourceUniqueId = 0x10203040;
 constexpr std::int64_t destinationUniqueId = 0x50607080;
 const R::Vec3Abi *getMotion(const void *actor) {
@@ -105,6 +107,19 @@ const std::int64_t *getUniqueId(void *actor) {
 void nativeRemove(void *actor) {
   assert(active && actor == active->actor.data());
   ++removeCalls;
+}
+const void *getBlockTypeHandle(const void *stack) {
+  assert(active);
+  assert(stack == active->actor.data() +
+                      itemphysics::profile::kItemStackBaseOffset);
+  return expectedBlockTypeHandle;
+}
+void *getGraphicsForBlockType(const void *handle) {
+  return handle == expectedBlockTypeHandle ? &graphicsMarker : nullptr;
+}
+std::int32_t getGraphicsShape(const void *graphics) {
+  assert(graphics == &graphicsMarker);
+  return 43;
 }
 void configure(R &r) {
   R::sInstance = &r;
@@ -203,6 +218,22 @@ int main() {
 
   configure(r);
   active = new Fixture;
+
+  // Regression: ItemStackBase returns a BlockType handle and
+  // BlockGraphics::getForBlockType consumes that same handle. Unwrapping it
+  // inside the mod passes an internal pointer as the wrong ABI type and
+  // crashes as soon as a dropped block is first rendered on world entry.
+  std::array<std::uintptr_t, 1> inner{{0x1234u}};
+  std::array<std::uintptr_t, 1> blockTypeHandle{
+      {reinterpret_cast<std::uintptr_t>(inner.data())}};
+  expectedBlockTypeHandle = blockTypeHandle.data();
+  r.mGetBlockTypeForRendering = getBlockTypeHandle;
+  r.mGetBlockGraphicsForBlockType = getGraphicsForBlockType;
+  r.mGetBlockGraphicsShape = getGraphicsShape;
+  std::int32_t renderShape = -1;
+  assert(r.tryGetRenderBlockShape(
+      reinterpret_cast<std::uintptr_t>(active->actor.data()), renderShape));
+  assert(renderShape == 43);
 
   // Native onGround may coexist with lava at the bottom: rendering must not
   // apply the calibrated ground lowering while the item is in fluid.
