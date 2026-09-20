@@ -1109,18 +1109,12 @@ bool ItemPhysicsRuntime::tryGetRenderBlockShape(
       !mGetBlockGraphicsForBlockType || !mGetBlockGraphicsShape)
     return false;
 
-  const void *weak = mGetBlockTypeForRendering(
+  const void *blockTypeHandle = mGetBlockTypeForRendering(
       reinterpret_cast<const void *>(actor + profile::kItemStackBaseOffset));
-  if (!weak)
-    return false;
-  const auto control = *reinterpret_cast<const std::uintptr_t *>(weak);
-  if (!control)
-    return false;
-  const auto type = *reinterpret_cast<const std::uintptr_t *>(control);
-  if (!type)
+  if (!blockTypeHandle)
     return false;
   const void *graphics = mGetBlockGraphicsForBlockType(
-      reinterpret_cast<const void *>(type));
+      blockTypeHandle);
   if (!graphics)
     return false;
   shape = mGetBlockGraphicsShape(graphics);
