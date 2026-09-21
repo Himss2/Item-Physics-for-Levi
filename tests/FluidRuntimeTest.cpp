@@ -258,6 +258,20 @@ int main() {
     assert(!r.resolveGrounded(airborne, active->actor.data(), age, 12.0f));
   }
 
+  // Individually tiny movement is still movement. Four sub-epsilon steps
+  // must not accumulate into a permanent ground latch while an item descends.
+  active->motion.y = -0.01f;
+  active->current.y = 60.0f;
+  R::VisualState slowlyDescending{};
+  bool slowDescentGrounded = false;
+  for (int age = 38; age < 46; ++age) {
+    active->current.y -= 0.01f;
+    slowDescentGrounded =
+        r.resolveGrounded(slowlyDescending,
+                          active->actor.data(), age, 12.0f) ||
+        slowDescentGrounded;
+  }
+
   // The conservative mob-drop fallback remains available when vertical
   // collision and stable absolute Actor world Y agree for two game ticks.
   active->collisionPage[Fixture::entity] = Fixture::entity;
@@ -272,6 +286,41 @@ int main() {
   assert(collided.groundedRenderTicks == 1u);
   assert(r.resolveGrounded(collided, active->actor.data(), 43, -8.0f));
   assert(collided.groundedRenderTicks == 2u);
+
+  // Some mob-spawned ItemActors stop on the floor without retaining the
+  // VerticalCollision component. Stable absolute Actor Y plus negligible
+  // native vertical motion must still settle the visual after four distinct
+  // game ticks, otherwise the item keeps using the airborne rotation path.
+  active->collisionPage[Fixture::entity] = 0xFFFFFFFFu;
+  active->motion.y = 0.0f;
+  active->current.y = 58.0f;
+  R::VisualState mobDropWithoutCollision{};
+  assert(!r.resolveGrounded(mobDropWithoutCollision,
+                            active->actor.data(), 44, -8.0f));
+  assert(!r.resolveGrounded(mobDropWithoutCollision,
+                            active->actor.data(), 45, -8.0f));
+  assert(!r.resolveGrounded(mobDropWithoutCollision,
+                            active->actor.data(), 46, -8.0f));
+  assert(!r.resolveGrounded(mobDropWithoutCollision,
+                            active->actor.data(), 47, -8.0f));
+  assert(r.resolveGrounded(mobDropWithoutCollision,
+                           active->actor.data(), 48, -8.0f));
+
+  // Collision evidence is a separate two-sample path. A single collision
+  // sample must not reuse stationary fallback samples collected beforehand.
+  active->motion.y = 0.0f;
+  active->current.y = 57.0f;
+  R::VisualState intermittentCollision{};
+  assert(!r.resolveGrounded(intermittentCollision,
+                            active->actor.data(), 70, -8.0f));
+  assert(!r.resolveGrounded(intermittentCollision,
+                            active->actor.data(), 71, -8.0f));
+  active->collisionPage[Fixture::entity] = Fixture::entity;
+  assert(!r.resolveGrounded(intermittentCollision,
+                            active->actor.data(), 72, -8.0f));
+  assert(r.resolveGrounded(intermittentCollision,
+                           active->actor.data(), 73, -8.0f));
+  assert(!slowDescentGrounded);
 
   // ECS entity slots can be reused within the same age. A new native UniqueID
   // must reset rotation, traits and retained lineage instead of inheriting a

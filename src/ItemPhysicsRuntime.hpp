@@ -120,6 +120,7 @@ private:
     float yRot{};
     float lastSample{};
     float lastWorldY{};
+    float stableContactStartY{};
     float lastActorWorldY{};
     float lastVerticalSpeed{};
     float modelScale{};
@@ -132,6 +133,7 @@ private:
     std::uintptr_t blockKey{};
     std::int32_t lastProbeAge{-1};
     std::uint8_t stableContactTicks{};
+    std::uint8_t collisionContactTicks{};
     std::uint8_t movingTicks{};
     std::uint8_t fluidMissTicks{};
     std::uint8_t groundedRenderTicks{};

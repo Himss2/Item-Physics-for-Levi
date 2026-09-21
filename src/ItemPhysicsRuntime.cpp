@@ -92,6 +92,8 @@ constexpr std::uint32_t kWasInWaterFlagComponentHash = 0x78E89F39u;
 constexpr std::uint32_t kWasInLavaFlagComponentHash = 0x832A2768u;
 constexpr std::uint8_t kFluidContactGraceTicks = 4u;
 
+constexpr float kStablePositionEpsilon = 0.012f;
+constexpr float kStableVerticalSpeed = 0.028f;
 constexpr float kCollisionPositionEpsilon = 0.025f;
 constexpr float kWakeVerticalSpeed = 0.085f;
 constexpr float kRemoteMergeMaxAxisDistance = 1.10f;
@@ -1362,10 +1364,12 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
     // fluid-surface Y must never enter the mob-drop ground fallback.
     state.groundedLatched = false;
     state.stableContactTicks = 0;
+    state.collisionContactTicks = 0;
     state.movingTicks = 0;
   } else if (nativeGrounded) {
     state.groundedLatched = true;
     state.stableContactTicks = 4;
+    state.collisionContactTicks = 2;
     state.movingTicks = 0;
   }
 
@@ -1376,9 +1380,9 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
   // may retain a small gravity delta even while a mob-spawned item is already
   // blocked by the floor.
   // ActorRenderData::position is camera-relative. Ground acquisition must use
-  // the actor's absolute world Y, and the conservative fallback must agree
-  // with native vertical collision so an airborne apex cannot become a
-  // permanent retained anchor.
+  // the actor's absolute world Y. Some mob-spawned items lose the native
+  // collision flag after settling, so stable position and negligible native
+  // vertical motion retain the older four-tick fallback.
   float actorWorldY = std::numeric_limits<float>::quiet_NaN();
   if (mGetActorPosition) {
     if (const auto *current = mGetActorPosition(actor);
@@ -1390,6 +1394,10 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
     const bool hasPositionDelta = state.positionSampled;
     const float positionDelta =
         hasPositionDelta ? actorWorldY - state.lastWorldY : 0.0f;
+    const bool stablePositionStep =
+        hasPositionDelta && hasMotion &&
+        std::abs(positionDelta) <= kStablePositionEpsilon &&
+        std::abs(verticalSpeed) <= kStableVerticalSpeed;
     const bool stableCollision =
         hasPositionDelta && verticalCollision &&
         std::abs(positionDelta) <= kCollisionPositionEpsilon;
@@ -1401,13 +1409,29 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
 
     if (!nativeGrounded && !inFluid) {
       if (!state.groundedLatched) {
-        state.stableContactTicks = stableCollision
-                                       ? static_cast<std::uint8_t>(
-                                             std::min<unsigned>(
-                                                 state.stableContactTicks + 1u,
-                                                 4u))
-                                       : 0;
-        if (state.stableContactTicks >= 2u)
+        state.collisionContactTicks =
+            stableCollision
+                ? static_cast<std::uint8_t>(std::min<unsigned>(
+                      state.collisionContactTicks + 1u, 2u))
+                : 0;
+
+        if (!stablePositionStep) {
+          state.stableContactTicks = 0;
+        } else {
+          if (state.stableContactTicks == 0)
+            state.stableContactStartY = state.lastWorldY;
+          if (std::abs(actorWorldY - state.stableContactStartY) <=
+              kStablePositionEpsilon) {
+            state.stableContactTicks = static_cast<std::uint8_t>(
+                std::min<unsigned>(state.stableContactTicks + 1u, 4u));
+          } else {
+            state.stableContactStartY = actorWorldY;
+            state.stableContactTicks = 1;
+          }
+        }
+
+        if (state.collisionContactTicks >= 2u ||
+            state.stableContactTicks >= 4u)
           state.groundedLatched = true;
       } else {
         state.movingTicks =
@@ -1418,6 +1442,7 @@ bool ItemPhysicsRuntime::resolveGrounded(VisualState &state, void *actor,
         if (state.movingTicks >= 2) {
           state.groundedLatched = false;
           state.stableContactTicks = 0;
+          state.collisionContactTicks = 0;
           state.movingTicks = 0;
         }
       }
