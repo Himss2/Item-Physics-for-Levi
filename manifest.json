@@ -4,5 +4,8 @@
   "author": "Himss2",
   "version": "0.16.7",
   "entry": "liblevi_item_physics.so",
-  "minecraft_versions": ["1.26.51.1"]
+  "minecraft_versions": [
+    "1.26.51.1",
+    "1.26.52.3"
+  ]
 }
