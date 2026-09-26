@@ -50,7 +50,7 @@ public:
       return false;
     }
     mSelf.getLogger().info(
-        "Levi Item Physics 0.16.7: Minecraft 1.26.51.1 compatibility profile loaded");
+        "Levi Item Physics 0.16.8: Minecraft 1.26.51.1/1.26.52.3 compatibility profile loaded");
     return true;
   }
 
