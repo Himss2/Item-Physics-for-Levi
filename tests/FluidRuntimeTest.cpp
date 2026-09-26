@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <vector>
 
 namespace {
 using R = itemphysics::ItemPhysicsRuntime;
@@ -129,9 +130,135 @@ void configure(R &r) {
   r.mGetActorPreviousPosition = getPrevious;
   r.mGetActorUniqueId = getUniqueId;
 }
+
+// Exercise the real onRender matrix path. The native boundary below models
+// only the verified position translation (0xA71224C..0xA7122D4). It does not
+// pretend to reproduce resource-pack geometry or prove contact with terrain.
+itemphysics::Mat4 renderMatrix{};
+std::vector<itemphysics::Mat4> renderedMatrices;
+void *worldMatrix(void *) { return &renderMatrix; }
+R::MatrixStackRefAbi pushMatrix(void *stack, bool) {
+  renderMatrix = {};
+  for (int i : {0, 5, 10, 15}) renderMatrix.m[i] = 1.0f;
+  return {stack, &renderMatrix};
+}
+void popMatrix(R::MatrixStackRefAbi *) {}
+void captureRender(void *, void *, void *data) {
+  auto matrix = renderMatrix;
+  const auto *position = reinterpret_cast<const float *>(
+      static_cast<const std::byte *>(data) +
+      itemphysics::profile::kRenderDataPositionOffset);
+  itemphysics::postTranslate(matrix, position[0], position[1], position[2]);
+  renderedMatrices.push_back(matrix);
+  assert(active->actor[itemphysics::profile::kIsInItemFrameOffset] ==
+         std::byte{1});
+}
+
+void checkGroundedFlatRenderPhase() {
+  using H = R::HeightClass;
+  using F = itemphysics::DropFluidKind;
+  constexpr float tau = 6.283185307179586f;
+  constexpr float originalY = 12.125f;
+  for (bool separate : {false, true}) {
+    for (H height : {H::FlatItem, H::FullBlock, H::HorizontalThin,
+                     H::ShapedBlock, H::Special}) {
+      for (F fluid : {F::None, F::Water, F::Lava}) {
+        for (bool contact : {false, true}) {
+          // A phase sweep catches the previous up-to-0.05-block height spread.
+          for (int step = 0; step <= 16; ++step) {
+            R runtime;
+            Fixture fixture;
+            active = &fixture;
+            configure(runtime);
+            runtime.mOriginal = captureRender;
+            runtime.mGetWorldMatrix = worldMatrix;
+            runtime.mMatrixPush = pushMatrix;
+            runtime.mMatrixRefDtor = popMatrix;
+            runtime.mSeparateDropVisuals.store(separate);
+            runtime.mSeparateDropTrackingAvailable.store(separate);
+            const float phase = tau * float(step) / 16.0f;
+            put(fixture.actor, itemphysics::profile::kItemAgeOffset, 40);
+            put(fixture.actor, itemphysics::profile::kItemBobOffset, phase);
+            put(fixture.actor, itemphysics::profile::kItemCountOffset,
+                std::uint8_t{64});
+            auto &state = runtime.stateFor(Fixture::entity, 40, phase, 40.0f);
+            state.traitsSampled = true;
+            state.traits.valid = true;
+            state.traits.height = height;
+            state.traits.block = height != H::FlatItem && height != H::Special;
+            state.traits.groundFlat = height == H::HorizontalThin;
+            state.lastProbeAge = 40;
+            const bool grounded = contact && fluid == F::None;
+            state.groundedLatched = grounded;
+            state.fluid = fluid;
+            state.shadowInitialized = true;
+            state.shadowHidden = true;
+            alignas(16) std::array<std::byte, 0x20> data{};
+            put(data, 0, static_cast<void *>(fixture.actor.data()));
+            put(data, 0x10, 3.0f);
+            put(data, 0x14, originalY);
+            put(data, 0x18, -2.0f);
+            const auto savedData = data;
+            const float base = runtime.renderWorldY(
+                originalY, state.traits, grounded, fluid, 40.0f, 0, false);
+            const float pivotLift = state.traits.block ? 0.08f :
+                (grounded && height == H::FlatItem ? 0.09f :
+                 0.04f + phase * 0.007957747154594767f);
+            const bool retainedFlat = separate && grounded && height == H::FlatItem;
+            if (retainedFlat) {
+              // A merged drop keeps its own phase and world origin, but must
+              // receive exactly the same contact support as the live sprite.
+              itemphysics::DropVisualLineage source;
+              runtime.mDropAnchors.observe(source, 1);
+              runtime.mDropAnchors.observe(state.dropLineage, 63);
+              itemphysics::DropVisualPose pose{};
+              pose.worldX = fixture.current.x + 0.5f;
+              pose.baseWorldY = fixture.current.y +
+                               runtime.heightOffset(state.traits, true);
+              pose.worldZ = fixture.current.z;
+              pose.xRotCosine = 1.0f;
+              pose.yRotSine = std::sin(tau - phase);
+              pose.yRotCosine = std::cos(tau - phase);
+              pose.bobOffset = tau - phase;
+              pose.grounded = true;
+              pose.stableGroundContact = true;
+              assert(runtime.mDropAnchors.merge(source, pose, 1,
+                                                state.dropLineage, 63, 64));
+            }
+            renderedMatrices.clear();
+            runtime.onRender(nullptr, &runtime, data.data());
+            assert(renderedMatrices.size() == (retainedFlat ? 6u : 5u));
+            for (const auto &matrix : renderedMatrices) {
+              // Several model points: yaw/copy displacement cannot alter Y.
+              for (float x : {-0.5f, 0.0f, 0.5f}) {
+                const float y = matrix.m[1] * x + matrix.m[5] * 0.25f +
+                                matrix.m[13];
+                const float expected = base + pivotLift +
+                    (height == H::HorizontalThin &&
+                     (grounded || fluid != F::None) ? 0.25f : 0.0f);
+                if (std::abs(y - expected) >= 0.00001f)
+                  std::cerr << "render height mismatch: class=" << int(height)
+                            << " fluid=" << int(fluid)
+                            << " grounded=" << grounded << " SDV=" << separate
+                            << " phase=" << phase << " actual=" << y
+                            << " expected=" << expected << '\n';
+                assert(std::abs(y - expected) < 0.00001f);
+              }
+            }
+            assert(data == savedData);
+            assert(fixture.actor[itemphysics::profile::kIsInItemFrameOffset] ==
+                   std::byte{0});
+          }
+        }
+      }
+    }
+  }
+  active = nullptr;
+}
 }
 
 int main() {
+  checkGroundedFlatRenderPhase();
   R r;
   using H = R::HeightClass;
   using C = R::GroundCalibration;

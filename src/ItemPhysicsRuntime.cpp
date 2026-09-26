@@ -36,6 +36,12 @@ constexpr float kBlockOffsetY = -0.20f;
 constexpr float kBlockOffsetZ = -0.08f;
 constexpr float kFlatOffsetZ = -0.04f;
 constexpr float kBobOffsetScale = 0.007957747154594767f;
+// Flat dry-ground contact must not depend on ItemActor's random bob phase.
+// RE of 1.26.51.1: the item-frame flag skips native bobbing at 0xA7122DC.
+// Use the old flat path's upper support envelope (2*pi*kBobOffsetScale = .05),
+// never lifting a sprite beyond a height already reachable in the old path.
+// Air, fluids and special non-sprite renderers retain their existing pivot.
+constexpr float kFlatGroundPhaseSupport = 0.05f;
 constexpr float kDefaultBlockScale = 0.25f;
 constexpr float kFlatStackWorldStep = 0.055f;
 constexpr float kBlockStackScaleStep = 0.32f;
@@ -2126,8 +2132,14 @@ void ItemPhysicsRuntime::onRender(void *self, void *ctx, void *renderData) {
           postRotateYKnown(*matrix, pose.xRotSine, pose.xRotCosine);
           postTranslate(*matrix, 0.0f, -pose.routeScale, 0.0f);
         } else {
+          const bool flatGroundContact =
+              pose.grounded && !isFluid(pose.fluid) &&
+              traits.height == HeightClass::FlatItem;
+          const float phaseSupport =
+              flatGroundContact ? kFlatGroundPhaseSupport
+                                : pose.bobOffset * kBobOffsetScale;
           postTranslate(*matrix, 0.0f, 0.0f,
-                        kFlatOffsetZ - pose.bobOffset * kBobOffsetScale);
+                        kFlatOffsetZ - phaseSupport);
           postRotateYKnown(*matrix, pose.xRotSine, pose.xRotCosine);
         }
       }

@@ -1,5 +1,23 @@
 # Levi Item Physics
 
+## Test branch: flat item ground height
+
+`test/flat-ground-height` tests a narrow correction for ordinary 2D drops
+(including buckets and swords). Their dry-ground pivot no longer converts
+the random native bob phase into a height difference of up to 0.05 blocks.
+It uses the upper endpoint of the previous pivot range; the ground-height
+table itself is unchanged. The same correction applies to retained flat
+drop visuals. Block models, shield/banner routes, airborne and fluid pivots
+keep their previous behavior.
+
+This is an experimental build, not yet device-validated. Test repeated bucket
+and sword drops on a full block and both slab heights with Separate Drop
+Visuals off/on, including merging drops. Check contact from the side for both
+penetration and hovering; also check water/lava and 3D drops as controls.
+The matrix tests prove phase-independent height, not terrain contact or
+compatibility with every resource-pack model. RE evidence and limits are in
+[the investigation note](docs/2026-09-26-flat-ground-height.md).
+
 ARM64 LeviLaunchroid native mod targeting Minecraft Bedrock `1.26.51.1`.
 Version `0.16.7` updates only the strict binary compatibility profile from the
 device-approved `0.16.6` behavior, which was rebuilt from the lighter `0.16.2`
